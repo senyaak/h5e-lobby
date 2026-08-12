@@ -370,25 +370,23 @@ export class RouterSession {
           const pivotEntry = Array.isArray(pivotList) ? pivotList[1] : undefined;
           const pivot = Array.isArray(pivotEntry) && typeof pivotEntry[0] === 'string' ? pivotEntry[0] : this.username;
           const stats = this.ladder.row(pivot);
-          // The shape of the answer, one variant per run, because the client says
-          // nothing at all when it does not recognise one — no reply line, no reason:
+          // The shape of the answer, one variant per run, because a shape the client
+          // does not recognise produces silence — no reply line, no reason:
           //
-          //   ["38", ["1281", [requestId, "", [row]]]]        -> silence
-          //   ["38", ["1281", requestId, ["1", row]]]         -> this one
+          //   ["38", ["1281", [requestId, "", [row]]]]   -> ignored in full
+          //   ["38", ["1281", requestId, ["1", row]]]    -> ignored in full
+          //   ["38", requestId, ["1", row]]              -> this one, and flat
           //
-          // The second follows the rule the ONE working exchange of this type obeys:
-          // the reply echoes the whole request inside a single list and appends the
-          // answer. And a count in front of the items is how the client's own bodies
-          // are built — the query itself arrived as ["1", <the one query>].
+          // Flat because of two things that agree: the handler at 0xDF4080 takes
+          // exactly THREE arguments — a byte, then two — and the client keeps its
+          // pending requests in a map keyed by request id (0x41DF10 registers one
+          // before sending). With the id buried inside a nested list there is nothing
+          // for a reply to be matched against, and an unmatched reply is dropped
+          // without a word.
           return {
             note: `LADDER query ${requestId} about "${pivot}" — rating ${stats['RATING']}, ${stats['GAMES_PLAYED']} game(s)`,
             replies: [
-              build(
-                reply(message, [
-                  String(MessageType.GSSUCCESS),
-                  [String(LADDER_QUERY), requestId, ['1', ladderRow(pivot, stats)]],
-                ]),
-              ),
+              build(reply(message, [String(MessageType.GSSUCCESS), requestId, ['1', ladderRow(pivot, stats)]])),
             ],
           };
         }
@@ -446,10 +444,13 @@ export class RouterSession {
         if (subtype === String(LobbyMsg.JOIN_LOBBY)) {
           const fields = Array.isArray(inner) ? inner : [];
           const groupId = typeof fields[0] === 'string' ? fields[0] : '1';
-          // The channel is entered with its own mask — 384 here, members and child
-          // groups but not the channel's own info — and it is echoed for the same
-          // reason a room's is: the mask says what the rest of the message contains.
-          const asked = Number(typeof fields[3] === 'string' ? fields[3] : '') || Lsm.CHILDGROUPINFO;
+          // The channel is entered with its own mask — 384, members and child groups
+          // but not the channel's own info — and it is echoed for the same reason a
+          // room's is: the mask says what the rest of the message contains. It is
+          // field **2**: the body is [id, password, mask], measured off the wire. Read
+          // from field 3 it fell back to 256, and a member list announced as "no
+          // members" is a member list the client does not draw.
+          const asked = Number(typeof fields[2] === 'string' ? fields[2] : '') || Lsm.GROUPMEMBERS | Lsm.CHILDGROUPINFO;
           const lobby = DEFAULT_LOBBIES.find((l) => String(l.id) === groupId) ?? DEFAULT_LOBBIES[0]!;
           this.presence.enter(this.username, lobby.id);
           const rooms = this.rooms.inLobby(lobby.id).map(roomEntry);
@@ -536,7 +537,22 @@ export class RouterSession {
           const roomId = Number(typeof fields[0] === 'string' ? fields[0] : '0');
           const asked = Number(typeof fields[2] === 'string' ? fields[2] : '') || Lsm.ALLINFO;
           const room = this.rooms.get(roomId);
-          if (!room) return { note: `JOIN_ROOM ${roomId} — no such room`, replies: [] };
+          // A game that is gone must be SAID to be gone. Answering nothing left the
+          // client in CStateWaitJoinRoomReply for good — which is what happened when
+          // the host left his own game and then clicked it in his still-stale list.
+          // The reason goes after the id, and 39 is GSFAIL where 38 is success.
+          if (!room) {
+            return {
+              note: `JOIN_ROOM ${roomId} — no such game, refused`,
+              replies: [
+                build(
+                  reply(message, [String(MessageType.GSFAIL), [subtype, [String(roomId), 'that game is gone']]]),
+                ),
+                // And take it off his list, in case that is where he found it.
+                build(reply(message, [String(LobbyMsg.GROUP_REMOVE), [String(roomId), '1']])),
+              ],
+            };
+          }
           if (!room.members.includes(this.username)) room.members.push(this.username);
           const members = this.membersOf(room);
           return {
@@ -651,10 +667,14 @@ export class RouterSession {
           const groupId = Number(Array.isArray(inner) && typeof inner[0] === 'string' ? inner[0] : '0');
           const room = this.rooms.get(groupId);
           let note = `GROUP_LEAVE ${groupId}`;
+          // Rooms that stopped existing, so the player can be told rather than left to
+          // find out by clicking one.
+          const removed: number[] = [];
           if (room) {
             room.members = room.members.filter((name) => name !== this.username);
             if (room.master === this.username) {
               this.rooms.remove(room.id);
+              removed.push(room.id);
               note = `GROUP_LEAVE ${groupId} — the host left, "${room.name}" is gone`;
             } else {
               note = `GROUP_LEAVE ${groupId} — ${this.username} left "${room.name}"`;
@@ -668,7 +688,10 @@ export class RouterSession {
             // already exists" without sending us anything at all. A host outside
             // the channel is a host outside his own game.
             const gone = this.rooms.hostedBy(this.username).filter((r) => r.parentId === groupId);
-            for (const r of gone) this.rooms.remove(r.id);
+            for (const r of gone) {
+              this.rooms.remove(r.id);
+              removed.push(r.id);
+            }
             if (gone.length) {
               note = `GROUP_LEAVE ${groupId} — the host left the channel, ${gone
                 .map((r) => `"${r.name}"`)
@@ -678,8 +701,11 @@ export class RouterSession {
             this.presence.leave(this.username);
           }
           return {
-            note,
-            replies: [build(reply(message, [String(MessageType.GSSUCCESS), [subtype, [String(groupId)]]]))],
+            note: removed.length ? `${note} (told it is gone)` : note,
+            replies: [
+              build(reply(message, [String(MessageType.GSSUCCESS), [subtype, [String(groupId)]]])),
+              ...removed.map((id) => build(reply(message, [String(LobbyMsg.GROUP_REMOVE), [String(id), '1']]))),
+            ],
           };
         }
         if (subtype === String(LobbyMsg.GROUP_INFO_GET)) {

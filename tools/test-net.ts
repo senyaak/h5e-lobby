@@ -492,6 +492,8 @@ console.log('\nThe lobby server, from the words the client really said');
   check('it echoes the server id', JSON.stringify(back?.body) === JSON.stringify(['210', ['1']]), JSON.stringify(back?.body));
   check('and we keep the address the client reported', lobby.localAddress === '192.168.178.27' && lobby.localNetmask === '255.255.255.0');
 
+  // Verbatim off the wire: the channel id, a password, and the mask — field 2, which
+  // is the one the answer has to echo.
   const joined = lobby.receive(
     build({
       property: Property.GS,
@@ -499,8 +501,13 @@ console.log('\nThe lobby server, from the words the client really said');
       type: MessageType.LOBBY_MSG,
       sender: 4,
       receiver: 2,
-      body: [String(LobbyMsg.JOIN_LOBBY), ['2']],
+      body: [String(LobbyMsg.JOIN_LOBBY), ['2', '', '384']],
     }),
+  );
+  check('the mask comes back as asked', (parse(joined[0]!.replies[1]!)?.body?.[1] as GSValue[])?.[1] === '384', String((parse(joined[0]!.replies[1]!)?.body?.[1] as GSValue[])?.[1]));
+  check(
+    'and it says members are in there, which is what makes the list draw',
+    (Number((parse(joined[0]!.replies[1]!)?.body?.[1] as GSValue[])?.[1]) & Lsm.GROUPMEMBERS) !== 0,
   );
   check('joining a channel is answered and its contents follow', joined[0]!.replies.length === 2, joined[0]?.note);
   const contents = parse(joined[0]!.replies[1]!);
@@ -622,6 +629,18 @@ console.log('\nHosting a game, from the CREATE_ROOM the player really sent');
   const parentId = String((entry?.[4] as string) ?? '1');
   const left = lobby.receive(lobbyMsg([String(LobbyMsg.GROUP_LEAVE), [parentId]]));
   check('leaving the channel takes the host’s own game with it', left[0]?.note.includes('gone') === true, left[0]?.note);
+  // And he is TOLD, so his own list drops it. Left to find out by clicking, he sent a
+  // JOIN_ROOM for a game that no longer existed and waited for an answer for ever.
+  check(
+    'and the game is announced as removed',
+    left[0]!.replies.some((r) => parse(r)?.body?.[0] === String(LobbyMsg.GROUP_REMOVE)),
+    String(left[0]!.replies.length),
+  );
+
+  // A game that is gone is refused, out loud.
+  const missing = lobby.receive(lobbyMsg([String(LobbyMsg.JOIN_ROOM), ['999', '', '448', '0', '']]));
+  check('joining a game that does not exist is refused, not ignored', missing[0]!.replies.length === 2, missing[0]?.note);
+  check('with GSFAIL rather than GSSUCCESS', parse(missing[0]!.replies[0]!)?.body?.[0] === '39', String(parse(missing[0]!.replies[0]!)?.body?.[0]));
   const relisted = lobby.receive(lobbyMsg([String(LobbyMsg.JOIN_LOBBY), [parentId]]));
   const listed = (parse(relisted[0]!.replies[1]!)?.body?.[1] as GSValue[])?.[3];
   check('so the channel lists no games again', Array.isArray(listed) && (listed as GSValue[]).length === 0, relisted[0]?.note);
@@ -749,13 +768,10 @@ console.log('\nThe ladder, from the query the client really sent');
   check('the answer is a PROXY_HANDLER', answer?.type === MessageType.PROXY_HANDLER, String(answer?.type));
   // The client reads the first field as a byte and compares it with 0x26 — 38.
   check('its first field is the 38 the client compares against', answer?.body?.[0] === '38', String(answer?.body?.[0]));
-  // The whole request echoed inside one list, then the answer — the shape the one
-  // working exchange of this message type uses.
-  const body = answer?.body?.[1] as GSValue[];
-  check('it names the request number back', body?.[0] === '1281', String(body?.[0]));
-  check('and echoes the request id beside it', body?.[1] === '1', String(body?.[1]));
-
-  const rows = body?.[2] as GSValue[];
+  // Flat, three fields: the result, the request id the client can match against its
+  // pending map, and the rows.
+  check('the request id is the second field, where a reply can be matched', answer?.body?.[1] === '1', String(answer?.body?.[1]));
+  const rows = answer?.body?.[2] as GSValue[];
   check('the answer counts its rows first', rows?.[0] === '1', String(rows?.[0]));
   const row = rows?.[1] as GSValue[];
   check('for the player asked about', row?.[0] === 'Senyaak', String(row?.[0]));

@@ -17,7 +17,7 @@ import { KEY_BLOB_SIZE, decryptWith, encryptTo, generateKeyPair, parsePublicKey,
 import { RouterService } from '../src/net/router-service.ts';
 import { Blowfish } from '../src/net/blowfish.ts';
 import { CdKeyRequest, CdKeyService } from '../src/net/cdkey-service.ts';
-import { LobbyMsg } from '../src/net/lobby.ts';
+import { LobbyMsg, Lsm } from '../src/net/lobby.ts';
 import { IrcService, frame, unframe } from '../src/net/irc.ts';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -514,9 +514,55 @@ console.log('\nHosting a game, from the CREATE_ROOM the player really sent');
   check('the room is peer-to-peer type 7', entry?.[0] === '7', String(entry?.[0]));
   check('its master is the host', entry?.[7] === 'Senyaak', String(entry?.[7]));
   check(
-    'and the settings blob is passed through untouched',
+    'the settings blob keeps its size',
     entry?.[10] instanceof Uint8Array && (entry[10] as Uint8Array).length === 555,
     String((entry?.[10] as Uint8Array)?.length),
+  );
+
+  // A room is twenty fields, a channel is fourteen, and the client tells a new game
+  // from a new channel by exactly that. Sent in the channel's shape, our room was
+  // logged as LobbyRcv_NewLobby and then refused: "no such room in internal list".
+  check('the room is announced in the twenty-field room shape', entry?.length === 20, String(entry?.length));
+  check('its config is the all-info mask', entry?.[5] === String(Lsm.ALLINFO), String(entry?.[5]));
+  check('it carries the version the client sent', entry?.[17] === 'HEROES_a3e9d5c9b79a1a57', String(entry?.[17]));
+  check('and an address for the host', typeof entry?.[18] === 'string' && (entry[18] as string).length > 0, String(entry?.[18]));
+
+  // The host wrote -1 for both ids, because when he composed the blob there was no
+  // room. Leaving them at -1 hands him back a game he cannot recognise.
+  const stamped = entry?.[10] as Uint8Array;
+  const unset = Buffer.from([0x02, 0x08, 0xff, 0xff, 0xff, 0xff, 0x03, 0x08, 0xff, 0xff, 0xff, 0xff]);
+  const idsAt = Buffer.from(stamped).indexOf(Buffer.from([0x02, 0x08]));
+  check('the room id is stamped into the blob', Buffer.from(stamped).indexOf(unset) === -1);
+  check(
+    'and it is the id we handed out',
+    idsAt >= 0 && Buffer.from(stamped).readInt32LE(idsAt + 2) === Number(room[0]),
+    `${Buffer.from(stamped).readInt32LE(idsAt + 2)} vs ${String(room[0])}`,
+  );
+
+  // Entering the room. The reply is only "yes"; the GROUP_INFO after it is what puts
+  // the room in the client's list, and it has to come back with the mask asked for.
+  const entered = lobby.receive(
+    build({
+      property: Property.GS,
+      priority: 0,
+      type: MessageType.LOBBY_MSG,
+      sender: 4,
+      receiver: 2,
+      body: [String(LobbyMsg.JOIN_ROOM), [String(room[0]), '', '448', '0', 'HEROES_a3e9d5c9b79a1a57']],
+    }),
+  );
+  check('joining the room is answered, with its info after it', entered[0]!.replies.length === 2, entered[0]?.note);
+  const info = parse(entered[0]!.replies[1]!)?.body?.[1] as GSValue[];
+  check('the info echoes the mask the client asked with', info?.[1] === '448', String(info?.[1]));
+  check('the room in it is the twenty-field shape too', (info?.[2] as GSValue[])?.length === 20, String((info?.[2] as GSValue[])?.length));
+  const member = (info?.[4] as GSValue[])?.[0] as GSValue[];
+  check('one member is listed, in eight fields', member?.length === 8, JSON.stringify(member?.length));
+  check('it is the host', member?.[0] === 'Senyaak', String(member?.[0]));
+  const playerInfo = member?.[4] as Uint8Array;
+  check(
+    'his player info carries the port he pings us from',
+    playerInfo instanceof Uint8Array && Buffer.from(playerInfo).readUInt16LE('Senyaak'.length + 16) === 8888,
+    String(playerInfo instanceof Uint8Array ? Buffer.from(playerInfo).readUInt16LE('Senyaak'.length + 16) : null),
   );
 
   // Backing out of the channel is what the host really does when he abandons a

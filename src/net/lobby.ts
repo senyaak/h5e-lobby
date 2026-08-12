@@ -19,20 +19,54 @@
 
 import { type GSValue } from './gs-data.ts';
 
-/** LOBBY_MSG subtypes. The protocol has ~60; these are the ones we speak. */
+/**
+ * LOBBY_MSG subtypes — the whole table, not only what we answer today.
+ *
+ * The ones past SET_PLAYER_INFO are the game's own sequence, and having the
+ * numbers here is what makes reading a log possible: an unimplemented subtype can
+ * be named instead of guessed at.
+ */
 export const LobbyMsg = {
   JOIN_SERVER: 3,
+  INFO_REFRESH: 6,
   GROUP_LEAVE: 8,
   GROUP_INFO_GET: 9,
+  PLAYER_KICK: 10,
   CREATE_ROOM: 12,
+  PARENT_GROUP_ID: 14,
   START_GAME: 15,
+  START_MATCH: 17,
+  LOBBY_DISCONNECTION: 18,
   LOGIN: 21,
   JOIN_LOBBY: 23,
   JOIN_ROOM: 24,
+  MASTER_NEW: 27,
+  SUBMIT_MATCH: 30,
+  GROUP_CONFIG_UPDATE_RES: 31,
+  UPDATE_PING: 32,
+  GAME_READY: 33,
+  GAME_CONNECTED: 34,
+  UPDATE_GAME_INFO: 41,
   SET_PLAYER_INFO: 42,
+  MATCH_FINISH: 45,
+  GET_ALT_GROUP_INFO: 46,
+  MEMBER_JOIN: 50,
+  MEMBER_LEAVE: 51,
   GROUP_INFO: 53,
   NEW_GROUP: 54,
+  GROUP_REMOVE: 55,
+  GAME_STARTED: 56,
+  GROUP_CONFIG_UPDATE: 57,
+  MASTER_CHANGED: 59,
+  KICK_OUT: 61,
+  MATCH_STARTED: 62,
+  MATCH_READY: 65,
+  PLAYER_INFO_UPDATE: 66,
+  PLAYER_UPDATE_STATUS: 69,
+  FINAL_MATCH_RESULTS: 71,
+  PLAYER_GROUP_GET: 106,
   CHANGE_REQUESTED_LOBBIES: 109,
+  MEMBER_LIST: 151,
 } as const;
 
 export const GroupType = { LOBBY: 0, ROOM_UBI_P2P: 7 } as const;
@@ -48,6 +82,17 @@ export const Lsm = {
   GROUPINFO: 0x40,
   GROUPMEMBERS: 0x80,
   CHILDGROUPINFO: 0x100,
+  /** All three "tell me about it" bits, which is 448 — the number the client asks with. */
+  ALLINFO: 0x1c0,
+} as const;
+
+/** How a member is doing, in the status field of a member record. */
+export const PlayerStatus = {
+  SILENT: 1,
+  GAMECONNECTED: 2,
+  GAMEREADY: 4,
+  MATCHREADY: 8,
+  MATCHPLAYING: 16,
 } as const;
 
 /** Game modes, as the client counts them. */
@@ -89,6 +134,16 @@ export interface Room {
   maxVisitors: number;
   password: string;
   info: Uint8Array;
+  /** The second, empty blob the client sends beside the first one. */
+  altInfo: Uint8Array;
+  /** Both come from the create request: the version fields it will match against. */
+  gameVersion: string;
+  gsVersion: string;
+  /** The game mode, taken from the channel the room was made in. */
+  eventId: number;
+  /** Where the host is, as the room advertises him. */
+  address: string;
+  altAddress: string;
   master: string;
   members: string[];
 }
@@ -125,7 +180,19 @@ export class Rooms {
   }
 }
 
-/** A room in the same fourteen fields a lobby uses — see `lobbyEntry`. */
+/**
+ * A room, in the twenty fields the client reads as a RoomInfo.
+ *
+ * **A room is not a lobby with different contents.** A lobby is fourteen fields
+ * (see `lobbyEntry`); a room carries six more — visitors, the two version strings,
+ * and the host's two addresses — and the client tells them apart by that. Sending a
+ * room in the lobby shape is what made it log our new game as `LobbyRcv_NewLobby`
+ * and then refuse to enter it: "join room succeeded" followed immediately by "join
+ * room failed, no such room in internal list".
+ *
+ * `allowed_games` and `games` are empty for a room: the game it belongs to is
+ * already settled by the channel it is in.
+ */
 export function roomEntry(room: Room): GSValue[] {
   return [
     String(room.type),
@@ -133,16 +200,79 @@ export function roomEntry(room: Room): GSValue[] {
     String(room.id),
     '1',
     String(room.parentId),
-    String(Lsm.OPEN | Lsm.STARTABLE | Lsm.NEEDMASTER),
+    String(Lsm.ALLINFO | (room.password ? Lsm.PRIVATE : 0)),
     '1',
     room.master,
-    room.gameTitle,
-    room.gameTitle,
+    '',
+    '',
     room.info,
-    String(room.type),
+    String(room.eventId),
     String(room.maxPlayers),
     String(room.members.length),
+    String(room.maxVisitors),
+    '0',
+    room.gameVersion,
+    room.gsVersion,
+    room.address,
+    room.altAddress,
   ];
+}
+
+/**
+ * One member of a group, in eight fields.
+ *
+ * `playerInfo` is a blob the client builds and reads itself: the name, then the
+ * external address with **one u32 per octet**, the port as a u16, the local address
+ * the same way again, and a trailing u32 nobody has identified. All little-endian.
+ * A member sent as just a name is not a member — the client wants this record.
+ */
+export function memberEntry(
+  name: string,
+  groupId: number,
+  address: string,
+  port: number,
+  status: number = PlayerStatus.SILENT,
+): GSValue[] {
+  return [name, '0', address, address, playerInfo(name, address, port), [String(groupId)], '-1', String(status)];
+}
+
+function playerInfo(name: string, address: string, port: number): Uint8Array {
+  const octets = address.split('.').map(Number);
+  if (octets.length !== 4 || octets.some((o) => !Number.isInteger(o) || o < 0 || o > 255)) {
+    throw new Error(`playerInfo: ${address} is not an IPv4 address`);
+  }
+  const named = Buffer.from(name, 'utf8');
+  const out = Buffer.alloc(named.length + 4 * 4 + 2 + 4 * 4 + 4);
+  let at = named.copy(out, 0);
+  for (const octet of octets) at = out.writeUInt32LE(octet, at);
+  at = out.writeUInt16LE(port, at);
+  for (const octet of octets) at = out.writeUInt32LE(octet, at);
+  out.writeUInt32LE(0, at);
+  return out;
+}
+
+/**
+ * The host's own description of the game, with the room's identity written into it.
+ *
+ * The client sends this blob with **-1 in both id fields**, because when it composed
+ * it there was no room yet; the ids are the server's to fill in. It is a tagged
+ * stream — id byte, type byte, value — and the two we owe it are id 2 (the group)
+ * and id 3 (the lobby server), both type 8, four bytes little-endian.
+ *
+ * Everything else is passed through untouched: the map, the rules, the goal are the
+ * host's business, not ours.
+ */
+export function stampRoomIds(info: Uint8Array, roomId: number, lobbyServerId = 1): Uint8Array {
+  const out = Buffer.from(info);
+  // The two fields are adjacent and both still -1, so the pair is searched for as
+  // one shape rather than each id on its own: `02 08 ff ff ff ff 03 08 ff ff ff ff`.
+  // A lone `02 08` could be anything in a blob this size; this cannot.
+  const unset = Buffer.from([0x02, 0x08, 0xff, 0xff, 0xff, 0xff, 0x03, 0x08, 0xff, 0xff, 0xff, 0xff]);
+  const at = out.indexOf(unset);
+  if (at < 0) throw new Error(`stampRoomIds: no unset id pair in a ${info.length}-byte room info`);
+  out.writeInt32LE(roomId, at + 2);
+  out.writeInt32LE(lobbyServerId, at + 8);
+  return out;
 }
 
 /**

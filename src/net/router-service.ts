@@ -23,7 +23,18 @@
 //   RouterService     new(waitModule) -> session(); session.receive(buf) -> Buffer[]
 
 import { hostU32String } from './address.ts';
-import { DEFAULT_LOBBIES, GroupType, LobbyMsg, Lsm, Rooms, lobbyEntry, roomEntry } from './lobby.ts';
+import {
+  DEFAULT_LOBBIES,
+  GroupType,
+  LobbyMsg,
+  Lsm,
+  PlayerStatus,
+  Rooms,
+  lobbyEntry,
+  memberEntry,
+  roomEntry,
+  stampRoomIds,
+} from './lobby.ts';
 import { HEADER_SIZE as GS_HEADER_SIZE, MessageType, build, parse, reply, type GSMessage } from './gs-message.ts';
 import { decodeBody, type GSValue } from './gs-data.ts';
 import { Blowfish } from './blowfish.ts';
@@ -53,6 +64,16 @@ export interface RouterEvent {
 
 /** The id we hand out for a proxy module; the client echoes it back to release it. */
 const PROXY_ID = '1';
+
+/**
+ * The port a player is advertised on inside a member record.
+ *
+ * 8888 is where this client's own NAT pings come from — visible in the log as
+ * `UDP NATServer:40010 <- 127.0.0.1:8888` — so it is where the other side should
+ * find it. Not yet proven to be what the peers actually dial; when two clients meet
+ * and cannot connect, this constant is the first thing to doubt.
+ */
+const PLAYER_PORT = 8888;
 
 /** A one-byte body value, which is how GS names the message being answered. */
 function messageId(type: number): GSValue {
@@ -321,17 +342,22 @@ export class RouterSession {
         // inside — the rooms. There are none yet, so what follows is an honest
         // empty channel rather than nothing at all.
         if (subtype === String(LobbyMsg.JOIN_LOBBY)) {
-          const groupId = Array.isArray(inner) && typeof inner[0] === 'string' ? inner[0] : '1';
+          const fields = Array.isArray(inner) ? inner : [];
+          const groupId = typeof fields[0] === 'string' ? fields[0] : '1';
+          // The channel is entered with its own mask — 384 here, members and child
+          // groups but not the channel's own info — and it is echoed for the same
+          // reason a room's is: the mask says what the rest of the message contains.
+          const asked = Number(typeof fields[3] === 'string' ? fields[3] : '') || Lsm.CHILDGROUPINFO;
           const lobby = DEFAULT_LOBBIES.find((l) => String(l.id) === groupId) ?? DEFAULT_LOBBIES[0]!;
           const rooms = this.rooms.inLobby(lobby.id).map(roomEntry);
           return {
-            note: `JOIN_LOBBY ${groupId} ("${lobby.name}") — in, ${rooms.length} game(s) listed`,
+            note: `JOIN_LOBBY ${groupId} ("${lobby.name}") — in, ${rooms.length} game(s) listed, mask ${asked}`,
             replies: [
               build(reply(message, [String(MessageType.GSSUCCESS), [subtype, [groupId]]])),
               build(
                 reply(message, [
                   String(LobbyMsg.GROUP_INFO),
-                  [groupId, String(Lsm.CHILDGROUPINFO), lobbyEntry(lobby, this.gameId), rooms, []],
+                  [groupId, String(asked), lobbyEntry(lobby, this.gameId), rooms, []],
                 ]),
               ),
             ],
@@ -350,6 +376,7 @@ export class RouterSession {
           const parentId = Number(text(0)) || 1;
           const existing = this.rooms.named(parentId, text(1));
           if (existing && existing.master === this.username) this.rooms.remove(existing.id);
+          const blob = fields[6] instanceof Uint8Array ? fields[6] : new Uint8Array(0);
           const room = this.rooms.create({
             parentId,
             name: text(1),
@@ -358,10 +385,22 @@ export class RouterSession {
             maxPlayers: Number(text(4)) || 2,
             maxVisitors: Number(text(5)) || 0,
             password: text(7),
-            info: fields[6] instanceof Uint8Array ? fields[6] : new Uint8Array(0),
+            info: blob,
+            gameVersion: text(8),
+            gsVersion: text(9),
+            altInfo: fields[10] instanceof Uint8Array ? (fields[10] as Uint8Array) : new Uint8Array(0),
+            // The mode is the channel's, not the host's: a game made in "Ranked" is
+            // rated because of where it is.
+            eventId: DEFAULT_LOBBIES.find((l) => l.id === parentId)?.mode ?? 0,
+            address: this.localAddress || '127.0.0.1',
+            altAddress: this.localAddress || '127.0.0.1',
             master: this.username,
             members: [this.username],
           });
+          // The host composed his description of the game before the room existed, so
+          // both id fields inside it say -1. Writing them is the server's job, and
+          // the client reads them back to recognise the room it just made.
+          room.info = stampRoomIds(blob, room.id);
           return {
             note: `CREATE_ROOM "${room.name}" in channel ${room.parentId} — id ${room.id}, up to ${room.maxPlayers} players`,
             replies: [
@@ -371,20 +410,28 @@ export class RouterSession {
             ],
           };
         }
+        // Entering a room. The reply only says "yes"; what actually puts the room in
+        // the client's own list is the GROUP_INFO that follows, and the client will
+        // not take it unless it comes back with **the mask it asked with** — field 2
+        // of the request, 448, all three "tell me about it" bits. Answered with a
+        // narrower mask, the client says "join room succeeded" and then "join room
+        // failed, no such room in internal list", and no game window ever opens.
         if (subtype === String(LobbyMsg.JOIN_ROOM)) {
-          const roomId = Number(Array.isArray(inner) && typeof inner[0] === 'string' ? inner[0] : '0');
+          const fields = Array.isArray(inner) ? inner : [];
+          const roomId = Number(typeof fields[0] === 'string' ? fields[0] : '0');
+          const asked = Number(typeof fields[2] === 'string' ? fields[2] : '') || Lsm.ALLINFO;
           const room = this.rooms.get(roomId);
           if (!room) return { note: `JOIN_ROOM ${roomId} — no such room`, replies: [] };
           if (!room.members.includes(this.username)) room.members.push(this.username);
+          const members = room.members.map((name) =>
+            memberEntry(name, roomId, room.address, PLAYER_PORT, PlayerStatus.GAMECONNECTED),
+          );
           return {
-            note: `JOIN_ROOM ${roomId} ("${room.name}") — in, ${room.members.length} of ${room.maxPlayers}`,
+            note: `JOIN_ROOM ${roomId} ("${room.name}") — in, ${room.members.length} of ${room.maxPlayers}, mask ${asked}`,
             replies: [
               build(reply(message, [String(MessageType.GSSUCCESS), [subtype, [String(roomId)]]])),
               build(
-                reply(message, [
-                  String(LobbyMsg.GROUP_INFO),
-                  [String(roomId), String(Lsm.GROUPMEMBERS), roomEntry(room), [], room.members.map((name) => [name])],
-                ]),
+                reply(message, [String(LobbyMsg.GROUP_INFO), [String(roomId), String(asked), roomEntry(room), [], members]]),
               ),
             ],
           };

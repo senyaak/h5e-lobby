@@ -69,15 +69,49 @@ lobby login        -> accepted, three channels pushed
 IRC                -> "IRC welcome", "IRC join channel succeeded"
 join channel       -> "join lobby succeeded(GroupID=1,LobbySrvID=1)"
 NAT address        -> "address request succeeded,address=1.0.0.127:40010"
+ladder             -> query 1281 answered, a row at 1500 for a new player
 create game        -> CREATE_ROOM answered, room 100 in the channel
-join own room      -> "join room sent, waiting reply" -> JOIN_ROOM answered
+join own room      -> "LobbyRcv_RoomInfo", then CStateInRoom / CStateWaitingForPlayers
+settings changes   -> GROUP_CONFIG_UPDATE_RES answered, the room echoed back
 ```
 
-So a player can log in, enter a channel, host a game and be in his own room. What
-he cannot do yet is start it, and a second player has never been tried.
+So a player logs in, enters a channel, hosts a game and **sits in it waiting for
+players**. What has never been tried is a second client — which is also the only way
+the rest of the protocol can be reached.
 
 ## Facts worth not re-learning
 
+- **The checksum's lone odd byte is SIGNED.** The routine is at 0x4796E0: the seed is
+  written into the checksum field, an odd-length segment counts its first byte alone
+  and `movsx`-extended, the rest as 16-bit words. During verification that byte IS
+  the seed's low byte, and the client picks a random seed per connection — so with
+  `>= 0x80` our sum was 256 too high and the datagram was dropped **without a word**.
+  Our NAT answer is 43 bytes, odd, so every launch was a coin toss and it landed at a
+  different step each time. This is the source of every "it worked, then it didn't"
+  in this file's history, and it means the NAT answer table in `src/net/nat-service.ts`
+  may have been measuring the seed rather than the subtypes.
+- **A room is twenty fields, a channel is fourteen**, and that is how the client tells
+  a game from a channel: sent in the channel's shape our room was logged as
+  `LobbyRcv_NewLobby` and then refused. The six extra are visitors, both version
+  strings, and the host's two addresses.
+- **A mask in a reply must be the mask the request carried.** JOIN_ROOM asks with 448
+  (all three "tell me about it" bits), JOIN_LOBBY with 384. The mask says what the
+  rest of the message contains; answered with a narrower one the client says "join
+  room succeeded" and then "join room failed, no such room in internal list".
+- **The ids inside the host's settings blob are ours to write.** He composes it before
+  the room exists, so both say -1 (`02 08 ff ff ff ff 03 08 ff ff ff ff`); the server
+  stamps the room id and the lobby server id in. Everything else passes through.
+- **Order matters: the room info goes out BEFORE the acceptance.** The client
+  dispatches in arrival order, so given the "yes" first it runs
+  `ProcessJoinRoomReply` against a list that is still empty.
+- **Never invent a member's player-info blob.** The client branches on its length
+  (0xDFCDEB): with bytes there it parses them, with none it falls back to the name
+  field of the member record. A blob of our own parsed into nothing — "member joined
+  game (Name=,ExtIP=0.0.0.0:0)". Send his own (from SET_PLAYER_INFO) or nothing.
+- **A member list is read as an arrival.** Answering a settings update with the room
+  AND its members made the client announce a phantom join, which is a change, which is
+  another settings update — five a second, with the game's settings blob growing each
+  round because each phantom arrival added a player to it.
 - **An address in a message body is a decimal u32**, and which order depends on
   the field. The wait-module hand-off wants HOST order (`2130706433`); the NAT
   answer wants `inet_addr` order (`16777343`). Both were measured by watching the
@@ -104,14 +138,57 @@ he cannot do yet is start it, and a second player has never been tried.
   GROUP_LEAVE, and a host recreating his own game replaces it.
 - **Both engine log thresholds are already 0.** Lowering them opens branches the
   engine means to skip and it dies in its own string append. Read, do not write.
-- The 555-byte blob in CREATE_ROOM is the host's own description of the game — map
-  path, rules, goal. It passes through us untouched.
+- The blob in CREATE_ROOM (555–888 bytes, it grows with the map) is the host's own
+  description of the game — map path, rules, goal — and it passes through us with only
+  the two ids written into it.
+- **`net-probe "<text>"` matches a whole literal, not a substring.** The engine's names
+  live inside longer ones (`LobbySend_Login(`, `…LadderQueryRcv_RequestReply: `), so
+  asking for the bare name answers "no such string" about strings that are plainly
+  there. That false negative nearly got a correct document rewritten into a wrong one.
+  When a name is not found, dump the neighbourhood: `--strings <from> <to>`.
+- **A log line can be mostly canned.** The RoomInfo line ends with a literal run of
+  seventeen commas, so the "empty fields" in it are not evidence of anything.
+
+## Addresses in the exe worth keeping
+
+Ours is `bin/H5_Game_H5E.exe`, image base 0x400000, read with `tools/net-probe.ts` in
+the editor repo.
+
+| what | where |
+|---|---|
+| SRP checksum (the signed odd byte) | 0x4796E0 |
+| SRP receive: length check, then connection lookup **by signature** | 0x47CB00 |
+| SRP header builder (`or edx,3040h`) / segment send | 0x479740 / 0x47BB20 |
+| the ladder request, pushed beside `"ladderquery"` | 0x42BC92 |
+| `ProcessGetLadderRow` — asks, then enumerates the reply | 0xE0BBB0 |
+| member's blob: the branch on its length, and the parser | 0xDFCDEB / 0xDFE850 |
+| `ProcessMemberJoined` (its own log lines are the oracle) | 0xDFCBE0 |
+| the servers-config fetch, and why an error code names no step | 0xE07A50 / 0xE075B1 |
 
 ## Where the next wall is
 
-**The second player.** Everything a lone host can do, he does; nothing has asked
-for START_GAME because starting needs somebody to start against. What the second
-client sends is the specification, so there is nothing to design in advance.
+**The second player, and it is the whole of the gap.** Everything a lone host can do,
+he does; nothing has asked for START_GAME because starting needs somebody to start
+against. What the second client sends is the specification, so there is nothing to
+design in advance — but there are three things to prepare and one open question.
+
+To prepare:
+
+- **A second player's member record.** Only his own connection knows his player-info
+  blob (`RouterSession.playerInfo`); every other member is currently sent with an empty
+  one, which is a name and no address. Two players in a room means each has to see the
+  other's, so that blob has to live with the player rather than the session.
+- **Arrivals must be announced to the people already there.** Our replies only ever go
+  back to whoever asked. `MEMBER_JOIN` (50) exists for that, and so does `NEW_GROUP`
+  (54) for a game appearing in a channel somebody else is looking at.
+- **The peers' addresses.** The lobby knows each player's own (`LOBBYSERVERLOGIN`
+  reports his LAN address and netmask) and the NAT mirror knows how he looks from
+  outside; the port his pings come from is 8888. That is the material for introducing
+  them, and gameplay itself is peer to peer, so this server never carries it.
+
+The open question: **does one install run twice**, or is a second copy of the game
+folder needed? Worth answering before anything else, because it decides how the test
+is even set up.
 
 **Starting is a chain of five, not one message.** From the client's own RTTI:
 
@@ -132,19 +209,25 @@ a push to the other players rather than a reply to the sender. The first sender 
 GS library at 0x4196F0 — that is where the subtype numbers live if the wire does not
 show them.
 
-**`PROXY_HANDLER` subtype 1281 is the ladder query** — decoded, 0x501, the only
-number of its kind in the exe. It goes unanswered with no visible harm beyond a 30
-second wait and an N/A rating, so it blocks nothing; everything known about it is in
-[LADDER.md](LADDER.md).
+**The ladder is answered, and its row layout is the open guess.** `PROXY_HANDLER`
+subtype 1281 (0x501) now gets a real row from `src/net/ladder.ts` — 46 keys, a new
+player at 1500, stored in `data/ladder.json`. What is measured: the request's shape and
+that the reply's first field is read as a byte and compared with 0x26 (38). What is
+guessed: how a row is laid out. The verdict is one line in the game's log —
+`LadderQuery_StartResultEntryEnumeration(…) succeeded` against `ladder query request
+failed,reason=…` — so read that before changing anything about it.
+[LADDER.md](LADDER.md) has the rest, including the four handler names behind the proxy.
 
-After those: two clients at once (nothing about a second player has been
-exercised), then the peer introduction — the lobby knows each player's address
-because the client tells us in `LOBBYSERVERLOGIN` and asks the NAT mirror what it
-looks like from outside — and then the ladder, which is ours to invent and lives
-behind the proxy on 40030.
+**Chat has no history and cannot get one from the protocol.** It is real IRC: a joiner
+gets an echo of his JOIN and a member list, nothing else. Replaying the last N lines
+to him is possible — the client draws whatever arrives, and it packs colour and font
+into the message text itself — but it is our invention, and replayed lines will look
+like they were just said, because the wire carries no timestamps.
 
 Accounts are still "any name, any password". The client has no registration
 screen (`UI/MPRegister` is the progress window), but the wire has
 `NEWUSERREQUEST` and the client knows how to say "name taken" and "wrong
 password", so creating an account on first login needs no client change —
-Сеня chose that over a website or a new screen.
+Сеня chose that over a website or a new screen. Removing the CD-key prompt is still
+open too: the key sits in the client's `ubi_cdkey` setting, used by the screens at
+0x87B790, 0x87C840, 0x87CF50, 0x87D2B0.

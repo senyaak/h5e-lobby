@@ -65,6 +65,12 @@ Read against the body above, the payload is a query for **one game, one player,
 and no named keys** — `HEROES_…` is the game, `Senyaak` the player, and the three
 empty lists are where key names would go.
 
+**Answered since 12.08.2026**, by `src/net/ladder.ts` plus the `LADDER_QUERY` branch in
+`router-service.ts`: the pivot user is read out of the request (five levels down), his
+row is created at 1500 on first sight, and the reply carries all 46 keys as named pairs.
+The store is a JSON file, `data/ladder.json`, so a rating outlives the process. Whether
+the client *reads* that row is the thing to check in its log — see below.
+
 ### What the answer has to be shaped like
 
 Not known in detail yet, but the client's own vocabulary constrains it. These are

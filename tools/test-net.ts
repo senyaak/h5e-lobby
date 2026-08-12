@@ -17,7 +17,7 @@ import { KEY_BLOB_SIZE, decryptWith, encryptTo, generateKeyPair, parsePublicKey,
 import { RouterService } from '../src/net/router-service.ts';
 import { Blowfish } from '../src/net/blowfish.ts';
 import { CdKeyRequest, CdKeyService } from '../src/net/cdkey-service.ts';
-import { LobbyMsg, Lsm } from '../src/net/lobby.ts';
+import { LobbyMsg, Lsm, RoomUpdate } from '../src/net/lobby.ts';
 import { IrcService, frame, unframe } from '../src/net/irc.ts';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -586,6 +586,65 @@ console.log('\nHosting a game, from the CREATE_ROOM the player really sent');
   const dropped = lobby.close();
   check('closing the host connection drops his game', dropped?.includes('Senyaak') === true, String(dropped));
   check('and closing again drops nothing', lobby.close() === null);
+}
+
+console.log('\nInside the room: his own info, and changing the settings');
+{
+  const lobby = new RouterService(
+    { address: '127.0.0.1', port: 40001 },
+    { address: '127.0.0.1', port: 40030 },
+    { address: '127.0.0.1', port: 40031 },
+    { address: '127.0.0.1', port: 40040 },
+  ).session('lobby');
+  lobby.username = 'Senyaak';
+  const lobbyMsg = (body: GSValue[]): Buffer =>
+    build({ property: Property.GS, priority: 0, type: MessageType.LOBBY_MSG, sender: 4, receiver: 2, body });
+
+  const captured = Buffer.from(
+    readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'net', 'create-room.hex'), 'utf8')
+      .split(/\r?\n/)
+      .filter((line) => !line.startsWith('#'))
+      .join('')
+      .replace(/[^0-9a-f]/gi, ''),
+    'hex',
+  );
+  const roomId = String(((parse(lobby.receive(captured)[0]!.replies[0]!)?.body?.[1] as GSValue[])?.[1] as GSValue[])?.[0]);
+
+  // He waits for a reply to this one, so silence is thirty seconds; and the blob is
+  // his own account of where he can be reached, which beats the one we synthesise.
+  const own = Buffer.from([1, 2, 3, 4, 5, 6, 7, 8]);
+  const told = lobby.receive(lobbyMsg([String(LobbyMsg.SET_PLAYER_INFO), [roomId, own]]));
+  check('his player info is answered', told[0]!.replies.length === 1, told[0]?.note);
+  check('and the answer names the subtype back', parse(told[0]!.replies[0]!)?.body?.[0] === '38');
+
+  const entered = lobby.receive(lobbyMsg([String(LobbyMsg.JOIN_ROOM), [roomId, '', '448', '0', '']]));
+  const member = ((parse(entered[0]!.replies[1]!)?.body?.[1] as GSValue[])?.[4] as GSValue[])?.[0] as GSValue[];
+  check(
+    'from then on his member record carries his own blob, not ours',
+    member?.[4] instanceof Uint8Array && Buffer.from(member[4] as Uint8Array).equals(own),
+    JSON.stringify(member?.[4]),
+  );
+
+  // The flags are the payload's shape: max players, then the settings blob.
+  const settings = Buffer.alloc(16, 7);
+  const updated = lobby.receive(
+    lobbyMsg([String(LobbyMsg.GROUP_CONFIG_UPDATE_RES), [roomId, String(RoomUpdate.MAX_PLAYERS | RoomUpdate.GROUP_INFO), '4', settings]]),
+  );
+  check('a settings change is answered, and the room sent back out', updated[0]!.replies.length === 2, updated[0]?.note);
+  const room = (parse(updated[0]!.replies[1]!)?.body?.[1] as GSValue[])?.[2] as GSValue[];
+  check('the new player count took', room?.[12] === '4', String(room?.[12]));
+  check(
+    'and the new settings blob is the one he sent',
+    room?.[10] instanceof Uint8Array && Buffer.from(room[10] as Uint8Array).equals(settings),
+    String((room?.[10] as Uint8Array)?.length),
+  );
+  check('the notification carries the all-info mask', (parse(updated[0]!.replies[1]!)?.body?.[1] as GSValue[])?.[1] === String(Lsm.ALLINFO));
+
+  // Told, not asked: no reply, but it must be named in the log rather than land in
+  // "not implemented", which is how a real gap stays visible.
+  const connected = lobby.receive(lobbyMsg([String(LobbyMsg.GAME_CONNECTED), [roomId]]));
+  check('being connected to his own game needs no answer', connected[0]!.replies.length === 0, connected[0]?.note);
+  check('but it is named', connected[0]!.note.includes('GAME_CONNECTED'), connected[0]?.note);
 }
 
 console.log('\nChat, unwrapped from what the client actually sent');

@@ -86,6 +86,25 @@ export const Lsm = {
   ALLINFO: 0x1c0,
 } as const;
 
+/**
+ * Which fields a GROUP_CONFIG_UPDATE_RES carries, and in this order.
+ *
+ * The flags are the payload's shape: a field is present only if its bit is set, so
+ * a reader that ignores one of them reads every field after it out of place.
+ */
+export const RoomUpdate = {
+  OPEN: 0x2,
+  SCORE_SUBMISSION: 0x4,
+  MAX_PLAYERS: 0x8,
+  MAX_VISITORS: 0x10,
+  PASSWORD: 0x20,
+  GROUP_INFO: 0x40,
+  DEDICATED_SERVER: 0x200,
+  /** All three together mean one extra field of dedicated-server flags comes first. */
+  DS_FLAGS: 0x2 | 0x4 | 0x200,
+  ALT_GROUP_INFO: 0x400,
+} as const;
+
 /** How a member is doing, in the status field of a member record. */
 export const PlayerStatus = {
   SILENT: 1,
@@ -232,8 +251,12 @@ export function memberEntry(
   address: string,
   port: number,
   status: number = PlayerStatus.SILENT,
+  own?: Uint8Array,
 ): GSValue[] {
-  return [name, '0', address, address, playerInfo(name, address, port), [String(groupId)], '-1', String(status)];
+  // `own` is the blob the player sent us about himself; it beats ours, which is a
+  // reconstruction of the same thing.
+  const info = own && own.length ? own : playerInfo(name, address, port);
+  return [name, '0', address, address, info, [String(groupId)], '-1', String(status)];
 }
 
 function playerInfo(name: string, address: string, port: number): Uint8Array {

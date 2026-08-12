@@ -29,11 +29,13 @@ import {
   LobbyMsg,
   Lsm,
   PlayerStatus,
+  RoomUpdate,
   Rooms,
   lobbyEntry,
   memberEntry,
   roomEntry,
   stampRoomIds,
+  type Room,
 } from './lobby.ts';
 import { HEADER_SIZE as GS_HEADER_SIZE, MessageType, build, parse, reply, type GSMessage } from './gs-message.ts';
 import { decodeBody, type GSValue } from './gs-data.ts';
@@ -109,6 +111,13 @@ export class RouterSession {
    */
   localAddress = '';
   localNetmask = '';
+  /**
+   * What the player last told us about himself in SET_PLAYER_INFO.
+   *
+   * His own record beats the one we build for him: it is where he says he can be
+   * reached, and it goes out to everybody else in the room as he wrote it.
+   */
+  playerInfo: Uint8Array | null = null;
 
   private readonly role: Role;
   private readonly waitModule: Endpoint;
@@ -203,6 +212,26 @@ export class RouterSession {
    * The flag asks the client to come back for their children — the rooms —
    * which is how a channel with games in it gets a game list.
    */
+  /**
+   * The room's members, as records the client can read.
+   *
+   * Only this connection's own player info is known here, so it is used for him and
+   * reconstructed for everybody else. With two players in a room each connection has
+   * the other's — that is the next thing this has to grow.
+   */
+  private membersOf(room: Room): GSValue[] {
+    return room.members.map((name) =>
+      memberEntry(
+        name,
+        room.id,
+        room.address,
+        PLAYER_PORT,
+        PlayerStatus.GAMECONNECTED,
+        name === this.username ? (this.playerInfo ?? undefined) : undefined,
+      ),
+    );
+  }
+
   private lobbyList(message: GSMessage): Buffer {
     const lobbies = DEFAULT_LOBBIES.map((lobby) => lobbyEntry(lobby, this.gameId));
     return build(reply(message, [String(LobbyMsg.GROUP_INFO), ['1', String(Lsm.CHILDGROUPINFO), ['0'], lobbies]]));
@@ -423,9 +452,7 @@ export class RouterSession {
           const room = this.rooms.get(roomId);
           if (!room) return { note: `JOIN_ROOM ${roomId} — no such room`, replies: [] };
           if (!room.members.includes(this.username)) room.members.push(this.username);
-          const members = room.members.map((name) =>
-            memberEntry(name, roomId, room.address, PLAYER_PORT, PlayerStatus.GAMECONNECTED),
-          );
+          const members = this.membersOf(room);
           return {
             note: `JOIN_ROOM ${roomId} ("${room.name}") — in, ${room.members.length} of ${room.maxPlayers}, mask ${asked}`,
             replies: [
@@ -435,6 +462,93 @@ export class RouterSession {
               ),
             ],
           };
+        }
+        // The player's own record: name, address, and a blob he composes himself.
+        // He waits for a reply to this ("set OWN player info sent, waiting reply"),
+        // so silence here is another 30 seconds. The blob is kept and used in his
+        // member record from then on, which is better than the one we synthesise —
+        // it is his own account of where he can be reached.
+        if (subtype === String(LobbyMsg.SET_PLAYER_INFO)) {
+          const fields = Array.isArray(inner) ? inner : [];
+          const blob = fields.find((field): field is Uint8Array => field instanceof Uint8Array);
+          if (blob) this.playerInfo = blob;
+          const said = fields.map((field) => (field instanceof Uint8Array ? `<${field.length} bytes>` : JSON.stringify(field)));
+          return {
+            // The reply's shape is the one every other lobby answer has — result,
+            // subtype, the first field back. Not yet confirmed by the client's own
+            // log line for it; `LobbyRcv_SetPlayerInfoReply` will say.
+            note: `SET_PLAYER_INFO — ${said.join(', ')}`,
+            replies: [
+              build(
+                reply(message, [
+                  String(MessageType.GSSUCCESS),
+                  [subtype, [typeof fields[0] === 'string' ? fields[0] : '0']],
+                ]),
+              ),
+            ],
+          };
+        }
+        // The host changing his game's settings from inside the room: the flags say
+        // which fields follow, in this order. Answered, and then the room is sent
+        // back out so everybody in it sees the new map or the new player count.
+        if (subtype === String(LobbyMsg.GROUP_CONFIG_UPDATE_RES)) {
+          const fields = Array.isArray(inner) ? inner : [];
+          const roomId = Number(typeof fields[0] === 'string' ? fields[0] : '0');
+          const flags = Number(typeof fields[1] === 'string' ? fields[1] : '0');
+          const room = this.rooms.get(roomId);
+          if (!room) return { note: `GROUP_CONFIG_UPDATE_RES ${roomId} — no such room`, replies: [] };
+          const changed: string[] = [];
+          let at = 2;
+          const next = (): GSValue | undefined => fields[at++];
+          // Dedicated-server flags come first when all three of them are set; this
+          // game never hosts that way, but the field still has to be stepped over.
+          if ((flags & RoomUpdate.DS_FLAGS) === RoomUpdate.DS_FLAGS) next();
+          if (flags & RoomUpdate.MAX_PLAYERS) {
+            const value = Number(next());
+            if (value) {
+              room.maxPlayers = value;
+              changed.push(`up to ${value} players`);
+            }
+          }
+          if (flags & RoomUpdate.MAX_VISITORS) {
+            room.maxVisitors = Number(next()) || 0;
+            changed.push(`${room.maxVisitors} visitors`);
+          }
+          if (flags & RoomUpdate.PASSWORD) {
+            const value = next();
+            room.password = typeof value === 'string' ? value : '';
+            changed.push(room.password ? 'a password' : 'no password');
+          }
+          if (flags & RoomUpdate.GROUP_INFO) {
+            const value = next();
+            // Sent from inside the room, the blob knows the ids already — unlike the
+            // one that came with CREATE_ROOM. It is kept exactly as sent.
+            if (value instanceof Uint8Array) {
+              room.info = value;
+              changed.push(`${value.length} bytes of settings`);
+            }
+          }
+          if (flags & RoomUpdate.ALT_GROUP_INFO) {
+            const value = next();
+            if (value instanceof Uint8Array) room.altInfo = value;
+          }
+          return {
+            note: `GROUP_CONFIG_UPDATE_RES ${roomId} — ${changed.length ? changed.join(', ') : `nothing we read (flags ${flags})`}`,
+            replies: [
+              build(reply(message, [String(MessageType.GSSUCCESS), [subtype, [String(roomId)]]])),
+              build(
+                reply(message, [
+                  String(LobbyMsg.GROUP_INFO),
+                  [String(roomId), String(Lsm.ALLINFO), roomEntry(room), [], this.membersOf(room)],
+                ]),
+              ),
+            ],
+          };
+        }
+        // He tells us he is connected to his own game. Nothing to answer.
+        if (subtype === String(LobbyMsg.GAME_CONNECTED)) {
+          const groupId = Array.isArray(inner) && typeof inner[0] === 'string' ? inner[0] : '?';
+          return { note: `GAME_CONNECTED for ${groupId} — noted`, replies: [] };
         }
         // Leaving a group. A host who leaves takes his game with him, which is the
         // other half of why a name could stay taken by nobody.

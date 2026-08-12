@@ -24,6 +24,7 @@
 
 import { hostU32String } from './address.ts';
 import { Ladder, ladderRow } from './ladder.ts';
+import { GET_DATA, PersistentStore, SET_DATA, recordKeyOf } from './persistent-store.ts';
 import {
   DEFAULT_LOBBIES,
   GroupType,
@@ -40,7 +41,7 @@ import {
   stampRoomIds,
   type Room,
 } from './lobby.ts';
-import { HEADER_SIZE as GS_HEADER_SIZE, MessageType, build, parse, reply, type GSMessage } from './gs-message.ts';
+import { HEADER_SIZE as GS_HEADER_SIZE, MessageType, build, moduleFailureBody, moduleReplyBody, parse, reply, type GSMessage } from './gs-message.ts';
 import { decodeBody, type GSValue } from './gs-data.ts';
 import { Blowfish } from './blowfish.ts';
 import { decryptWith, generateKeyPair, parsePublicKey, publicKeyBlob, encryptTo, type RsaKeyPair, type RsaPublicKey } from './pkc.ts';
@@ -142,6 +143,8 @@ export class RouterSession {
   private readonly ladder: Ladder;
   /** And who is in which channel, which is what a player list is made of. */
   private readonly presence: Presence;
+  /** And the players' profiles, which are the server's to keep. */
+  private readonly profiles: PersistentStore;
   /** Seat synthetic players in every channel — a diagnostic, off unless asked for. */
   readonly ghosts: boolean;
 
@@ -153,8 +156,10 @@ export class RouterSession {
     rooms: Rooms,
     ladder: Ladder,
     presence: Presence,
+    profiles: PersistentStore,
     ghosts = false,
   ) {
+    this.profiles = profiles;
     this.ghosts = ghosts;
     this.role = role;
     this.waitModule = waitModule;
@@ -360,11 +365,20 @@ export class RouterSession {
         // pivot the client asked about (`LadderQuery_RequestPivotUser`), and the three
         // empty lists are where named keys would go if it wanted only some of them.
         //
-        // The reply's first field is read as a BYTE and compared against 0x26 — 38,
-        // GSSUCCESS (`cmp byte ptr [esi+0Ch],26h` at 0xE0BC78). The row layout is our
-        // best reading, and the client says which way it went in one line:
-        // "LadderQuery_StartResultEntryEnumeration(…) succeeded" or "ladder query
-        // request failed,reason=…".
+        // **We refuse it, on purpose, and that is the honest answer we can give.**
+        // Four shapes of a successful reply were ignored in total silence before the
+        // client's matcher was read instead of guessed (`moduleReplyBody`): the number
+        // has to be nested where it looks for it, and — the part no guess would have
+        // found — the row sits at index 2 of the innermost list, where the getter
+        // accepts ONLY a string (0x4435c0 refuses a list). What is inside that string
+        // is parsed at 0x432c80 and is not known, so a success reply cannot be composed
+        // yet. A refusal can be, completely (`moduleFailureBody`), and the client has a
+        // path for it: "Failed to get Ladder row for myself, setting N/A, set OWN
+        // player info sent" — which is also how he finally sends his own player info.
+        //
+        // So the rating is kept here and reported in the log; what the client is told
+        // is that there is no row for him yet. That stops a 30-second hang and turns
+        // silence into a line in his log either way.
         if (subtype === String(LADDER_QUERY)) {
           // Three fields at the top, not two: the number, the id, and the query — so
           // the query is body[2] and `inner` (body[1]) is the id itself.
@@ -375,33 +389,43 @@ export class RouterSession {
           const pivotEntry = Array.isArray(pivotList) ? pivotList[1] : undefined;
           const pivot = Array.isArray(pivotEntry) && typeof pivotEntry[0] === 'string' ? pivotEntry[0] : this.username;
           const stats = this.ladder.row(pivot);
-          // The shape of the answer, one variant per run, because a shape the client
-          // does not recognise produces silence — no reply line, no reason:
-          //
-          //   ["38", ["1281", [requestId, "", [row]]]]   -> ignored in full
-          //   ["38", ["1281", requestId, ["1", row]]]    -> ignored in full
-          //   ["38", requestId, ["1", row]]              -> this one, and flat
-          //
-          // Flat because of two things that agree: the handler at 0xDF4080 takes
-          // exactly THREE arguments — a byte, then two — and the client keeps its
-          // pending requests in a map keyed by request id (0x41DF10 registers one
-          // before sending). With the id buried inside a nested list there is nothing
-          // for a reply to be matched against, and an unmatched reply is dropped
-          // without a word.
           return {
-            note: `LADDER query ${requestId} about "${pivot}" — rating ${stats['RATING']}, ${stats['GAMES_PLAYED']} game(s)`,
-            replies: [
-              build({
-                ...reply(message, [String(MessageType.GSSUCCESS), requestId, ['1', ladderRow(pivot, stats)]]),
-                // From the SERVER (2), not from the proxy (11) the request was addressed
-                // to. The precedent is the NAT mirror, the one request-id-matched
-                // exchange that works: its ask arrives 8->2 and our 2->8 answer is
-                // taken. 11 is the proxy — the transport — and an answer comes from the
-                // service behind it, so mirroring the request's own receiver back is
-                // very likely what has been throwing these replies away.
-                sender: 2,
-              }),
-            ],
+            note:
+              `LADDER query ${requestId} about "${pivot}" — refused with "no row yet"; ` +
+              `we hold rating ${stats['RATING']}, ${stats['GAMES_PLAYED']} game(s)`,
+            replies: [build(reply(message, moduleFailureBody(LADDER_QUERY, 'no ladder row for this player yet')))],
+          };
+        }
+        // The player's profile, kept for him on the persistantdata module. He asks for
+        // it on entering a channel and the screen behind "Profile" waits for the
+        // answer; unanswered, the client sits in
+        // CStateWaitWithReturn<CStateOutOfRoom, CStateWaitPSGetDataReplyBase> for
+        // fifteen seconds and then offers to create one.
+        //
+        // We are a store, not a reader: what a profile means is the client's business,
+        // so the bytes it writes are the bytes it gets back. Index 1 of the innermost
+        // list is the record (0x42aec0 reads it and its caller copies it out by
+        // length); index 2 is read too (0x42b400) and nothing is known about it, so it
+        // goes out empty.
+        if (subtype === String(GET_DATA) || subtype === String(SET_DATA)) {
+          const requestId = typeof message.body?.[1] === 'string' ? message.body[1] : '1';
+          const args = Array.isArray(message.body?.[2]) ? message.body[2] : [];
+          const key = recordKeyOf(args, this.username);
+          const where = `${key.user}'s ${key.section} profile in ${key.game}`;
+          const notes: string[] = [];
+          if (subtype === String(SET_DATA)) {
+            // The record is field 5, right after the section; field 6 is a number we
+            // have no name for.
+            const written = typeof args[5] === 'string' ? args[5] : '';
+            const complaint = this.profiles.set(key, written);
+            if (complaint) notes.push(complaint);
+            notes.push(`saved ${written.length} character(s)`);
+          }
+          const stored = this.profiles.get(key);
+          notes.push(stored === null ? 'nothing stored yet' : `handing back ${stored.length} character(s)`);
+          return {
+            note: `${subtype === String(GET_DATA) ? 'PROFILE read' : 'PROFILE write'} — ${where}, ${notes.join(', ')}`,
+            replies: [build(reply(message, moduleReplyBody(subtype, [requestId, stored ?? '', ''])))],
           };
         }
         return { note: `PROXY_HANDLER subtype ${String(subtype)} is not implemented`, replies: [] };
@@ -827,15 +851,25 @@ export class RouterService {
   readonly ladder: Ladder;
   /** Likewise: who is in which channel is the same fact on every connection. */
   readonly presence = new Presence();
+  /** And a profile belongs to the player too, outliving every session. */
+  readonly profiles: PersistentStore;
   /** Passed to every session: seat synthetic players, to see what the client draws. */
   ghosts = false;
 
-  constructor(waitModule: Endpoint, proxy: Endpoint, proxyWaitModule: Endpoint, lobbyServer: Endpoint, ladderFile = 'data/ladder.json') {
+  constructor(
+    waitModule: Endpoint,
+    proxy: Endpoint,
+    proxyWaitModule: Endpoint,
+    lobbyServer: Endpoint,
+    ladderFile = 'data/ladder.json',
+    profileFile = 'data/profiles.json',
+  ) {
     this.waitModule = waitModule;
     this.proxy = proxy;
     this.proxyWaitModule = proxyWaitModule;
     this.lobbyServer = lobbyServer;
     this.ladder = new Ladder(ladderFile);
+    this.profiles = new PersistentStore(profileFile);
   }
 
   /** A connection on one of the four desks. */
@@ -849,6 +883,7 @@ export class RouterService {
       this.rooms,
       this.ladder,
       this.presence,
+      this.profiles,
       this.ghosts,
     );
   }

@@ -105,6 +105,44 @@ export function build(message: Omit<GSMessage, 'size'>): Buffer {
   return Buffer.concat([header, body]);
 }
 
+/**
+ * The body of an answer to a module request — the shape read off the client's own
+ * matcher, 0x4286f0 and 0x427170.
+ *
+ * A module request (`persistantdata`, `ladderquery`) arrives as PROXY_HANDLER with
+ * `[number, requestId, [args]]`, and the client then BLOCKS waiting for its answer,
+ * scanning the messages it has received for one that fits. What fits, exactly:
+ *
+ *   the message type is 204 or 209                    (`cmp cx,0CCh`)
+ *   body field 0 is 38 or 39 — success or failure     (`cmp ax,26h` / `27h`)
+ *   body field 1 is a LIST whose field 0 is the number of the request
+ *
+ * Anything else is passed over in silence: no reply line, no reason, and the client
+ * waits out its thirty seconds. Four different shapes were tried against the ladder
+ * before this was read instead of guessed, and none of them nested the number where
+ * the matcher looks for it.
+ *
+ * Inside, the fields are read BY KIND: `[1]` and `[2]` of the innermost list are
+ * fetched with a string getter that refuses a list (0x4435c0 wants kind 1). That is
+ * the other half of what went wrong — the ladder's row was sent as a nested list at
+ * a place where only a string is ever read.
+ */
+export function moduleReplyBody(request: number | string, fields: readonly GSValue[]): GSValue[] {
+  return [String(MessageType.GSSUCCESS), [String(request), [...fields]]];
+}
+
+/**
+ * A refusal, in the form the same matcher reads for status 39.
+ *
+ * It takes a different turn there (0x427242): the list under the number is read, and
+ * its field **0** is fetched as a string — the reason. Nothing else is required, so
+ * this shape is completely determined, which makes it the one honest answer we can
+ * give to a request whose success payload we cannot yet compose.
+ */
+export function moduleFailureBody(request: number | string, reason: string): GSValue[] {
+  return [String(MessageType.GSFAIL), [String(request), [reason]]];
+}
+
 /** An answer to `to`: its type, its parties the other way round, our body. */
 export function reply(to: GSMessage, body: GSValue[], type = to.type): Omit<GSMessage, 'size'> {
   return {

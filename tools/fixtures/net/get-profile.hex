@@ -1,0 +1,8 @@
+# The profile read the game asked for on entering a channel (12.08.2026), on the
+# proxy's own wait module. A module request: number 1025, request id 2, then the
+# record it names — the game, a number, the user, a number, and the section.
+# Decoded: ["1025", "2", ["HEROES_29988429c481f219", "0", "Senyaak", "0", "PUBLIC"]]
+000041 00cc8bfabb8ec9d8a490dfbbb891c4a5c0
+abcabea2d0a99b93dc89fcdcc59398d4cbfce0ca
+949ae3b7e8c2dda7c1dcddec82a697aed4c8899d
+9dd5baf39e

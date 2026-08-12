@@ -19,9 +19,9 @@ import { Blowfish } from '../src/net/blowfish.ts';
 import { CdKeyRequest, CdKeyService } from '../src/net/cdkey-service.ts';
 import { LobbyMsg, Lsm, RoomUpdate, namedPlayerInfo } from '../src/net/lobby.ts';
 import { readFields, writeFields } from '../src/net/structure.ts';
-import { LADDER_KEYS, STARTING_RATING } from '../src/net/ladder.ts';
+import { LADDER_KEYS, Ladder, STARTING_RATING } from '../src/net/ladder.ts';
 import { IrcService, frame, unframe } from '../src/net/irc.ts';
-import { readFileSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -815,27 +815,115 @@ console.log('\nThe ladder, from the query the client really sent');
 
   const answer = parse(asked[0]!.replies[0]!);
   check('the answer is a PROXY_HANDLER', answer?.type === MessageType.PROXY_HANDLER, String(answer?.type));
-  // From the server, back to whoever asked — the addressing the NAT mirror's accepted
-  // answers use, rather than a mirror of the proxy the request was addressed to.
-  check('it comes from the server and goes to the asker', answer?.sender === 2 && answer?.receiver === 8, `${answer?.sender}->${answer?.receiver}`);
-  // The client reads the first field as a byte and compares it with 0x26 — 38.
+  // It is a REFUSAL, and deliberately: a successful row has to sit at index 2 of the
+  // innermost list, where the client's getter takes a string and nothing else, and
+  // what belongs in that string is still unread. A refusal's shape is known whole.
+  check('and it refuses, with 39 rather than 38', answer?.body?.[0] === '39', String(answer?.body?.[0]));
+  const refusal = answer?.body?.[1] as GSValue[];
+  check('the request number is nested where the matcher looks for it', refusal?.[0] === '1281', String(refusal?.[0]));
+  check('and the reason is a string at index 0 under it', typeof (refusal?.[1] as GSValue[])?.[0] === 'string', JSON.stringify(refusal?.[1]));
+  // The rating itself is ours and it is kept, so nothing is lost by not sending it.
+  check('the rating is still recorded on our side', asked[0]!.note.includes(String(STARTING_RATING)), asked[0]?.note);
+  const stats = new Ladder(join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-ladder.json')).row('Senyaak');
+  check('with all 46 named fields in the store', Object.keys(stats).length === 46, String(Object.keys(stats).length));
+  check('starting rated, not at zero', stats['RATING'] === STARTING_RATING, String(stats['RATING']));
+  check('and with nothing played', stats['GAMES_PLAYED'] === 0, String(stats['GAMES_PLAYED']));
+  check('in the exe order, Heaven first and Orcs last', LADDER_KEYS[12] === 'W_HEAVEN' && LADDER_KEYS[19] === 'W_ORCS');
+}
+
+console.log('\nThe profile, from the read the client really asked for');
+{
+  // A store that survives its process is the point of this one, so the file has to go
+  // before the checks run — otherwise the first assertion reads what the LAST run
+  // wrote and passes or fails for reasons that have nothing to do with the code.
+  const profileFile = join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-profiles.json');
+  rmSync(profileFile, { force: true });
+
+  const proxy = new RouterService(
+    { address: '127.0.0.1', port: 40001 },
+    { address: '127.0.0.1', port: 40030 },
+    { address: '127.0.0.1', port: 40031 },
+    { address: '127.0.0.1', port: 40040 },
+    join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-ladder.json'),
+    profileFile,
+  );
+  const session = proxy.session('proxy');
+  session.username = 'Senyaak';
+
+  const read = session.receive(
+    Buffer.from(
+      readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'net', 'get-profile.hex'), 'utf8')
+        .split(/\r?\n/)
+        .filter((line) => !line.startsWith('#'))
+        .join('')
+        .replace(/[^0-9a-f]/gi, ''),
+      'hex',
+    ),
+  );
+  check('the profile read is answered at all', read[0]!.replies.length === 1, read[0]?.note);
+  check('and it names whose profile, in which game', read[0]!.note.includes("Senyaak's PUBLIC profile"), read[0]?.note);
+
+  // The shape is the client's matcher, read at 0x4286f0 and 0x427170: type 204, the
+  // status first, then a LIST whose field 0 is the number of the request. Without the
+  // number nested there the reply is passed over in silence.
+  const answer = parse(read[0]!.replies[0]!);
+  check('the answer is a PROXY_HANDLER', answer?.type === MessageType.PROXY_HANDLER, String(answer?.type));
   check('its first field is the 38 the client compares against', answer?.body?.[0] === '38', String(answer?.body?.[0]));
-  // Flat, three fields: the result, the request id the client can match against its
-  // pending map, and the rows.
-  check('the request id is the second field, where a reply can be matched', answer?.body?.[1] === '1', String(answer?.body?.[1]));
-  const rows = answer?.body?.[2] as GSValue[];
-  check('the answer counts its rows first', rows?.[0] === '1', String(rows?.[0]));
-  const row = rows?.[1] as GSValue[];
-  check('for the player asked about', row?.[0] === 'Senyaak', String(row?.[0]));
-  const fields = row?.[1] as GSValue[];
-  check('with all 46 named fields', fields?.length === 46, String(fields?.length));
-  const rating = (fields as GSValue[][]).find((pair) => pair[0] === 'RATING');
-  check('a new player starts rated, not at zero', rating?.[1] === String(STARTING_RATING), JSON.stringify(rating));
-  const played = (fields as GSValue[][]).find((pair) => pair[0] === 'GAMES_PLAYED');
-  check('and with nothing played', played?.[1] === '0', JSON.stringify(played));
-  const perRace = (fields as GSValue[][]).filter((pair) => String(pair[0]).startsWith('W_'));
-  check('the per-faction wins are all eight', perRace.length === 8, String(perRace.length));
-  check('in the exe order, Heaven first and Orcs last', perRace[0]?.[0] === 'W_HEAVEN' && perRace[7]?.[0] === 'W_ORCS');
+  const carried = answer?.body?.[1] as GSValue[];
+  check('the request number is nested where the matcher looks', carried?.[0] === '1025', String(carried?.[0]));
+  const record = carried?.[1] as GSValue[];
+  check('the record echoes the request id', record?.[0] === '2', String(record?.[0]));
+  // Index 1 is the record itself (0x42aec0 reads it, its caller copies it out by
+  // length); index 2 is read as well (0x42b400) and is not understood, so it is empty.
+  check('with nothing stored, the record is empty rather than absent', record?.[1] === '', JSON.stringify(record?.[1]));
+  check('and the field after it is there too, empty', record?.[2] === '', JSON.stringify(record?.[2]));
+
+  // A write, then a read: we are a store, so what comes back is what went in — byte
+  // for byte, with no opinion about what a profile means.
+  const written = 'HEROES-PROFILE-v1:Senyaak:whatever the game puts here';
+  const wrote = session.receive(
+    build({
+      property: Property.GS,
+      priority: 0,
+      type: MessageType.PROXY_HANDLER,
+      sender: 8,
+      receiver: 11,
+      body: ['1026', '3', ['HEROES_29988429c481f219', '0', 'Senyaak', '0', 'PUBLIC', written, '0']],
+    }),
+  );
+  check('a profile write is answered', wrote[0]!.replies.length === 1, wrote[0]?.note);
+  check('and it says how much was kept', wrote[0]!.note.includes(`saved ${written.length} character(s)`), wrote[0]?.note);
+  const again = session.receive(
+    build({
+      property: Property.GS,
+      priority: 0,
+      type: MessageType.PROXY_HANDLER,
+      sender: 8,
+      receiver: 11,
+      body: ['1025', '4', ['HEROES_29988429c481f219', '0', 'Senyaak', '0', 'PUBLIC']],
+    }),
+  );
+  const stored = ((parse(again[0]!.replies[0]!)?.body?.[1] as GSValue[])?.[1] as GSValue[])?.[1];
+  check('the record read back is the one written', stored === written, JSON.stringify(stored));
+
+  // And it outlives the session, which is the whole point of a profile.
+  const later = new RouterService(
+    { address: '127.0.0.1', port: 40001 },
+    { address: '127.0.0.1', port: 40030 },
+    { address: '127.0.0.1', port: 40031 },
+    { address: '127.0.0.1', port: 40040 },
+    join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-ladder.json'),
+    profileFile,
+  );
+  check(
+    'and a new server still has it, because it is on disk',
+    later.profiles.get({ game: 'HEROES_29988429c481f219', user: 'Senyaak', section: 'PUBLIC' }) === written,
+  );
+  // Another player's profile is another record: the key is game, user and section.
+  check(
+    'while another player has none',
+    later.profiles.get({ game: 'HEROES_29988429c481f219', user: 'Somebody', section: 'PUBLIC' }) === null,
+  );
 }
 
 console.log('\nChat, unwrapped from what the client actually sent');

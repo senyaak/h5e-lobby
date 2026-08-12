@@ -75,7 +75,8 @@ lobby login        -> accepted, three channels pushed
 IRC                -> "IRC welcome", "IRC join channel succeeded"
 join channel       -> "join lobby succeeded(GroupID=1,LobbySrvID=1)"
 NAT address        -> "address request succeeded,address=1.0.0.127:40010"
-ladder             -> answered, and the answer is IGNORED — see below
+ladder             -> refused on purpose, in the one shape that is fully known
+profile            -> read and written for real, kept in data/profiles.json
 create game        -> CREATE_ROOM answered, room 100 in the channel
 join own room      -> "LobbyRcv_RoomInfo", then CStateInRoom / CStateWaitingForPlayers
 settings changes   -> GROUP_CONFIG_UPDATE_RES answered, the room echoed back
@@ -198,6 +199,11 @@ the editor repo.
 | the player object a blob is parsed into: name +8, ExtIP +0x14, LocIPs +0x24 | formatter 0xDFE2E0 |
 | the ladder reply handler (three arguments) and the request map | 0xDF4080 / 0x41DF10 |
 | the servers-config fetch, and why an error code names no step | 0xE07A50 / 0xE075B1 |
+| **a module reply: the matcher, and the status/number check** | 0x4286F0 / 0x427170 |
+| the getters, by kind: list, string, number, blob | 0x442F10 / 0x4435C0 / 0x443680 / 0x442510 |
+| a module request is sent and registered here | 0x41DF10 |
+| the profile: read request and reply, write request | 0x42B100 + 0x42AEC0 / 0x42B1E0 |
+| the ladder reply reader, and the row payload nobody has parsed | 0x42C7F0 / 0x432C80 |
 
 ## The player list: one field, and it was never the blob
 
@@ -279,25 +285,50 @@ player info sent" / "Failed to get Ladder row for myself, setting N/A, set OWN p
 sent". Ours resolves neither way, so it never sends one. That is now a want, not a
 blocker.
 
-### The ladder answer: four attempts, all ignored in full
+## Module requests: the shape, read rather than guessed
 
-Not refused — **ignored**, with no `LadderQueryRcv_RequestReply` line and no "ladder
-query request failed,reason=" either:
+Two things the client asks for over a **module** — `persistantdata` (the profile) and
+`ladderquery` (the rating) — go out as PROXY_HANDLER with `[number, requestId, [args]]`
+and then it BLOCKS, scanning what has arrived for something that fits. Four shapes of
+ladder answer had been ignored in total silence before this was read; the matcher is at
+0x4286f0, and 0x427170 finishes the job:
 
 ```
-["38", ["1281", [requestId, "", [row]]]]        nested, mirrored 11->8
-["38", ["1281", requestId, ["1", row]]]         echo shape, mirrored 11->8
-["38", requestId, ["1", row]]                   flat, mirrored 11->8
-["38", requestId, ["1", row]]                   flat, sent from 2 instead of 11
+the message type is 204 or 209                 cmp cx,0CCh
+body field 0 is 38 or 39                       cmp ax,26h / 27h
+body field 1 is a LIST whose field 0 is the request's number
 ```
 
-What is known: the request number is 0x501 and the only one of its kind; the reply's
-first field is read as a byte and compared with 0x26 (38); the handler at 0xDF4080 takes
-three arguments; the client registers each request in a map keyed by request id
-(0x41DF10) before sending, so an unmatched reply is dropped silently. Four shapes is
-enough guessing — **read the dispatch** rather than try a fifth: find what keys the
-processor for `SLadderQueryRcv_RequestReply` (its RTTI name is in the exe) and what
-message type and party ids it expects.
+Nothing else is looked at — not the request id, not the party nibbles. And inside, the
+fields are fetched **by kind**: 0x442f10 takes a list (kind 3) and nothing else, 0x4435c0
+and 0x443680 take a string (kind 1) and refuse a list, 0x442510 takes a blob (kind 2). So
+a reply can match and still be dropped without a word, in the getter.
+
+```
+success   ["38", ["<number>", [ … fields … ]]]
+refusal   ["39", ["<number>", [ "<reason>" ]]]      reason is a STRING at index 0
+```
+
+`moduleReplyBody` / `moduleFailureBody` in `src/net/gs-message.ts` are these two.
+
+- **The profile (0x401 read, 0x402 write) is answered for real.** Index 1 of the innermost
+  list is the record (0x42aec0 reads it, its caller copies it out by length); index 2 is
+  read too (0x42b400) and nothing is known about it, so it goes out empty. The record is a
+  **string**, not a blob — the client appends it with the string appender and reads it with
+  a string getter — so a profile cannot contain a zero byte. We keep the bytes under
+  (game, user, section) in `data/profiles.json` and hand them back untouched:
+  `src/net/persistent-store.ts`. **What a profile means was never needed.**
+- **The ladder is refused on purpose.** A successful row belongs at index 2 of the
+  innermost list, where only a string is ever read, and what goes in that string is parsed
+  at 0x432c80 and still unread. A refusal is fully determined, and the client has a path
+  for it: "Failed to get Ladder row for myself, setting N/A, set OWN player info sent" —
+  which is also how it finally sends its own player-info blob. The rating is kept on our
+  side meanwhile. Reading 0x432c80 is what turns the refusal into a real row.
+
+Also read along the way: each module has its own state machine, and both are already past
+their logins — "PS login succeeded" is in the game's log, and the ladder service says
+"initializing Ladder Query Service...succeeded" (it is local, no exchange). So the
+silence was never a login problem.
 
 ## Where the next wall is
 

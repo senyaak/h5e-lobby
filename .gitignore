@@ -4,3 +4,5 @@ node_modules/
 # to what the client actually said.
 _tmp/
 logs/
+# The ladder. Players' ratings belong to whoever runs the server, not to the repo.
+data/

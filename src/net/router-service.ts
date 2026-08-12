@@ -23,6 +23,7 @@
 //   RouterService     new(waitModule) -> session(); session.receive(buf) -> Buffer[]
 
 import { hostU32String } from './address.ts';
+import { Ladder, ladderRow } from './ladder.ts';
 import {
   DEFAULT_LOBBIES,
   GroupType,
@@ -66,6 +67,15 @@ export interface RouterEvent {
 
 /** The id we hand out for a proxy module; the client echoes it back to release it. */
 const PROXY_ID = '1';
+
+/**
+ * The ladder query's request number, 0x501.
+ *
+ * The exe pushes it beside the literal "ladderquery" in one call to the request
+ * builder (0x42BC92), and there is no other number of its kind: 0x500 and
+ * 0x502…0x510 appear nowhere. One request, one answer to write.
+ */
+const LADDER_QUERY = 1281;
 
 /**
  * Where a player's address and port come from, when the time comes.
@@ -126,13 +136,16 @@ export class RouterSession {
   private readonly lobbyServer: Endpoint;
   /** Shared with every other connection: a room one player hosts, others join. */
   private readonly rooms: Rooms;
+  /** Also shared: the ratings, which outlive every connection. */
+  private readonly ladder: Ladder;
 
-  constructor(role: Role, waitModule: Endpoint, proxy: Endpoint, lobbyServer: Endpoint, rooms: Rooms) {
+  constructor(role: Role, waitModule: Endpoint, proxy: Endpoint, lobbyServer: Endpoint, rooms: Rooms, ladder: Ladder) {
     this.role = role;
     this.waitModule = waitModule;
     this.proxy = proxy;
     this.lobbyServer = lobbyServer;
     this.rooms = rooms;
+    this.ladder = ladder;
   }
 
   /**
@@ -318,6 +331,43 @@ export class RouterSession {
           return {
             note: `PROXY_HANDLER — module ${moduleId} released`,
             replies: [build(reply(message, [String(MessageType.GSSUCCESS), [subtype, [moduleId]]]))],
+          };
+        }
+        // The ladder query — 0x501, and the only request number of its kind in the
+        // exe. It arrives on the proxy's own wait module right after the player
+        // enters a channel, and while it goes unanswered he waits out 30 seconds and
+        // the client writes "Failed to get Ladder row for myself, setting N/A".
+        //
+        // The body nests: [ "1281", requestId, [ count, [ "1", game, "1", "0",
+        // [ count, [ user, "1" ] ], [ [], [], [] ] ] ] ] — the user in there is the
+        // pivot the client asked about (`LadderQuery_RequestPivotUser`), and the three
+        // empty lists are where named keys would go if it wanted only some of them.
+        //
+        // The reply's first field is read as a BYTE and compared against 0x26 — 38,
+        // GSSUCCESS (`cmp byte ptr [esi+0Ch],26h` at 0xE0BC78). The row layout is our
+        // best reading, and the client says which way it went in one line:
+        // "LadderQuery_StartResultEntryEnumeration(…) succeeded" or "ladder query
+        // request failed,reason=…".
+        if (subtype === String(LADDER_QUERY)) {
+          // Three fields at the top, not two: the number, the id, and the query — so
+          // the query is body[2] and `inner` (body[1]) is the id itself.
+          const requestId = typeof message.body?.[1] === 'string' ? message.body[1] : '1';
+          const container = message.body?.[2];
+          const query = Array.isArray(container) ? container[1] : undefined;
+          const pivotList = Array.isArray(query) ? query[4] : undefined;
+          const pivotEntry = Array.isArray(pivotList) ? pivotList[1] : undefined;
+          const pivot = Array.isArray(pivotEntry) && typeof pivotEntry[0] === 'string' ? pivotEntry[0] : this.username;
+          const stats = this.ladder.row(pivot);
+          return {
+            note: `LADDER query ${requestId} about "${pivot}" — rating ${stats['RATING']}, ${stats['GAMES_PLAYED']} game(s)`,
+            replies: [
+              build(
+                reply(message, [
+                  String(MessageType.GSSUCCESS),
+                  [String(LADDER_QUERY), [requestId, '', [ladderRow(pivot, stats)]]],
+                ]),
+              ),
+            ],
           };
         }
         return { note: `PROXY_HANDLER subtype ${String(subtype)} is not implemented`, replies: [] };
@@ -667,17 +717,20 @@ export class RouterService {
   private readonly proxyWaitModule: Endpoint;
   private readonly lobbyServer: Endpoint;
   private readonly rooms = new Rooms();
+  /** Shared by every desk, because a rating belongs to the player, not the socket. */
+  readonly ladder: Ladder;
 
-  constructor(waitModule: Endpoint, proxy: Endpoint, proxyWaitModule: Endpoint, lobbyServer: Endpoint) {
+  constructor(waitModule: Endpoint, proxy: Endpoint, proxyWaitModule: Endpoint, lobbyServer: Endpoint, ladderFile = 'data/ladder.json') {
     this.waitModule = waitModule;
     this.proxy = proxy;
     this.proxyWaitModule = proxyWaitModule;
     this.lobbyServer = lobbyServer;
+    this.ladder = new Ladder(ladderFile);
   }
 
   /** A connection on one of the four desks. */
   session(role: Role = 'router'): RouterSession {
     const waitModule = role === 'proxy' ? this.proxyWaitModule : this.waitModule;
-    return new RouterSession(role, waitModule, this.proxy, this.lobbyServer, this.rooms);
+    return new RouterSession(role, waitModule, this.proxy, this.lobbyServer, this.rooms, this.ladder);
   }
 }

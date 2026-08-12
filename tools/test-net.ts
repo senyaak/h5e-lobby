@@ -18,6 +18,7 @@ import { RouterService } from '../src/net/router-service.ts';
 import { Blowfish } from '../src/net/blowfish.ts';
 import { CdKeyRequest, CdKeyService } from '../src/net/cdkey-service.ts';
 import { LobbyMsg, Lsm, RoomUpdate } from '../src/net/lobby.ts';
+import { LADDER_KEYS, STARTING_RATING } from '../src/net/ladder.ts';
 import { IrcService, frame, unframe } from '../src/net/irc.ts';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -700,6 +701,59 @@ console.log('\nInside the room: his own info, and changing the settings');
   const connected = lobby.receive(lobbyMsg([String(LobbyMsg.GAME_CONNECTED), [roomId]]));
   check('being connected to his own game needs no answer', connected[0]!.replies.length === 0, connected[0]?.note);
   check('but it is named', connected[0]!.note.includes('GAME_CONNECTED'), connected[0]?.note);
+}
+
+console.log('\nThe ladder, from the query the client really sent');
+{
+  const proxy = new RouterService(
+    { address: '127.0.0.1', port: 40001 },
+    { address: '127.0.0.1', port: 40030 },
+    { address: '127.0.0.1', port: 40031 },
+    { address: '127.0.0.1', port: 40040 },
+    join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-ladder.json'),
+  ).session('proxy');
+
+  // The body verbatim, as it arrived twice on the proxy wait module: the request
+  // number, the request id, and a query whose fifth field holds the pivot user.
+  const asked = proxy.receive(
+    build({
+      property: Property.GS,
+      priority: 0,
+      type: MessageType.PROXY_HANDLER,
+      sender: 8,
+      receiver: 11,
+      body: [
+        '1281',
+        '1',
+        ['1', ['1', 'HEROES_29988429c481f219', '1', '0', ['1', ['Senyaak', '1']], [[], [], []]]],
+      ],
+    }),
+  );
+  check('the ladder query is answered at all', asked[0]!.replies.length === 1, asked[0]?.note);
+  check('and it is about the pivot user, not the socket', asked[0]!.note.includes('"Senyaak"'), asked[0]?.note);
+
+  const answer = parse(asked[0]!.replies[0]!);
+  check('the answer is a PROXY_HANDLER', answer?.type === MessageType.PROXY_HANDLER, String(answer?.type));
+  // The client reads the first field as a byte and compares it with 0x26 — 38.
+  check('its first field is the 38 the client compares against', answer?.body?.[0] === '38', String(answer?.body?.[0]));
+  const body = answer?.body?.[1] as GSValue[];
+  check('it names the request number back', body?.[0] === '1281', String(body?.[0]));
+  const payload = body?.[1] as GSValue[];
+  check('and echoes the request id', payload?.[0] === '1', String(payload?.[0]));
+
+  const rows = payload?.[2] as GSValue[];
+  const row = rows?.[0] as GSValue[];
+  check('one row comes back', rows?.length === 1, String(rows?.length));
+  check('for the player asked about', row?.[0] === 'Senyaak', String(row?.[0]));
+  const fields = row?.[1] as GSValue[];
+  check('with all 46 named fields', fields?.length === 46, String(fields?.length));
+  const rating = (fields as GSValue[][]).find((pair) => pair[0] === 'RATING');
+  check('a new player starts rated, not at zero', rating?.[1] === String(STARTING_RATING), JSON.stringify(rating));
+  const played = (fields as GSValue[][]).find((pair) => pair[0] === 'GAMES_PLAYED');
+  check('and with nothing played', played?.[1] === '0', JSON.stringify(played));
+  const perRace = (fields as GSValue[][]).filter((pair) => String(pair[0]).startsWith('W_'));
+  check('the per-faction wins are all eight', perRace.length === 8, String(perRace.length));
+  check('in the exe order, Heaven first and Orcs last', perRace[0]?.[0] === 'W_HEAVEN' && perRace[7]?.[0] === 'W_ORCS');
 }
 
 console.log('\nChat, unwrapped from what the client actually sent');

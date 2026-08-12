@@ -9,17 +9,17 @@
 // Feed it the dump straight from the log (offsets and the text column are
 // ignored), a plain hex string, or a file of either:
 //
-//   node tools/decode.ts 00011c00db82...
-//   node tools/decode.ts --srp <hex>        # the bytes start with an SRP header
-//   node tools/decode.ts --file dump.txt
+//   node tools/net-decode.ts 00011c00db82...
+//   node tools/net-decode.ts --srp <hex>        # the bytes start with an SRP header
+//   node tools/net-decode.ts --file dump.txt
 
 import { readFileSync } from 'node:fs';
-import { decodeBody, type GSValue } from '../src/gs-data.ts';
-import { decrypt } from '../src/gs-xor.ts';
-import { HEADER_SIZE as GS_HEADER, MessageType, Property, parse } from '../src/gs-message.ts';
-import { HEADER_SIZE as SRP_HEADER, flagNames, parseSegment, verify } from '../src/srp.ts';
-import { IRC_KEY } from '../src/irc.ts';
-import { Blowfish } from '../src/blowfish.ts';
+import { decodeBody, type GSValue } from '../src/net/gs-data.ts';
+import { decrypt } from '../src/net/gs-xor.ts';
+import { HEADER_SIZE as GS_HEADER, MessageType, Property, parse } from '../src/net/gs-message.ts';
+import { HEADER_SIZE as SRP_HEADER, flagNames, parseSegment, verify } from '../src/net/srp.ts';
+import { IRC_KEY } from '../src/net/irc.ts';
+import { Blowfish } from '../src/net/blowfish.ts';
 
 const args = process.argv.slice(2);
 const srpMode = args.includes('--srp');

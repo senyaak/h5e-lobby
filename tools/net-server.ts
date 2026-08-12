@@ -1,20 +1,22 @@
-// The whole server in one process: every service the game asks for, on one host.
+// Our own online services for the game, at the stage where they only listen.
 //
-// The game decides where to play by fetching one URL (docs/PROTOCOL.md), and its
+// The game decides where to play by fetching one URL (docs/NETWORK.md), and its
 // libcurl 7.14 honours the `http_proxy` environment variable — so a game started
 // with `http_proxy=http://127.0.0.1:8080` asks US for its server list, with no
 // patch to the exe and no hosts file. We answer with an ini that points every
-// service at this machine, then serve those connections.
+// service at this machine, then accept those connections and write down every
+// byte the client sends.
 //
-// Each desk lives in its own file next to this one; this is only the composition
-// root — which ports exist, what the ini says, and the log. Everything the client
-// sends and everything we answer is written down in full: there is no live
-// Ubisoft service left to compare against, so the log is the only witness.
+// The NAT service answers for real (src/net/nat-service.ts) — it is the step the
+// game refuses to start without. The router, CD-key and IRC ports still only
+// record: there is no live Ubisoft service left to copy, so what the client says
+// first is how each of them gets written. Run it, let the game reach the online
+// menu, read the log.
 //
-//   npm start -- [--host 127.0.0.1] [--http 8080]
+//   node tools/net-server.ts [--host 127.0.0.1] [--http 8080]
 //
-// The log goes to logs/ as well as the console, in full — a truncated dump of a
-// protocol we are still learning is worth nothing.
+// The log goes to _tmp/net/ as well as the console, in full — a truncated dump
+// of an unknown protocol is worth nothing.
 
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createServer as createTcpServer, type Socket } from 'node:net';
@@ -22,10 +24,10 @@ import { createSocket } from 'node:dgram';
 import { mkdirSync, createWriteStream } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { NatService } from './nat-service.ts';
-import { RouterService } from './router-service.ts';
-import { CdKeyService } from './cdkey-service.ts';
-import { IrcConnection, IrcService } from './irc.ts';
+import { NatService } from '../src/net/nat-service.ts';
+import { RouterService } from '../src/net/router-service.ts';
+import { CdKeyService } from '../src/net/cdkey-service.ts';
+import { IrcConnection, IrcService } from '../src/net/irc.ts';
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -74,7 +76,7 @@ function serversIni(): string {
   return `${lines.join('\r\n')}\r\n`;
 }
 
-const logDir = join(repo, 'logs');
+const logDir = join(repo, '_tmp', 'net');
 mkdirSync(logDir, { recursive: true });
 const started = new Date();
 const stamp = started.toISOString().replace(/[:.]/g, '-');
@@ -125,12 +127,12 @@ const router = new RouterService(
   { address: host, port: LOBBY.port },
 );
 
-// Every key the player types is accepted; see cdkey-service.ts for why that is
-// the honest answer rather than a shortcut.
+// Every key the player types is accepted; see src/net/cdkey-service.ts for why
+// that is the honest answer rather than a shortcut.
 const cdkey = new CdKeyService();
 
 // Chat — and the reason a lobby channel can be entered at all: joining a lobby
-// makes the client join an IRC channel. See irc.ts.
+// makes the client join an IRC channel. See src/net/irc.ts.
 const irc = new IrcService();
 
 /** Which socket carries which chat connection, so a line can be relayed on. */
@@ -227,7 +229,7 @@ for (const service of [...SERVICES, PROXY, LOBBY]) {
           log(`UDP  ${label}:${port} -> ${from.address}:${from.port}, ${reply.length} bytes\n${hexDump(reply)}`);
         }
         // Some answers go out a second time a moment later — see `againAfterMs`
-        // in nat-service.ts for the race that makes that necessary.
+        // in src/net/nat-service.ts for the race that makes that necessary.
         const again = (result as { againAfterMs?: number }).againAfterMs;
         if (again) {
           setTimeout(() => {

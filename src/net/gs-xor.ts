@@ -12,7 +12,7 @@
 // along rows, and the cells a short body never fills are skipped by a sentinel.
 //
 // Ported from michal-kapala's Python implementation (MIT), which is where the
-// algorithm was first written down — see docs/PROTOCOL.md.
+// algorithm was first written down — see docs/NETWORK.md.
 
 /** Side of the square that holds `size` bytes. */
 function squareSide(size: number): number {

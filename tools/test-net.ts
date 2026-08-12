@@ -1,24 +1,24 @@
 // Checks our Game Service layers against bytes a real client sent.
 //
 // The recorded packets are the two the game put on our NAT port (captured
-// 12.08.2026, docs/PROTOCOL.md): an SRP SYN with its window, and the FIN it sends
+// 12.08.2026, docs/NETWORK.md): an SRP SYN with its window, and the FIN it sends
 // when it gives up waiting. They are the only ground truth we have, so the
 // checksum test is the one that matters most — it is the piece a wrong answer
 // dies on silently.
 //
-// Usage: `npm test` (or `node tools/test.ts`)
+// Usage: `node tools/test-net.ts`
 
-import { decode, decodeBody, encode, encodeBody, type GSValue } from '../src/gs-data.ts';
-import { decrypt, encrypt } from '../src/gs-xor.ts';
-import { HEADER_SIZE, Flags, buildSegment, checksum, parseSegment, verify } from '../src/srp.ts';
-import { MessageType, Property, build, parse } from '../src/gs-message.ts';
-import { NatService, inetU32 } from '../src/nat-service.ts';
-import { KEY_BLOB_SIZE, decryptWith, encryptTo, generateKeyPair, parsePublicKey, publicKeyBlob } from '../src/pkc.ts';
-import { RouterService } from '../src/router-service.ts';
-import { Blowfish } from '../src/blowfish.ts';
-import { CdKeyRequest, CdKeyService } from '../src/cdkey-service.ts';
-import { LobbyMsg } from '../src/lobby.ts';
-import { IrcService, frame, unframe } from '../src/irc.ts';
+import { decode, decodeBody, encode, encodeBody, type GSValue } from '../src/net/gs-data.ts';
+import { decrypt, encrypt } from '../src/net/gs-xor.ts';
+import { HEADER_SIZE, Flags, buildSegment, checksum, parseSegment, verify } from '../src/net/srp.ts';
+import { MessageType, Property, build, parse } from '../src/net/gs-message.ts';
+import { NatService, inetU32 } from '../src/net/nat-service.ts';
+import { KEY_BLOB_SIZE, decryptWith, encryptTo, generateKeyPair, parsePublicKey, publicKeyBlob } from '../src/net/pkc.ts';
+import { RouterService } from '../src/net/router-service.ts';
+import { Blowfish } from '../src/net/blowfish.ts';
+import { CdKeyRequest, CdKeyService } from '../src/net/cdkey-service.ts';
+import { LobbyMsg } from '../src/net/lobby.ts';
+import { IrcService, frame, unframe } from '../src/net/irc.ts';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -491,7 +491,7 @@ console.log('\nHosting a game, from the CREATE_ROOM the player really sent');
   lobby.username = 'Senyaak';
 
   const captured = Buffer.from(
-    readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'create-room.hex'), 'utf8')
+    readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'net', 'create-room.hex'), 'utf8')
       .split(/\r?\n/)
       .filter((line) => !line.startsWith('#'))
       .join('')
@@ -519,8 +519,24 @@ console.log('\nHosting a game, from the CREATE_ROOM the player really sent');
     String((entry?.[10] as Uint8Array)?.length),
   );
 
+  // Backing out of the channel is what the host really does when he abandons a
+  // game: `GROUP_LEAVE` with the CHANNEL's id, never the room's. Left listed, that
+  // room made the client refuse the next game — "a game with this name already
+  // exists" — without sending anything, so this is checked from the other side too:
+  // the channel must come back empty.
+  const lobbyMsg = (body: GSValue[]): Buffer =>
+    build({ property: Property.GS, priority: 0, type: MessageType.LOBBY_MSG, sender: 4, receiver: 2, body });
+  const parentId = String((entry?.[4] as string) ?? '1');
+  const left = lobby.receive(lobbyMsg([String(LobbyMsg.GROUP_LEAVE), [parentId]]));
+  check('leaving the channel takes the host’s own game with it', left[0]?.note.includes('gone') === true, left[0]?.note);
+  const relisted = lobby.receive(lobbyMsg([String(LobbyMsg.JOIN_LOBBY), [parentId]]));
+  const listed = (parse(relisted[0]!.replies[1]!)?.body?.[1] as GSValue[])?.[3];
+  check('so the channel lists no games again', Array.isArray(listed) && (listed as GSValue[]).length === 0, relisted[0]?.note);
+
   // And when the host goes, the game goes with him — otherwise the next player is
   // told the name is taken by somebody who left. Which is what happened.
+  const again = lobby.receive(captured);
+  check('he can host the same name once more', again[0]?.note.includes('CREATE_ROOM') === true, again[0]?.note);
   const dropped = lobby.close();
   check('closing the host connection drops his game', dropped?.includes('Senyaak') === true, String(dropped));
   check('and closing again drops nothing', lobby.close() === null);

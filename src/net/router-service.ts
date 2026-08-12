@@ -13,7 +13,7 @@
 //
 // Accounts are ours to define: the client shows a name and a password, and what
 // they mean is a decision on this side. For now every name is accepted, which is
-// the smallest thing that lets the session continue — `docs/STATE.md` says
+// the smallest thing that lets the session continue — `docs/NETWORK.md` says
 // what registration will look like when there is somewhere to keep it.
 //
 // Messages arrive over a TCP stream and can be bundled, so a session buffers and
@@ -203,7 +203,7 @@ export class RouterSession {
       case MessageType.JOINWAITMODULE: {
         // A decimal u32 in HOST order. Both other forms were tried and watched:
         // dotted sent the client to 0.0.0.127, and inet_addr's number sent it to
-        // 1.0.0.127. See address.ts.
+        // 1.0.0.127. See src/net/address.ts.
         const where = hostU32String(this.waitModule.address);
         // The proxy's own hand-off carries the user and spells the port out;
         // the router's carries four raw bytes. Both come from the client.
@@ -402,6 +402,21 @@ export class RouterSession {
               note = `GROUP_LEAVE ${groupId} — the host left, "${room.name}" is gone`;
             } else {
               note = `GROUP_LEAVE ${groupId} — ${this.username} left "${room.name}"`;
+            }
+          } else {
+            // The id is a LOBBY, and this is the message a host actually sends when
+            // he abandons a game he has just made. Measured 12.08.2026: create room
+            // 100, join it, then `GROUP_LEAVE 1` — the channel — and never a leave
+            // for the room. The room stayed behind, the channel listed it, and the
+            // client then refused to create another with "a game with this name
+            // already exists" without sending us anything at all. A host outside
+            // the channel is a host outside his own game.
+            const gone = this.rooms.hostedBy(this.username).filter((r) => r.parentId === groupId);
+            for (const r of gone) this.rooms.remove(r.id);
+            if (gone.length) {
+              note = `GROUP_LEAVE ${groupId} — the host left the channel, ${gone
+                .map((r) => `"${r.name}"`)
+                .join(', ')} gone`;
             }
           }
           return {

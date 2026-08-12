@@ -1,14 +1,14 @@
 # Our own Ubi.com: where this stands, and what is known
 
-A companion to [PROTOCOL.md](PROTOCOL.md), which is the wire itself. This one is
-the state of play: what runs, what the client accepted, what it refused, and where
-the next wall is. Written 12.08.2026 so that none of it has to be recovered from
-memory.
+A companion to [NETWORK.md](NETWORK.md), which explains how the game finds its
+servers. This one is the state of play: what runs, what the client accepted, what
+it refused, and where the next wall is. Written 12.08.2026 so that none of it has
+to be recovered from memory.
 
 ## How to run it
 
 ```bash
-npm start                         # all our services, one process, logs to logs/
+node tools/net-server.ts          # all our services, one process, logs to _tmp/net/
 ```
 
 Then start the game from the copy: `C:\Projects\homm5-game-net\run-net.bat`. That
@@ -20,22 +20,21 @@ Two logs matter, and they answer different questions:
 
 | log | says |
 |---|---|
-| `logs/session-*.log` (here) | every byte in and out of our services, decoded |
+| `_tmp/net/session-*.log` | every byte in and out of our services, decoded |
 | `<game copy>/bin/homm5-editor-*.log` | **the game's own narration**, mirrored by our DLL |
 
-The second one is the important one, and it does not live in this repo: it comes
-from `native/net/ubi-log.c` in the editor (`homm5-editor`, branch
-`net/multiplayer`) — one detour on the engine's log append, lines stamped with a
-tick count. Build it there with `node tools/build-native.ts --log net/ubi-log` and
-install with `node tools/install-native.ts --game C:\Projects\homm5-game-net`.
-Without it we are blind: five walls in a row were found by reading it, and the two
-before it cost a launch each to guess at.
+The second one is the important one and it exists because of
+[native/net/ubi-log.c](../native/net/ubi-log.c): one detour on the engine's log
+append (0xDFB270), lines stamped with a tick count. Build it with
+`node tools/build-native.ts --log net/ubi-log` and install with
+`node tools/install-native.ts --game C:\Projects\homm5-game-net`. Without it we are
+blind — five walls in a row were found by reading it, and the two before it cost a
+launch each to guess at.
 
-`node tools/decode.ts --file <dump>` turns a hex dump from either log back into a
-message; `--srp` for a datagram, `--irc` for chat. The disassembly side —
-`tools/net-probe.ts`, for strings, references, imports, callers, `--func`,
-`--dword`, `--bytes` — is in the editor repo too, because it needs the PE reader
-that lives there.
+`node tools/net-decode.ts --file <dump>` turns a hex dump from either log back
+into a message; `--srp` for a datagram, `--irc` for chat.
+`node tools/net-probe.ts <exe> …` is the disassembly side: strings, references,
+imports, callers, `--func`, `--dword`, `--bytes`.
 
 ## The ports, and who answers
 
@@ -52,7 +51,7 @@ that lives there.
 ```
 
 The four GS desks (router, its wait module, proxy, proxy's wait module) speak one
-protocol with three differences, all in `src/router-service.ts`; the lobby is
+protocol with three differences, all in `src/net/router-service.ts`; the lobby is
 a fourth role on the same code.
 
 ## How far the client gets
@@ -87,7 +86,7 @@ he cannot do yet is start it, and a second player has never been tried.
 - **The client's log prints a network-order address octet-reversed.** Its
   "address=1.0.0.127:40010" is how it renders 127.0.0.1. Reading that as an error
   and turning the bytes round broke a step that already worked, twice. See the
-  table in `src/nat-service.ts`.
+  table in `src/net/nat-service.ts`.
 - **The NAT answer that works is subtypes 1, 2 and 3 together**, `inet_addr`
   order, the mirror's own port, request id echoed. Two subtypes failed; one
   subtype failed; one subtype twice failed. Why three is not understood.
@@ -110,14 +109,11 @@ he cannot do yet is start it, and a second player has never been tried.
 
 ## Where the next wall is
 
-**The real one is the second player.** Everything a lone host can do, he does; and
-`START_GAME` — the last lobby message before the game itself — has never been asked
-for, because starting needs somebody to start against. So the next step is two
-clients at once, and there is nothing to design in advance: what the second one
-sends is the specification.
+**The second player.** Everything a lone host can do, he does; nothing has asked
+for START_GAME because starting needs somebody to start against. What the second
+client sends is the specification, so there is nothing to design in advance.
 
-And **starting is not one message but a chain.** The client's own state machine is
-in its RTTI, and it reads in order:
+**Starting is a chain of five, not one message.** From the client's own RTTI:
 
 ```
 CStateWaitingForPlayers      -- SFLB_AttemptGameStart, once the room is full enough
@@ -130,28 +126,22 @@ CStateWaitingForPlayers      -- SFLB_AttemptGameStart, once the room is full eno
                              CStateWaitFinalMatchResults <- LobbyRcv_FinalMatchResults
 ```
 
-Each `CStateWait*` is a step that will sit there for its 30 seconds if we do not
-answer, so this is five answers, not one — and `LobbyRcv_GameStarted` is a *push*
-to the other players rather than a reply to the sender. The sender for the first
-step is `NUbi::CStateWaitingForPlayers::ProcessGameStart` at 0xE1C9C0, which hands
-off to the GS library at 0x4196F0 with the room and the member; that library
-function is where the subtype numbers live, and it is the next thing to read if the
-wire does not make them obvious.
+Every `CStateWait*` is its own 30-second stall if unanswered, and `GameStarted` is
+a push to the other players rather than a reply to the sender. The first sender is
+`NUbi::CStateWaitingForPlayers::ProcessGameStart` (0xE1C9C0), which hands off to the
+GS library at 0x4196F0 — that is where the subtype numbers live if the wire does not
+show them.
 
-- **`LOBBY_MSG` subtype 15, START_GAME** is the first link of that chain. After the
-  chain the peers connect to each other directly, which is where the addresses we
-  already collect start to matter — the client tells us its own in
-  `LOBBYSERVERLOGIN`, and asks the NAT mirror what it looks like from outside.
-- **`PROXY_HANDLER` subtype 1281 on the proxy wait module** — decoded now, and it
-  is **the ladder query**: 1281 = 0x501, pushed in the exe beside the literal
-  `"ladderquery"`, asking for one game and one player. The whole of it, including
-  the 46 stat keys the client names, is in [LADDER.md](LADDER.md). It goes
-  unanswered with no visible harm, and there is nothing true to say back until a
-  game has been played, so it is not what blocks the next step.
+**`PROXY_HANDLER` subtype 1281 is the ladder query** — decoded, 0x501, the only
+number of its kind in the exe. It goes unanswered with no visible harm beyond a 30
+second wait and an N/A rating, so it blocks nothing; everything known about it is in
+[LADDER.md](LADDER.md).
 
-Then the peer introduction, and after that the ladder, which lives behind the proxy
-on 40030 and is ours to invent — see [LADDER.md](LADDER.md) for what the client
-already names.
+After those: two clients at once (nothing about a second player has been
+exercised), then the peer introduction — the lobby knows each player's address
+because the client tells us in `LOBBYSERVERLOGIN` and asks the NAT mirror what it
+looks like from outside — and then the ladder, which is ours to invent and lives
+behind the proxy on 40030.
 
 Accounts are still "any name, any password". The client has no registration
 screen (`UI/MPRegister` is the progress window), but the wire has

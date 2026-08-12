@@ -8,10 +8,12 @@
     "node": ">=24"
   },
   "scripts": {
-    "start": "node src/main.ts",
-    "test": "node tools/test.ts",
-    "typecheck": "tsc --noEmit",
-    "decode": "node tools/decode.ts"
+    "start": "node tools/net-server.ts",
+    "net-server": "node tools/net-server.ts",
+    "test": "node tools/test-net.ts",
+    "test-net": "node tools/test-net.ts",
+    "net-decode": "node tools/net-decode.ts",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",

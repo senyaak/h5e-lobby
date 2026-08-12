@@ -4,7 +4,7 @@
 // over UDP and asks "what do I look like from out there", and the answer is its
 // own address and port as the service sees them. Nothing else in the stack can
 // start until this one replies (`NUbi::CStateUninitialized::NATInit` fails the
-// whole online session otherwise, docs/PROTOCOL.md), which is why it is the piece
+// whole online session otherwise, docs/NETWORK.md), which is why it is the piece
 // we implement first.
 //
 // Kept free of sockets on purpose: `handle` takes a datagram and gives back the

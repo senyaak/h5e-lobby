@@ -579,8 +579,12 @@ console.log('\nHosting a game, from the CREATE_ROOM the player really sent');
       body: [String(LobbyMsg.JOIN_ROOM), [String(room[0]), '', '448', '0', 'HEROES_a3e9d5c9b79a1a57']],
     }),
   );
-  check('joining the room is answered, with its info after it', entered[0]!.replies.length === 2, entered[0]?.note);
-  const info = parse(entered[0]!.replies[1]!)?.body?.[1] as GSValue[];
+  check('joining the room is answered, with its info as well', entered[0]!.replies.length === 2, entered[0]?.note);
+  // Order is part of the answer: the client dispatches in arrival order, so the room
+  // has to be in its list BEFORE it reads the "yes".
+  check('the room info comes first', parse(entered[0]!.replies[0]!)?.body?.[0] === String(LobbyMsg.GROUP_INFO), String(parse(entered[0]!.replies[0]!)?.body?.[0]));
+  check('and the "you are in" second', parse(entered[0]!.replies[1]!)?.body?.[0] === '38', String(parse(entered[0]!.replies[1]!)?.body?.[0]));
+  const info = parse(entered[0]!.replies[0]!)?.body?.[1] as GSValue[];
   check('the info echoes the mask the client asked with', info?.[1] === '448', String(info?.[1]));
   check('the room in it is the twenty-field shape too', (info?.[2] as GSValue[])?.length === 20, String((info?.[2] as GSValue[])?.length));
   const member = (info?.[4] as GSValue[])?.[0] as GSValue[];
@@ -646,7 +650,9 @@ console.log('\nInside the room: his own info, and changing the settings');
   check('and the answer names the subtype back', parse(told[0]!.replies[0]!)?.body?.[0] === '38');
 
   const entered = lobby.receive(lobbyMsg([String(LobbyMsg.JOIN_ROOM), [roomId, '', '448', '0', '']]));
-  const member = ((parse(entered[0]!.replies[1]!)?.body?.[1] as GSValue[])?.[4] as GSValue[])?.[0] as GSValue[];
+  // replies[0] is the room info; the "you are in" follows it — see the order check
+  // in the hosting block for why.
+  const member = ((parse(entered[0]!.replies[0]!)?.body?.[1] as GSValue[])?.[4] as GSValue[])?.[0] as GSValue[];
   check(
     'from then on his member record carries his own blob, not ours',
     member?.[4] instanceof Uint8Array && Buffer.from(member[4] as Uint8Array).equals(own),

@@ -440,11 +440,16 @@ export class RouterSession {
           };
         }
         // Entering a room. The reply only says "yes"; what actually puts the room in
-        // the client's own list is the GROUP_INFO that follows, and the client will
-        // not take it unless it comes back with **the mask it asked with** — field 2
-        // of the request, 448, all three "tell me about it" bits. Answered with a
-        // narrower mask, the client says "join room succeeded" and then "join room
-        // failed, no such room in internal list", and no game window ever opens.
+        // the client's own list is the GROUP_INFO, and it has to come back with **the
+        // mask the client asked with** — field 2 of the request, 448, all three "tell
+        // me about it" bits.
+        //
+        // **The room info goes FIRST and the "yes" second**, which is not a style
+        // choice. The client dispatches in arrival order: given the reply first it
+        // runs `ProcessJoinRoomReply` while its own list is still empty, says "join
+        // room succeeded" and then "join room failed, no such room in internal list",
+        // and only afterwards does `ProcessRoomInfo` insert the room — measured, in
+        // that order, in the game's own log.
         if (subtype === String(LobbyMsg.JOIN_ROOM)) {
           const fields = Array.isArray(inner) ? inner : [];
           const roomId = Number(typeof fields[0] === 'string' ? fields[0] : '0');
@@ -456,10 +461,10 @@ export class RouterSession {
           return {
             note: `JOIN_ROOM ${roomId} ("${room.name}") — in, ${room.members.length} of ${room.maxPlayers}, mask ${asked}`,
             replies: [
-              build(reply(message, [String(MessageType.GSSUCCESS), [subtype, [String(roomId)]]])),
               build(
                 reply(message, [String(LobbyMsg.GROUP_INFO), [String(roomId), String(asked), roomEntry(room), [], members]]),
               ),
+              build(reply(message, [String(MessageType.GSSUCCESS), [subtype, [String(roomId)]]])),
             ],
           };
         }

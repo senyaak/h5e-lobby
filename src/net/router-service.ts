@@ -68,14 +68,15 @@ export interface RouterEvent {
 const PROXY_ID = '1';
 
 /**
- * The port a player is advertised on inside a member record.
+ * Where a player's address and port come from, when the time comes.
  *
- * 8888 is where this client's own NAT pings come from — visible in the log as
- * `UDP NATServer:40010 <- 127.0.0.1:8888` — so it is where the other side should
- * find it. Not yet proven to be what the peers actually dial; when two clients meet
- * and cannot connect, this constant is the first thing to doubt.
+ * Not from us: the blob inside a member record is the player's own, sent in
+ * SET_PLAYER_INFO, and we pass it along untouched. Composing one ourselves put an
+ * unreadable member in the room (the parser is at 0xDFE850 if its layout is ever
+ * needed). What we do know unaided is the port his NAT pings come from — 8888,
+ * visible in the log as `UDP NATServer:40010 <- 127.0.0.1:8888` — and that is the
+ * fallback to reach for when two peers first fail to find each other.
  */
-const PLAYER_PORT = 8888;
 
 /** A one-byte body value, which is how GS names the message being answered. */
 function messageId(type: number): GSValue {
@@ -225,7 +226,6 @@ export class RouterSession {
         name,
         room.id,
         room.address,
-        PLAYER_PORT,
         PlayerStatus.GAMECONNECTED,
         name === this.username ? (this.playerInfo ?? undefined) : undefined,
       ),
@@ -541,10 +541,15 @@ export class RouterSession {
             note: `GROUP_CONFIG_UPDATE_RES ${roomId} — ${changed.length ? changed.join(', ') : `nothing we read (flags ${flags})`}`,
             replies: [
               build(reply(message, [String(MessageType.GSSUCCESS), [subtype, [String(roomId)]]])),
+              // The room back out, **without its members**. The settings changed, the
+              // membership did not — and a member list here is read as somebody
+              // arriving, which the client answers with another settings update, which
+              // we answer with another member list. That loop spammed "somebody joined"
+              // several times a second until the room was closed.
               build(
                 reply(message, [
                   String(LobbyMsg.GROUP_INFO),
-                  [String(roomId), String(Lsm.ALLINFO), roomEntry(room), [], this.membersOf(room)],
+                  [String(roomId), String(Lsm.GROUPINFO | Lsm.CHILDGROUPINFO), roomEntry(room), [], []],
                 ]),
               ),
             ],

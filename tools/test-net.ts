@@ -590,11 +590,12 @@ console.log('\nHosting a game, from the CREATE_ROOM the player really sent');
   const member = (info?.[4] as GSValue[])?.[0] as GSValue[];
   check('one member is listed, in eight fields', member?.length === 8, JSON.stringify(member?.length));
   check('it is the host', member?.[0] === 'Senyaak', String(member?.[0]));
-  const playerInfo = member?.[4] as Uint8Array;
+  // No blob invented for him: the client only reads that field if it has bytes, and
+  // then it reads nothing else — so an empty one leaves it reading his name here.
   check(
-    'his player info carries the port he pings us from',
-    playerInfo instanceof Uint8Array && Buffer.from(playerInfo).readUInt16LE('Senyaak'.length + 16) === 8888,
-    String(playerInfo instanceof Uint8Array ? Buffer.from(playerInfo).readUInt16LE('Senyaak'.length + 16) : null),
+    'and he carries no player info we made up',
+    member?.[4] instanceof Uint8Array && (member[4] as Uint8Array).length === 0,
+    String((member?.[4] as Uint8Array)?.length),
   );
 
   // Backing out of the channel is what the host really does when he abandons a
@@ -644,6 +645,14 @@ console.log('\nInside the room: his own info, and changing the settings');
 
   // He waits for a reply to this one, so silence is thirty seconds; and the blob is
   // his own account of where he can be reached, which beats the one we synthesise.
+  // Before he has told us anything, his member record carries NO blob: the client
+  // then reads his name out of the record itself. A blob of our own invention is
+  // read as a nameless stranger — see memberEntry.
+  const anonymous = lobby.receive(lobbyMsg([String(LobbyMsg.JOIN_ROOM), [roomId, '', '448', '0', '']]));
+  const first = ((parse(anonymous[0]!.replies[0]!)?.body?.[1] as GSValue[])?.[4] as GSValue[])?.[0] as GSValue[];
+  check('with nothing told about him, his record carries an empty blob', (first?.[4] as Uint8Array)?.length === 0, String((first?.[4] as Uint8Array)?.length));
+  check('and his name is in the record where the client falls back to it', first?.[0] === 'Senyaak', String(first?.[0]));
+
   const own = Buffer.from([1, 2, 3, 4, 5, 6, 7, 8]);
   const told = lobby.receive(lobbyMsg([String(LobbyMsg.SET_PLAYER_INFO), [roomId, own]]));
   check('his player info is answered', told[0]!.replies.length === 1, told[0]?.note);
@@ -672,7 +681,19 @@ console.log('\nInside the room: his own info, and changing the settings');
     room?.[10] instanceof Uint8Array && Buffer.from(room[10] as Uint8Array).equals(settings),
     String((room?.[10] as Uint8Array)?.length),
   );
-  check('the notification carries the all-info mask', (parse(updated[0]!.replies[1]!)?.body?.[1] as GSValue[])?.[1] === String(Lsm.ALLINFO));
+  // And it must NOT list members: the client reads a member list as an arrival, and
+  // answers an arrival with another settings update — that is the loop that spammed
+  // "somebody joined" until the room was closed.
+  check(
+    'the settings notification lists no members',
+    ((parse(updated[0]!.replies[1]!)?.body?.[1] as GSValue[])?.[4] as GSValue[])?.length === 0,
+    JSON.stringify((parse(updated[0]!.replies[1]!)?.body?.[1] as GSValue[])?.[4]),
+  );
+  check(
+    'and its mask does not ask for them either',
+    (Number((parse(updated[0]!.replies[1]!)?.body?.[1] as GSValue[])?.[1]) & Lsm.GROUPMEMBERS) === 0,
+    String((parse(updated[0]!.replies[1]!)?.body?.[1] as GSValue[])?.[1]),
+  );
 
   // Told, not asked: no reply, but it must be named in the log rather than land in
   // "not implemented", which is how a real gap stays visible.

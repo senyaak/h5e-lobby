@@ -249,29 +249,17 @@ export function memberEntry(
   name: string,
   groupId: number,
   address: string,
-  port: number,
   status: number = PlayerStatus.SILENT,
   own?: Uint8Array,
 ): GSValue[] {
-  // `own` is the blob the player sent us about himself; it beats ours, which is a
-  // reconstruction of the same thing.
-  const info = own && own.length ? own : playerInfo(name, address, port);
+  // `own` is the blob the player sent us about himself, and it is the ONLY blob
+  // worth sending. The client branches on its length (0xDFCDEB): with bytes there it
+  // parses them, and with none it falls back to the name field of this very record.
+  // A blob we compose ourselves loses that fallback — it parsed ours into nothing and
+  // announced "member joined game (Name=,ExtIP=0.0.0.0:0)" over and over. So: his
+  // own words, or silence.
+  const info = own && own.length ? own : new Uint8Array(0);
   return [name, '0', address, address, info, [String(groupId)], '-1', String(status)];
-}
-
-function playerInfo(name: string, address: string, port: number): Uint8Array {
-  const octets = address.split('.').map(Number);
-  if (octets.length !== 4 || octets.some((o) => !Number.isInteger(o) || o < 0 || o > 255)) {
-    throw new Error(`playerInfo: ${address} is not an IPv4 address`);
-  }
-  const named = Buffer.from(name, 'utf8');
-  const out = Buffer.alloc(named.length + 4 * 4 + 2 + 4 * 4 + 4);
-  let at = named.copy(out, 0);
-  for (const octet of octets) at = out.writeUInt32LE(octet, at);
-  at = out.writeUInt16LE(port, at);
-  for (const octet of octets) at = out.writeUInt32LE(octet, at);
-  out.writeUInt32LE(0, at);
-  return out;
 }
 
 /**

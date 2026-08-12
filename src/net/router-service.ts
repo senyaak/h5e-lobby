@@ -386,7 +386,16 @@ export class RouterSession {
           return {
             note: `LADDER query ${requestId} about "${pivot}" — rating ${stats['RATING']}, ${stats['GAMES_PLAYED']} game(s)`,
             replies: [
-              build(reply(message, [String(MessageType.GSSUCCESS), requestId, ['1', ladderRow(pivot, stats)]])),
+              build({
+                ...reply(message, [String(MessageType.GSSUCCESS), requestId, ['1', ladderRow(pivot, stats)]]),
+                // From the SERVER (2), not from the proxy (11) the request was addressed
+                // to. The precedent is the NAT mirror, the one request-id-matched
+                // exchange that works: its ask arrives 8->2 and our 2->8 answer is
+                // taken. 11 is the proxy — the transport — and an answer comes from the
+                // service behind it, so mirroring the request's own receiver back is
+                // very likely what has been throwing these replies away.
+                sender: 2,
+              }),
             ],
           };
         }

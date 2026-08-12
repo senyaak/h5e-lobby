@@ -766,6 +766,9 @@ console.log('\nThe ladder, from the query the client really sent');
 
   const answer = parse(asked[0]!.replies[0]!);
   check('the answer is a PROXY_HANDLER', answer?.type === MessageType.PROXY_HANDLER, String(answer?.type));
+  // From the server, back to whoever asked — the addressing the NAT mirror's accepted
+  // answers use, rather than a mirror of the proxy the request was addressed to.
+  check('it comes from the server and goes to the asker', answer?.sender === 2 && answer?.receiver === 8, `${answer?.sender}->${answer?.receiver}`);
   // The client reads the first field as a byte and compares it with 0x26 — 38.
   check('its first field is the 38 the client compares against', answer?.body?.[0] === '38', String(answer?.body?.[0]));
   // Flat, three fields: the result, the request id the client can match against its

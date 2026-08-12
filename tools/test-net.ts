@@ -81,6 +81,34 @@ console.log('\nSRP against recorded client packets');
   tampered[13]! ^= 0x01;
   check('a flipped byte no longer verifies', !verify(tampered));
 
+  // The odd-length rule, read out of the routine at 0x4796E0: the lone first byte
+  // is SIGN-EXTENDED (`movsx`), and during verification that byte is the seed's own
+  // low byte. So a seed with its low bit-7 set must land 0x100 away from the naive
+  // unsigned reading — which is what silently killed every second session, because
+  // the client picks its seed at random and half of them have that byte >= 0x80.
+  const odd = Buffer.concat([Buffer.alloc(HEADER_SIZE), Buffer.alloc(31, 0x5a)]);
+  const naive = (buf: Buffer, seed: number): number => {
+    // Deliberately the WRONG arithmetic, kept here as the thing we must differ from.
+    const data = Buffer.from(buf);
+    data.writeUInt16LE(seed & 0xffff, 0);
+    let total = data[0]!;
+    for (let at = 1; at + 1 < data.length; at += 2) total += data.readUInt16LE(at);
+    const once = (total & 0xffff) + (total >>> 16);
+    return ~((once + (once >>> 16)) & 0xffff) & 0xffff;
+  };
+  check('an odd segment with a low seed byte under 0x80 reads the same either way', checksum(odd, 0xc40b) === naive(odd, 0xc40b));
+  check(
+    'and with 0xb5 it does NOT — the byte counts as negative',
+    checksum(odd, 0x74b5) !== naive(odd, 0x74b5),
+    `signed 0x${checksum(odd, 0x74b5).toString(16)} vs unsigned 0x${naive(odd, 0x74b5).toString(16)}`,
+  );
+  // A complemented sum, so counting the byte as negative moves the result UP by 256.
+  check(
+    'the difference is exactly the 256 the sign costs',
+    ((checksum(odd, 0x74b5) - naive(odd, 0x74b5)) & 0xffff) === 0x100,
+    String((checksum(odd, 0x74b5) - naive(odd, 0x74b5)) & 0xffff),
+  );
+
   const fin = parseSegment(CLIENT_FIN);
   check('FIN carries FIN+URG', (fin.header.flags & Flags.FIN) !== 0 && (fin.header.flags & Flags.URG) !== 0);
   check('checksum of the FIN also matches', checksum(CLIENT_FIN) === 0xcfb6, `0x${checksum(CLIENT_FIN).toString(16)}`);

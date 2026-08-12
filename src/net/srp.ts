@@ -71,9 +71,21 @@ export interface SrpConnection {
  * One's-complement sum over a segment, with the checksum field replaced by
  * `seed` — the value that belongs in that field.
  *
- * An odd-length segment counts its FIRST byte on its own and pairs the rest,
- * which is unusual (the internet checksum pads at the END) and worth keeping in
- * mind if a length ever comes out odd.
+ * This is a transcription of the routine at **0x4796E0** in the game's exe, and
+ * the transcription matters instruction by instruction:
+ *
+ *   mov  edx,[ecx+14h]      ; length
+ *   mov  [esi],di           ; the seed goes INTO the checksum field first
+ *   and  esi,80000001h      ; odd length?
+ *   movsx eax,byte ptr[ecx] ; then the FIRST byte, alone and SIGN-EXTENDED
+ *   add  eax,word ptr[ecx]  ; and the rest as 16-bit words
+ *
+ * An odd-length segment counts its first byte on its own, which is unusual (the
+ * internet checksum pads at the END) — and that byte is signed, which is the part
+ * that cost a day. During verification the first byte IS the seed's low byte, and
+ * the client picks a random seed per connection, so with `>= 0x80` there our sum
+ * was 256 too high and every odd-length datagram we sent was silently dropped.
+ * Roughly every second session, at whatever step happened to come next.
  */
 export function checksum(bytes: Buffer, seed = 0): number {
   const data = Buffer.from(bytes);
@@ -81,16 +93,19 @@ export function checksum(bytes: Buffer, seed = 0): number {
   let total = 0;
   let at = 0;
   if (data.length % 2 === 1) {
-    total += data[0]!;
+    total = data.readInt8(0);
     at = 1;
   }
   for (let i = 0; i < data.length >> 1; i++) {
-    total += data.readUInt16LE(at);
+    // 32-bit signed accumulation, exactly as `add eax, esi` does it.
+    total = (total + data.readUInt16LE(at)) | 0;
     at += 2;
   }
-  let folded = (total & 0xffff) + (total >>> 16);
-  folded = (folded + (folded >>> 16)) & 0xffff;
-  return ~folded & 0xffff;
+  // …and the folding reads that accumulator as unsigned, exactly as `shr` does.
+  const sum = total >>> 0;
+  const once = ((sum >>> 16) + (sum & 0xffff)) >>> 0;
+  const twice = ((once >>> 16) + once) >>> 0;
+  return ~twice & 0xffff;
 }
 
 /** Does a received segment's own checksum agree with its bytes? */

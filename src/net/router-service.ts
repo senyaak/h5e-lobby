@@ -358,13 +358,23 @@ export class RouterSession {
           const pivotEntry = Array.isArray(pivotList) ? pivotList[1] : undefined;
           const pivot = Array.isArray(pivotEntry) && typeof pivotEntry[0] === 'string' ? pivotEntry[0] : this.username;
           const stats = this.ladder.row(pivot);
+          // The shape of the answer, one variant per run, because the client says
+          // nothing at all when it does not recognise one — no reply line, no reason:
+          //
+          //   ["38", ["1281", [requestId, "", [row]]]]        -> silence
+          //   ["38", ["1281", requestId, ["1", row]]]         -> this one
+          //
+          // The second follows the rule the ONE working exchange of this type obeys:
+          // the reply echoes the whole request inside a single list and appends the
+          // answer. And a count in front of the items is how the client's own bodies
+          // are built — the query itself arrived as ["1", <the one query>].
           return {
             note: `LADDER query ${requestId} about "${pivot}" — rating ${stats['RATING']}, ${stats['GAMES_PLAYED']} game(s)`,
             replies: [
               build(
                 reply(message, [
                   String(MessageType.GSSUCCESS),
-                  [String(LADDER_QUERY), [requestId, '', [ladderRow(pivot, stats)]]],
+                  [String(LADDER_QUERY), requestId, ['1', ladderRow(pivot, stats)]],
                 ]),
               ),
             ],

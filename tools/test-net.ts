@@ -736,14 +736,15 @@ console.log('\nThe ladder, from the query the client really sent');
   check('the answer is a PROXY_HANDLER', answer?.type === MessageType.PROXY_HANDLER, String(answer?.type));
   // The client reads the first field as a byte and compares it with 0x26 — 38.
   check('its first field is the 38 the client compares against', answer?.body?.[0] === '38', String(answer?.body?.[0]));
+  // The whole request echoed inside one list, then the answer — the shape the one
+  // working exchange of this message type uses.
   const body = answer?.body?.[1] as GSValue[];
   check('it names the request number back', body?.[0] === '1281', String(body?.[0]));
-  const payload = body?.[1] as GSValue[];
-  check('and echoes the request id', payload?.[0] === '1', String(payload?.[0]));
+  check('and echoes the request id beside it', body?.[1] === '1', String(body?.[1]));
 
-  const rows = payload?.[2] as GSValue[];
-  const row = rows?.[0] as GSValue[];
-  check('one row comes back', rows?.length === 1, String(rows?.length));
+  const rows = body?.[2] as GSValue[];
+  check('the answer counts its rows first', rows?.[0] === '1', String(rows?.[0]));
+  const row = rows?.[1] as GSValue[];
   check('for the player asked about', row?.[0] === 'Senyaak', String(row?.[0]));
   const fields = row?.[1] as GSValue[];
   check('with all 46 named fields', fields?.length === 46, String(fields?.length));

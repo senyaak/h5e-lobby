@@ -1,0 +1,20 @@
+{
+  "name": "h5e-lobby",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Our own online services for Heroes of Might and Magic V (Tribes of the East) — the Ubi.com lobby the game can no longer reach",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node src/main.ts",
+    "test": "node tools/test.ts",
+    "typecheck": "tsc --noEmit",
+    "decode": "node tools/decode.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "typescript": "^7.0.2"
+  }
+}

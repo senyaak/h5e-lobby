@@ -1,0 +1,28 @@
+{
+  // Type checking only — nothing here emits. Node 24 strips types natively, so
+  // src/ and tools/ run their .ts straight off disk; hence `verbatimModuleSyntax`
+  // and `allowImportingTsExtensions`, because imports must carry the real .ts
+  // extension the runtime resolves.
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "NodeNext",
+    "moduleResolution": "nodenext",
+    "lib": ["ES2023"],
+
+    "strict": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
+    "isolatedModules": true,
+
+    "types": ["node"],
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["src/**/*.ts", "tools/**/*.ts"],
+  "exclude": ["node_modules", "logs"]
+}

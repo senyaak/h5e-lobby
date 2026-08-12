@@ -1,0 +1,5 @@
+node_modules/
+# Every session's byte log. Kept out of the repo because it is a recording, not
+# source — but never delete one before it has been read: it is the only witness
+# to what the client actually said.
+logs/

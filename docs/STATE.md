@@ -110,20 +110,48 @@ he cannot do yet is start it, and a second player has never been tried.
 
 ## Where the next wall is
 
-Two messages are unanswered, and both are now the whole of the gap:
+**The real one is the second player.** Everything a lone host can do, he does; and
+`START_GAME` — the last lobby message before the game itself — has never been asked
+for, because starting needs somebody to start against. So the next step is two
+clients at once, and there is nothing to design in advance: what the second one
+sends is the specification.
 
-- **`LOBBY_MSG` subtype 15, START_GAME.** Nothing has asked for it yet because
-  starting needs two players in a room; it is the last lobby message before the
-  game itself, and after it the peers connect directly.
-- **`PROXY_HANDLER` subtype 1281 on the proxy wait module.** Sent right after the
-  proxy chain comes up, ignored so far with no visible harm. 1281 = 0x501, which
-  looks like a composite rather than a subtype — decode it before answering.
+And **starting is not one message but a chain.** The client's own state machine is
+in its RTTI, and it reads in order:
 
-After those: two clients at once (nothing about a second player has been
-exercised), then the peer introduction — the lobby knows each player's address
-because the client tells us in `LOBBYSERVERLOGIN` and asks the NAT mirror what it
-looks like from outside — and then the ladder, which is ours to invent and lives
-behind the proxy on 40030.
+```
+CStateWaitingForPlayers      -- SFLB_AttemptGameStart, once the room is full enough
+  -> LobbySend_GameStart     CStateWaitStartGameReply    <- LobbyRcv_StartGameReply
+                             CStateWaitGameStarted       <- LobbyRcv_GameStarted
+  -> LobbySend_GameReady     CStateWaitGameReadyReply    <- LobbyRcv_GameReadyReply
+  -> LobbySend_StartMatch    CStateWaitStartMatchReply   <- LobbyRcv_StartMatchReply
+      ... the game is played, peer to peer ...
+  -> LobbySend_SubmitMatchResult  CStateWaitSubmitMatchResultReply
+                             CStateWaitFinalMatchResults <- LobbyRcv_FinalMatchResults
+```
+
+Each `CStateWait*` is a step that will sit there for its 30 seconds if we do not
+answer, so this is five answers, not one — and `LobbyRcv_GameStarted` is a *push*
+to the other players rather than a reply to the sender. The sender for the first
+step is `NUbi::CStateWaitingForPlayers::ProcessGameStart` at 0xE1C9C0, which hands
+off to the GS library at 0x4196F0 with the room and the member; that library
+function is where the subtype numbers live, and it is the next thing to read if the
+wire does not make them obvious.
+
+- **`LOBBY_MSG` subtype 15, START_GAME** is the first link of that chain. After the
+  chain the peers connect to each other directly, which is where the addresses we
+  already collect start to matter — the client tells us its own in
+  `LOBBYSERVERLOGIN`, and asks the NAT mirror what it looks like from outside.
+- **`PROXY_HANDLER` subtype 1281 on the proxy wait module** — decoded now, and it
+  is **the ladder query**: 1281 = 0x501, pushed in the exe beside the literal
+  `"ladderquery"`, asking for one game and one player. The whole of it, including
+  the 46 stat keys the client names, is in [LADDER.md](LADDER.md). It goes
+  unanswered with no visible harm, and there is nothing true to say back until a
+  game has been played, so it is not what blocks the next step.
+
+Then the peer introduction, and after that the ladder, which lives behind the proxy
+on 40030 and is ours to invent — see [LADDER.md](LADDER.md) for what the client
+already names.
 
 Accounts are still "any name, any password". The client has no registration
 screen (`UI/MPRegister` is the progress window), but the wire has

@@ -86,6 +86,9 @@ one side is mostly evidence, and evidence has to be labelled.
   learn. Read this before picking up the work.
 - **[docs/PROTOCOL.md](docs/PROTOCOL.md)** — the wire: how the game finds its
   servers, and what each layer looks like.
+- **[docs/LADDER.md](docs/LADDER.md)** — the stats end, which has no prior art:
+  the four proxy handlers, the one ladder request, and the 46 keys the client
+  names.
 - The **game side** — disassembly of `H5_Game_H5E.exe`, the log-mirror DLL that
   makes the client narrate what it is doing, and everything else that changes
   files in the game — lives in the editor repo (`homm5-editor`, branch

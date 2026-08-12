@@ -48,7 +48,10 @@ length-bound.
   *wait module* on another port, which is where lobby messages are tunnelled.
 - **CDKeyServer** — activation, authorisation, validation. The client holds no key
   list and does no arithmetic: it asks and displays the answer.
-- **Proxy** — `persistantdata` and `ladderquery`. It has its own wait module.
+- **Proxy** — a switchboard in front of four named handlers: `clanservice`,
+  `remotealgorithm`, `persistantdata`, `ladderquery` (the literals are at
+  0xFF87CC…0xFF87F8). It has its own wait module, and the requests that arrive
+  there are the subject of [LADDER.md](LADDER.md).
 - **Lobby** — channels (GS calls them groups), rooms, players.
 - **IRC** — chat, and a precondition for entering a channel: the client joins
   `#LobbyGrp<lobby>.<server>` and only then considers itself in.

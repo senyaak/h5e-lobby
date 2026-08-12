@@ -18,6 +18,7 @@
 //   lobbyEntry(lobby)     one lobby as the client reads it
 
 import { type GSValue } from './gs-data.ts';
+import { writeFields } from './structure.ts';
 
 /**
  * LOBBY_MSG subtypes — the whole table, not only what we answer today.
@@ -105,8 +106,18 @@ export const RoomUpdate = {
   ALT_GROUP_INFO: 0x400,
 } as const;
 
-/** How a member is doing, in the status field of a member record. */
+/**
+ * How a member is doing, in the status field of a member record.
+ *
+ * **NONE is not a spare value, it is the only one the channel's player panel
+ * accepts.** `NUI::NLobbyPlayers::CPlayersController::OnMemberJoined` (0x9108f0)
+ * opens with `if (member[+4] != 0) return;` — a member whose status is anything
+ * else is dropped without a word, which is why the panel stayed empty while the
+ * game log happily announced every arrival. The other values describe a player
+ * who is already inside a game, and the panel means to leave those out.
+ */
 export const PlayerStatus = {
+  NONE: 0,
   SILENT: 1,
   GAMECONNECTED: 2,
   GAMEREADY: 4,
@@ -291,18 +302,24 @@ export function roomEntry(room: Room): GSValue[] {
 }
 
 /**
- * One member of a group, in eight fields.
+ * One member of a group, in eight fields — the eight the client reads.
  *
- * `playerInfo` is a blob the client builds and reads itself: the name, then the
- * external address with **one u32 per octet**, the port as a u16, the local address
- * the same way again, and a trailing u32 nobody has identified. All little-endian.
- * A member sent as just a name is not a member — the client wants this record.
+ * The parser is generated code at 0x424b60 and it asks for the fields by index,
+ * each with a typed getter, then hands them to the factory at 0xdf1e70 which
+ * builds `NUbi::SLobbyRcv_MemberJoined`. So the shape below is not a guess:
+ *
+ *   0 name (string)   1 flag (bool)   2, 3 address (string)   4 player_info (blob)
+ *   5 the groups joined (list)        6 a number, −1 when absent   7 the status
+ *
+ * Field 7 is the one that decides whether the player is ever seen: it becomes
+ * `member[+4]`, and the channel's player panel skips any member whose is not 0
+ * (PlayerStatus). Field 6 is the only one the client defaults for itself (0xffff).
  */
 export function memberEntry(
   name: string,
   groupId: number,
   address: string,
-  status: number = PlayerStatus.SILENT,
+  status: number = PlayerStatus.NONE,
   own?: Uint8Array,
 ): GSValue[] {
   // `own` is the blob the player sent us about himself, and it is the ONLY blob
@@ -316,34 +333,30 @@ export function memberEntry(
 }
 
 /**
- * A player-info blob built the way the reference implementation reconstructed it:
- * the name, then the external address with **one u32 per octet**, the port as a u16,
- * the address again, and a trailing u32. All little-endian.
+ * A player-info blob with a name in it, in the format the client actually reads.
  *
- * **A probe, not a fact.** The client parses this field itself (0xDFE850) and read our
- * version as nothing at all, which is why real members carry their own blob or none.
- * It stays here for one purpose: to be given to a synthetic player, so a single run can
- * say whether a blob is what the player list wants and whether this layout is readable.
+ * The reader is at 0xdfea70 and it is a `CStructureSaver` document (structure.ts),
+ * not a flat struct: tag 2 is the name, 3 and 4 are two nested objects sixteen
+ * bytes wide, 5 is a four-byte value. Every one of those reads is guarded by "is
+ * this tag here", so a document holding tag 2 alone is complete and legal — and
+ * the name in it wins over the name in the member record.
+ *
+ * Only synthetic players need this. A real player sends his own blob and that is
+ * the one to pass on; the previous attempt to compose one from measured addresses
+ * was not in this format at all and the client read it as an empty name.
  */
-export function probePlayerInfo(name: string, address: string, port: number): Uint8Array {
-  const octets = address.split('.').map(Number);
-  const named = Buffer.from(name, 'utf8');
-  const out = Buffer.alloc(named.length + 4 * 4 + 2 + 4 * 4 + 4);
-  let at = named.copy(out, 0);
-  for (const octet of octets) at = out.writeUInt32LE(octet, at);
-  at = out.writeUInt16LE(port, at);
-  for (const octet of octets) at = out.writeUInt32LE(octet, at);
-  out.writeUInt32LE(0, at);
-  return out;
+export function namedPlayerInfo(name: string): Uint8Array {
+  return writeFields([{ tag: 2, value: Buffer.from(name, 'utf8') }]);
 }
 
 /**
  * The host's own description of the game, with the room's identity written into it.
  *
  * The client sends this blob with **-1 in both id fields**, because when it composed
- * it there was no room yet; the ids are the server's to fill in. It is a tagged
- * stream — id byte, type byte, value — and the two we owe it are id 2 (the group)
- * and id 3 (the lobby server), both type 8, four bytes little-endian.
+ * it there was no room yet; the ids are the server's to fill in. It is a
+ * `CStructureSaver` document (structure.ts) — tag byte, length, payload — and the
+ * two we owe it are tag 2 (the group) and tag 3 (the lobby server), each four bytes
+ * little-endian, so each is written with the length byte 8 = 4 << 1.
  *
  * Everything else is passed through untouched: the map, the rules, the goal are the
  * host's business, not ours.

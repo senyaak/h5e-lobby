@@ -17,7 +17,8 @@ import { KEY_BLOB_SIZE, decryptWith, encryptTo, generateKeyPair, parsePublicKey,
 import { RouterService } from '../src/net/router-service.ts';
 import { Blowfish } from '../src/net/blowfish.ts';
 import { CdKeyRequest, CdKeyService } from '../src/net/cdkey-service.ts';
-import { LobbyMsg, Lsm, RoomUpdate } from '../src/net/lobby.ts';
+import { LobbyMsg, Lsm, RoomUpdate, namedPlayerInfo } from '../src/net/lobby.ts';
+import { readFields, writeFields } from '../src/net/structure.ts';
 import { LADDER_KEYS, STARTING_RATING } from '../src/net/ladder.ts';
 import { IrcService, frame, unframe } from '../src/net/irc.ts';
 import { readFileSync } from 'node:fs';
@@ -28,6 +29,18 @@ let failures = 0;
 function check(name: string, ok: boolean, detail = ''): void {
   console.log(`  ${ok ? 'ok  ' : 'FAIL'}  ${name}${detail ? ' — ' + detail : ''}`);
   if (!ok) failures++;
+}
+
+/** The CREATE_ROOM the player really sent, off disk. */
+function capturedCreateRoom(): Buffer {
+  return Buffer.from(
+    readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'net', 'create-room.hex'), 'utf8')
+      .split(/\r?\n/)
+      .filter((line) => !line.startsWith('#'))
+      .join('')
+      .replace(/[^0-9a-f]/gi, ''),
+    'hex',
+  );
 }
 
 /** A GS_ENCRYPT message, built the way the client builds one. */
@@ -526,7 +539,56 @@ console.log('\nThe lobby server, from the words the client really said');
     (listed?.[0] as GSValue[])?.[2] === '192.168.178.27',
     String((listed?.[0] as GSValue[])?.[2]),
   );
+  // And with the status the panel insists on. This is the field that kept the list
+  // empty while every other part of the message was right: the client's own
+  // CPlayersController::OnMemberJoined (0x9108f0) drops a member whose status is
+  // anything but 0, silently, after the game log has already said he arrived.
+  check('and with a status the player panel accepts', (listed?.[0] as GSValue[])?.[7] === '0', String((listed?.[0] as GSValue[])?.[7]));
   check('and the channel says how many are in it', ((inside?.[2] as GSValue[]) ?? [])[13] === '1', String(((inside?.[2] as GSValue[]) ?? [])[13]));
+}
+
+console.log("\nThe game's own serialisation, the format inside a blob");
+{
+  // Read off 0x94ef30: tag byte, then the size doubled — in one byte, or in four
+  // with bit 0 set. The client's own room settings are the proof: a 555-byte
+  // document that divides into fields edge to edge, with the two unset ids in it.
+  const settings = (parse(capturedCreateRoom())?.body?.[1] as GSValue[])?.[6] as Uint8Array;
+  const fields = readFields(Buffer.from(settings));
+  check('the settings blob the client sent is a document of whole fields', fields.length === 5, String(fields.length));
+  check('with the game data under tag 1', fields[1]?.tag === 1 && fields[1]?.value.length === 538, String(fields[1]?.value.length));
+  const inner = readFields(fields[1]!.value);
+  check('whose first field is the room id, still unset', inner[0]?.tag === 2 && inner[0]?.value.readInt32LE(0) === -1);
+  check('and whose second is the lobby server id, the same', inner[1]?.tag === 3 && inner[1]?.value.readInt32LE(0) === -1);
+  const path = inner.find((f) => f.tag === 15);
+  check(
+    'and the map is in there as a narrow string one level down',
+    readFields(path!.value)[0]?.value.toString() === '/Maps/Multiplayer/Rules Test/map.xdb#xpointer(/AdvMapDesc)',
+    readFields(path!.value)[0]?.value.toString(),
+  );
+
+  // A length of 128 or more is where the two forms part, so it is the one to check.
+  const long = Buffer.alloc(200, 3);
+  const written = writeFields([
+    { tag: 2, value: Buffer.from('Senyaak') },
+    { tag: 5, value: long },
+  ]);
+  check('a short field is written in two bytes', written[0] === 2 && written[1] === 7 << 1);
+  check('a long one in five, with bit 0 marking it', written[9] === 5 && written.readUInt32LE(10) === ((200 << 1) | 1));
+  const back = readFields(written);
+  check('and both come back as they went in', back[0]!.value.toString() === 'Senyaak' && back[1]!.value.equals(long));
+  check('a document that does not divide into fields is refused', (() => {
+    try {
+      readFields(Buffer.from([2, 0xfe]));
+      return false;
+    } catch {
+      return true;
+    }
+  })());
+
+  // The name a synthetic player is given has to be in that format too — the client
+  // reads the blob's name in preference to the record's, so a blob it cannot read
+  // is worse than no blob at all.
+  check('a made-up player info holds his name under tag 2', readFields(Buffer.from(namedPlayerInfo('GhostList')))[0]?.value.toString() === 'GhostList');
 }
 
 console.log('\nHosting a game, from the CREATE_ROOM the player really sent');
@@ -539,14 +601,7 @@ console.log('\nHosting a game, from the CREATE_ROOM the player really sent');
   ).session('lobby');
   lobby.username = 'Senyaak';
 
-  const captured = Buffer.from(
-    readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'net', 'create-room.hex'), 'utf8')
-      .split(/\r?\n/)
-      .filter((line) => !line.startsWith('#'))
-      .join('')
-      .replace(/[^0-9a-f]/gi, ''),
-    'hex',
-  );
+  const captured = capturedCreateRoom();
   const asked = parse(captured);
   check('the capture is a CREATE_ROOM', asked?.type === MessageType.LOBBY_MSG && asked?.body?.[0] === String(LobbyMsg.CREATE_ROOM));
 
@@ -666,15 +721,9 @@ console.log('\nInside the room: his own info, and changing the settings');
   const lobbyMsg = (body: GSValue[]): Buffer =>
     build({ property: Property.GS, priority: 0, type: MessageType.LOBBY_MSG, sender: 4, receiver: 2, body });
 
-  const captured = Buffer.from(
-    readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'net', 'create-room.hex'), 'utf8')
-      .split(/\r?\n/)
-      .filter((line) => !line.startsWith('#'))
-      .join('')
-      .replace(/[^0-9a-f]/gi, ''),
-    'hex',
+  const roomId = String(
+    ((parse(lobby.receive(capturedCreateRoom())[0]!.replies[0]!)?.body?.[1] as GSValue[])?.[1] as GSValue[])?.[0],
   );
-  const roomId = String(((parse(lobby.receive(captured)[0]!.replies[0]!)?.body?.[1] as GSValue[])?.[1] as GSValue[])?.[0]);
 
   // He waits for a reply to this one, so silence is thirty seconds; and the blob is
   // his own account of where he can be reached, which beats the one we synthesise.

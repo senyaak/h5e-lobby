@@ -9,12 +9,13 @@ to be recovered from memory.
 
 ```bash
 node tools/net-server.ts            # all our services, one process, logs to _tmp/net/
-node tools/net-server.ts --ghosts   # plus three synthetic players in every channel
+node tools/net-server.ts --ghosts   # plus synthetic players in every channel
 ```
 
 `npm start` and `npm test` are the same two things. `--ghosts` is a diagnostic: it seats
 players who do not exist, and what the client draws of them is evidence (see the player
-list section).
+list section). **Turn it off before a two-client test** — otherwise the channel holds
+strangers who cannot answer.
 
 Then start the game from the copy: `C:\Projects\homm5-game-net\run-net.bat`. That
 bat sets `http_proxy=http://127.0.0.1:8080`, which is the whole redirect — the
@@ -80,12 +81,13 @@ join own room      -> "LobbyRcv_RoomInfo", then CStateInRoom / CStateWaitingForP
 settings changes   -> GROUP_CONFIG_UPDATE_RES answered, the room echoed back
 leaving a game     -> destroyed here, announced with GROUP_REMOVE, gone from his list
 joining a dead one -> refused with GSFAIL and a reason, instead of silence
-player list        -> still empty, and it is the last thing in the way
+player list        -> was empty for one reason, found in the exe and fixed (below);
+                      not yet confirmed in a live run
 ```
 
 So a player logs in, enters a channel, hosts a game and **sits in it waiting for
-players**; games appear and disappear correctly. Two things are open: the channel's
-player list (below) and the second client, which nothing has exercised.
+players**; games appear and disappear correctly. The player list has its answer and
+wants one run to confirm it. The second client is the thing nothing has exercised.
 
 ## Facts worth not re-learning
 
@@ -112,13 +114,19 @@ player list (below) and the second client, which nothing has exercised.
 - **Order matters: the room info goes out BEFORE the acceptance.** The client
   dispatches in arrival order, so given the "yes" first it runs
   `ProcessJoinRoomReply` against a list that is still empty.
+- **A member's status field decides whether he is ever seen.** The channel's player panel
+  (0x9108f0) returns immediately unless it is 0 — silently, and after the game log has
+  already announced the arrival. Every other part of the message can be right and the
+  panel still empty. See the player-list section.
 - **Never invent a member's player-info blob.** The client branches on its length
   (0xDFCDEB): with bytes there it parses them, with none it falls back to the name
   field of the member record. A blob of our own parsed into nothing — "member joined
-  game (Name=,ExtIP=0.0.0.0:0)" — so a fabricated blob is worse than none, because the
-  name inside it wins over the name beside it. Send his own (from SET_PLAYER_INFO), or
-  nothing, and read the section on the player list for why "nothing" is not enough
-  either.
+  game (Name=,ExtIP=0.0.0.0:0)" — because the name inside it wins over the name beside
+  it. Its format is known now (`src/net/structure.ts`), so a blob CAN be composed; his
+  own, from SET_PLAYER_INFO, is still the one to forward.
+- **A blob written by the game is a `CStructureSaver` document, not a struct**: tag byte,
+  then the size doubled in one byte or in four with bit 0 set. Read `structure.ts` before
+  reading any blob's bytes by hand.
 - **Answer everything.** Silence is never right on this wire: an unanswered request is
   thirty seconds at best (`CStateWait*`) and a permanent dead end at worst — a JOIN_ROOM
   for a game that had been destroyed parked the client in CStateWaitJoinRoomReply for
@@ -181,19 +189,50 @@ the editor repo.
 | the ladder request, pushed beside `"ladderquery"` | 0x42BC92 |
 | `ProcessGetLadderRow` — asks, then enumerates the reply | 0xE0BBB0 |
 | member's blob: the branch on its length, and the parser | 0xDFCDEB / 0xDFE850 |
+| the blob's fields: 2 name, 3 and 4 nested objects, 5 four bytes | 0xDFEA70 |
+| `CStructureSaver`: the one primitive that defines the bytes / tag scan / RTTI | 0x94EF30 / 0x94F070 / 0x10C4F14 |
 | `ProcessMemberJoined` (its own log lines are the oracle) | 0xDFCBE0 |
+| the member record: the generated parser, and the factory it feeds | 0x424B60 / 0xDF1E70 |
+| **the player panel's `OnMemberJoined`, and its status guard** | 0x9108F0 |
+| `NUI::NLobbyPlayers::CPlayersController` — constructor, and its widget names | 0x90FFC0 |
 | the player object a blob is parsed into: name +8, ExtIP +0x14, LocIPs +0x24 | formatter 0xDFE2E0 |
 | the ladder reply handler (three arguments) and the request map | 0xDF4080 / 0x41DF10 |
 | the servers-config fetch, and why an error code names no step | 0xE07A50 / 0xE075B1 |
 
-## The player list, and the one blob everything waits on
+## The player list: one field, and it was never the blob
 
-The channel's player panel is empty, and that is not cosmetic: "Profile" reads *"look at
+The channel's player panel was empty, and that is not cosmetic: "Profile" reads *"look at
 the results of the selected players"* and "Join" needs a selected game, so an empty list
 greys both buttons out.
 
-A run with `--ghosts` (three synthetic players, each announced a different way) settled
-four things at once, from the client's own log:
+**The panel drops a member whose status field is not 0.** The code is
+`NUI::NLobbyPlayers::CPlayersController::OnMemberJoined` at 0x9108f0, and it opens with
+
+```
+9108fb  cmp dword ptr [esi+4],0     ; esi = the member
+9108ff  jne 91097a                  ; ...and that is the whole of it: return
+```
+
+Everything after that guard allocates an `SPlayerData`, copies the name into it and adds
+the row. `member[+4]` comes from the member record's **last field (index 7)** — the one we
+were filling with `PlayerStatus.SILENT` (1). So every player was refused at the door,
+after the game log had already announced him. Fixed by sending 0 for a player standing in
+a channel; the other statuses describe a player already inside a game, which is exactly
+what this panel means to leave out.
+
+The chain, so the next surprise of this shape is cheaper to find: the wire record is
+parsed by generated code at 0x424b60, which reads the eight fields by index with typed
+getters and hands them to the factory at 0xdf1e70; that builds
+`NUbi::SLobbyRcv_MemberJoined` (0x64 bytes) with field 6 at +0x44 and field 7 at +0x62;
+`ProcessMemberJoined` (0xdfcbe0) copies those two words into the member it passes to the
+listeners, at +0 and +4. The record's fields are therefore known, not guessed:
+
+| index | 0 | 1 | 2, 3 | 4 | 5 | 6 | 7 |
+|---|---|---|---|---|---|---|---|
+| | name | flag | address | player_info | groups | number, −1 if absent | **status** |
+
+The earlier `--ghosts` run (synthetic players, each announced a different way) is still
+worth keeping, because it ruled out three other explanations before this one was found:
 
 ```
 member joined lobby (Name=Senyaak,   ExtIP=0.0.0.0:0)  -> member has no data attached
@@ -202,29 +241,43 @@ member joined lobby (Name=,          ExtIP=0.0.0.0:0)  <- GhostBlob: the name ca
 GhostJoin                                              <- not one line about it
 ```
 
-- **The list is fed by the member list inside GROUP_INFO.** All three seated players were
-  accepted as joining the lobby.
-- **The client does not hide only itself.** It took GhostList too and drew neither, so
-  Сеня's guess is ruled out.
-- **A member without a player-info blob is "no data attached"** — the name reads, the
-  member is still not drawn.
-- **With our reconstructed blob the NAME comes out empty**, which proves the blob is
-  parsed and that our layout is wrong: what is in it overrides the record's own name.
-- **MEMBER_JOIN (50) as we sent it is ignored** — wrong shape, wrong direction, or not
-  the mechanism.
+- **The list is fed by the member list inside GROUP_INFO** — all three were accepted as
+  joining, so the mechanism was right all along.
+- **The client does not hide only itself**: it took GhostList too and drew neither.
+- **A blob is not what the list wants.** "No data attached" and "the name came out empty"
+  were both drawn identically — that is, not at all — so the blob was never the reason.
+- **MEMBER_JOIN (50) as we sent it is ignored**; still unexplained, and it is the message
+  a second client's arrival will need.
 
-So everything hangs on the real layout of the player-info blob, and there are two ways
-to it, either of which unblocks the panel:
+### The blob, now that it is not on the critical path
 
-1. **Read the parser at 0xDFE850** (called from 0xDFCDEB with the blob's container when
-   its length is non-zero). It fills a player object whose name is at +8, external
-   address at +0x14 and local addresses at +0x24 — the formatter at 0xDFE2E0 shows that
-   much already.
-2. **Make the ladder query resolve.** The client composes its OWN blob and sends it in
-   SET_PLAYER_INFO, but only after the ladder resolves — either way, success or failure
-   ("Ladder info acquired, set OWN player info sent" / "Failed to get Ladder row for
-   myself, setting N/A, set OWN player info sent"). Ours resolves neither way, so it
-   never sends one, and with his own bytes in hand the layout stops mattering.
+Its format IS known now, and it is the game's own serialisation rather than anything
+Ubisoft's: `CStructureSaver` (RTTI at 0x10c4f14), the one primitive that defines the bytes
+being 0x94ef30. `src/net/structure.ts` reads and writes it, `tools/dump-struct.ts` prints
+it, and the client's own 555-byte room settings parse edge to edge as proof.
+
+```
+field  = tag:u8  length  payload[size]
+length = size<<1 in ONE byte, or (size<<1)|1 as a LITTLE-endian u32
+```
+
+No magic, no version, no type byte; a tag is one byte and may repeat, because the reader
+scans for the tag it wants (0x94f070) instead of walking a struct. The player_info reader
+(0xdfea70) asks for tag 2 as the name, tag 3 as a nested 16-byte object, tag 4 as a
+nested {u16, 16 bytes}, tag 5 as four raw bytes — each guarded by "is this tag here", so a
+document holding tag 2 alone is legal. That is what `namedPlayerInfo` writes. The room
+settings blob is the same format, which is also why the id stamping works: `02 08 ff…` is
+tag 2, length 8 = 4 << 1, four bytes of −1.
+
+Two string kinds live in these documents: a narrow one wrapped in its own container (the
+map path came out as `[15] { [2] "…/map.xdb#xpointer(/AdvMapDesc)" }`) and raw UTF-16LE
+(the room name, 32 bytes for 16 characters). Which is which per field is not settled.
+
+Still open: **the ladder**. The client composes its own blob and sends it in
+SET_PLAYER_INFO only once the ladder resolves, either way — "Ladder info acquired, set OWN
+player info sent" / "Failed to get Ladder row for myself, setting N/A, set OWN player info
+sent". Ours resolves neither way, so it never sends one. That is now a want, not a
+blocker.
 
 ### The ladder answer: four attempts, all ignored in full
 
@@ -255,9 +308,9 @@ design in advance — but there are three things to prepare and one open questio
 
 To prepare:
 
-- **The player-info blob** — the same one the player list waits on. Done on our side:
-  `Presence` already keeps it per player rather than per connection, so once a real blob
-  exists it reaches everybody's member records.
+- **The player-info blob.** Done on our side: `Presence` keeps it per player rather than
+  per connection, so a real blob reaches everybody's member records; and the format is
+  known, so one can be composed for a player who has not sent his own.
 - **Arrivals must be announced to the people already there.** Our replies only ever go
   back to whoever asked. `MEMBER_JOIN` (50) is the message for it, and `NEW_GROUP` (54)
   for a game appearing in a channel somebody else is looking at — but MEMBER_JOIN as we

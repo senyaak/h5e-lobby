@@ -35,7 +35,7 @@ import {
   Rooms,
   lobbyEntry,
   memberEntry,
-  probePlayerInfo,
+  namedPlayerInfo,
   roomEntry,
   stampRoomIds,
   type Room,
@@ -80,22 +80,14 @@ const PROXY_ID = '1';
 const LADDER_QUERY = 1281;
 
 /**
- * The port a synthetic player is advertised on.
- *
- * 8888 is where the real client's NAT pings come from, so it is the least made-up
- * number available for a made-up player.
- */
-const PLAYER_PORT = 8888;
-
-/**
  * Where a player's address and port come from, when the time comes.
  *
  * Not from us: the blob inside a member record is the player's own, sent in
- * SET_PLAYER_INFO, and we pass it along untouched. Composing one ourselves put an
- * unreadable member in the room (the parser is at 0xDFE850 if its layout is ever
- * needed). What we do know unaided is the port his NAT pings come from — 8888,
- * visible in the log as `UDP NATServer:40010 <- 127.0.0.1:8888` — and that is the
- * fallback to reach for when two peers first fail to find each other.
+ * SET_PLAYER_INFO, and we pass it along untouched. Its format is known now
+ * (`namedPlayerInfo`, and the reader at 0xdfea70), but his own words are still the
+ * ones to forward. What we know unaided is the port his NAT pings come from —
+ * 8888, visible in the log as `UDP NATServer:40010 <- 127.0.0.1:8888` — and that
+ * is the fallback to reach for when two peers first fail to find each other.
  */
 
 /** A one-byte body value, which is how GS names the message being answered. */
@@ -481,20 +473,21 @@ export class RouterSession {
           // selected players" — has nothing to act on and stays grey.
           const here = this.presence.inLobby(lobby.id);
           const members = here.map((name) =>
-            memberEntry(name, lobby.id, this.addressOf(name), PlayerStatus.SILENT, this.presence.info(name)),
+            memberEntry(name, lobby.id, this.addressOf(name), PlayerStatus.NONE, this.presence.info(name)),
           );
-          // A run with `--ghosts` seats three synthetic players in the channel, each
-          // announced a different way. The panel then answers three questions at once:
-          // does the client hide ITSELF (Сеня's guess), does a member need a blob, and
-          // is a member added by the list inside GROUP_INFO or by MEMBER_JOIN.
+          // A run with `--ghosts` seats synthetic players in the channel, one with a
+          // blob and one without. That experiment has already said what it had to say:
+          // the list is fed by GROUP_INFO, the client does not hide itself, and a
+          // member with no blob keeps the name in his record. It stays because a
+          // channel with four names in it tells us more at a glance than one with one.
           const ghosts = this.ghosts
             ? [
                 { name: 'GhostList', info: undefined },
-                { name: 'GhostBlob', info: probePlayerInfo('GhostBlob', '127.0.0.1', PLAYER_PORT) },
+                { name: 'GhostBlob', info: namedPlayerInfo('GhostBlob') },
               ]
             : [];
           for (const ghost of ghosts) {
-            members.push(memberEntry(ghost.name, lobby.id, '127.0.0.1', PlayerStatus.SILENT, ghost.info));
+            members.push(memberEntry(ghost.name, lobby.id, '127.0.0.1', PlayerStatus.NONE, ghost.info));
           }
           const announced = this.ghosts
             ? [
@@ -502,13 +495,7 @@ export class RouterSession {
                   reply(message, [
                     String(LobbyMsg.MEMBER_JOIN),
                     [
-                      memberEntry(
-                        'GhostJoin',
-                        lobby.id,
-                        '127.0.0.1',
-                        PlayerStatus.SILENT,
-                        probePlayerInfo('GhostJoin', '127.0.0.1', PLAYER_PORT),
-                      ),
+                      memberEntry('GhostJoin', lobby.id, '127.0.0.1', PlayerStatus.NONE, namedPlayerInfo('GhostJoin')),
                     ],
                   ]),
                 ),

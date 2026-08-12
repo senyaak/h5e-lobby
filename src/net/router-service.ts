@@ -35,6 +35,7 @@ import {
   Rooms,
   lobbyEntry,
   memberEntry,
+  probePlayerInfo,
   roomEntry,
   stampRoomIds,
   type Room,
@@ -77,6 +78,14 @@ const PROXY_ID = '1';
  * 0x502…0x510 appear nowhere. One request, one answer to write.
  */
 const LADDER_QUERY = 1281;
+
+/**
+ * The port a synthetic player is advertised on.
+ *
+ * 8888 is where the real client's NAT pings come from, so it is the least made-up
+ * number available for a made-up player.
+ */
+const PLAYER_PORT = 8888;
 
 /**
  * Where a player's address and port come from, when the time comes.
@@ -141,6 +150,8 @@ export class RouterSession {
   private readonly ladder: Ladder;
   /** And who is in which channel, which is what a player list is made of. */
   private readonly presence: Presence;
+  /** Seat synthetic players in every channel — a diagnostic, off unless asked for. */
+  readonly ghosts: boolean;
 
   constructor(
     role: Role,
@@ -150,7 +161,9 @@ export class RouterSession {
     rooms: Rooms,
     ladder: Ladder,
     presence: Presence,
+    ghosts = false,
   ) {
+    this.ghosts = ghosts;
     this.role = role;
     this.waitModule = waitModule;
     this.proxy = proxy;
@@ -470,16 +483,50 @@ export class RouterSession {
           const members = here.map((name) =>
             memberEntry(name, lobby.id, this.addressOf(name), PlayerStatus.SILENT, this.presence.info(name)),
           );
+          // A run with `--ghosts` seats three synthetic players in the channel, each
+          // announced a different way. The panel then answers three questions at once:
+          // does the client hide ITSELF (Сеня's guess), does a member need a blob, and
+          // is a member added by the list inside GROUP_INFO or by MEMBER_JOIN.
+          const ghosts = this.ghosts
+            ? [
+                { name: 'GhostList', info: undefined },
+                { name: 'GhostBlob', info: probePlayerInfo('GhostBlob', '127.0.0.1', PLAYER_PORT) },
+              ]
+            : [];
+          for (const ghost of ghosts) {
+            members.push(memberEntry(ghost.name, lobby.id, '127.0.0.1', PlayerStatus.SILENT, ghost.info));
+          }
+          const announced = this.ghosts
+            ? [
+                build(
+                  reply(message, [
+                    String(LobbyMsg.MEMBER_JOIN),
+                    [
+                      memberEntry(
+                        'GhostJoin',
+                        lobby.id,
+                        '127.0.0.1',
+                        PlayerStatus.SILENT,
+                        probePlayerInfo('GhostJoin', '127.0.0.1', PLAYER_PORT),
+                      ),
+                    ],
+                  ]),
+                ),
+              ]
+            : [];
           return {
-            note: `JOIN_LOBBY ${groupId} ("${lobby.name}") — in, ${rooms.length} game(s) and ${here.length} player(s) listed, mask ${asked}`,
+            note:
+              `JOIN_LOBBY ${groupId} ("${lobby.name}") — in, ${rooms.length} game(s) and ${members.length} player(s) listed, mask ${asked}` +
+              (this.ghosts ? ' + GhostJoin pushed as MEMBER_JOIN' : ''),
             replies: [
               build(reply(message, [String(MessageType.GSSUCCESS), [subtype, [groupId]]])),
               build(
                 reply(message, [
                   String(LobbyMsg.GROUP_INFO),
-                  [groupId, String(asked), lobbyEntry(lobby, this.gameId, here.length), rooms, members],
+                  [groupId, String(asked), lobbyEntry(lobby, this.gameId, members.length), rooms, members],
                 ]),
               ),
+              ...announced,
             ],
           };
         }
@@ -793,6 +840,8 @@ export class RouterService {
   readonly ladder: Ladder;
   /** Likewise: who is in which channel is the same fact on every connection. */
   readonly presence = new Presence();
+  /** Passed to every session: seat synthetic players, to see what the client draws. */
+  ghosts = false;
 
   constructor(waitModule: Endpoint, proxy: Endpoint, proxyWaitModule: Endpoint, lobbyServer: Endpoint, ladderFile = 'data/ladder.json') {
     this.waitModule = waitModule;
@@ -805,6 +854,15 @@ export class RouterService {
   /** A connection on one of the four desks. */
   session(role: Role = 'router'): RouterSession {
     const waitModule = role === 'proxy' ? this.proxyWaitModule : this.waitModule;
-    return new RouterSession(role, waitModule, this.proxy, this.lobbyServer, this.rooms, this.ladder, this.presence);
+    return new RouterSession(
+      role,
+      waitModule,
+      this.proxy,
+      this.lobbyServer,
+      this.rooms,
+      this.ladder,
+      this.presence,
+      this.ghosts,
+    );
   }
 }

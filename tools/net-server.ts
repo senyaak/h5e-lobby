@@ -127,6 +127,12 @@ const router = new RouterService(
   { address: host, port: LOBBY.port },
 );
 
+// `--ghosts` seats three synthetic players in every channel, each announced a different
+// way, so one launch can say what the client's player list actually wants. Diagnostic:
+// it puts players there who do not exist.
+router.ghosts = process.argv.includes('--ghosts');
+if (router.ghosts) log('ghosts on — GhostList, GhostBlob and GhostJoin will be in every channel');
+
 // Every key the player types is accepted; see src/net/cdkey-service.ts for why
 // that is the honest answer rather than a shortcut.
 const cdkey = new CdKeyService();

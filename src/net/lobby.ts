@@ -316,6 +316,28 @@ export function memberEntry(
 }
 
 /**
+ * A player-info blob built the way the reference implementation reconstructed it:
+ * the name, then the external address with **one u32 per octet**, the port as a u16,
+ * the address again, and a trailing u32. All little-endian.
+ *
+ * **A probe, not a fact.** The client parses this field itself (0xDFE850) and read our
+ * version as nothing at all, which is why real members carry their own blob or none.
+ * It stays here for one purpose: to be given to a synthetic player, so a single run can
+ * say whether a blob is what the player list wants and whether this layout is readable.
+ */
+export function probePlayerInfo(name: string, address: string, port: number): Uint8Array {
+  const octets = address.split('.').map(Number);
+  const named = Buffer.from(name, 'utf8');
+  const out = Buffer.alloc(named.length + 4 * 4 + 2 + 4 * 4 + 4);
+  let at = named.copy(out, 0);
+  for (const octet of octets) at = out.writeUInt32LE(octet, at);
+  at = out.writeUInt16LE(port, at);
+  for (const octet of octets) at = out.writeUInt32LE(octet, at);
+  out.writeUInt32LE(0, at);
+  return out;
+}
+
+/**
  * The host's own description of the game, with the room's identity written into it.
  *
  * The client sends this blob with **-1 in both id fields**, because when it composed

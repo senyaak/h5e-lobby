@@ -30,6 +30,7 @@ import {
   LobbyMsg,
   Lsm,
   PlayerStatus,
+  Presence,
   RoomUpdate,
   Rooms,
   lobbyEntry,
@@ -138,14 +139,25 @@ export class RouterSession {
   private readonly rooms: Rooms;
   /** Also shared: the ratings, which outlive every connection. */
   private readonly ladder: Ladder;
+  /** And who is in which channel, which is what a player list is made of. */
+  private readonly presence: Presence;
 
-  constructor(role: Role, waitModule: Endpoint, proxy: Endpoint, lobbyServer: Endpoint, rooms: Rooms, ladder: Ladder) {
+  constructor(
+    role: Role,
+    waitModule: Endpoint,
+    proxy: Endpoint,
+    lobbyServer: Endpoint,
+    rooms: Rooms,
+    ladder: Ladder,
+    presence: Presence,
+  ) {
     this.role = role;
     this.waitModule = waitModule;
     this.proxy = proxy;
     this.lobbyServer = lobbyServer;
     this.rooms = rooms;
     this.ladder = ladder;
+    this.presence = presence;
   }
 
   /**
@@ -157,6 +169,7 @@ export class RouterSession {
    * about a host who had closed the game minutes before.
    */
   close(): string | null {
+    this.presence.leave(this.username);
     const gone = this.rooms.hostedBy(this.username);
     if (!gone.length) return null;
     for (const room of gone) this.rooms.remove(room.id);
@@ -235,14 +248,13 @@ export class RouterSession {
    */
   private membersOf(room: Room): GSValue[] {
     return room.members.map((name) =>
-      memberEntry(
-        name,
-        room.id,
-        room.address,
-        PlayerStatus.GAMECONNECTED,
-        name === this.username ? (this.playerInfo ?? undefined) : undefined,
-      ),
+      memberEntry(name, room.id, this.addressOf(name), PlayerStatus.GAMECONNECTED, this.presence.info(name)),
     );
+  }
+
+  /** Where to say a player is: what he told us, or this machine. */
+  private addressOf(name: string): string {
+    return name === this.username && this.localAddress ? this.localAddress : this.presence.address(name);
   }
 
   private lobbyList(message: GSMessage): Buffer {
@@ -391,6 +403,7 @@ export class RouterSession {
         if (typeof name === 'string' && name) this.username = name;
         if (typeof message.body?.[2] === 'string') this.localAddress = message.body[2];
         if (typeof message.body?.[3] === 'string') this.localNetmask = message.body[3];
+        this.presence.livesAt(this.username, this.localAddress);
         return {
           note: `LOBBYSERVERLOGIN "${this.username}" on server ${String(serverId)}, from ${this.localAddress}/${this.localNetmask}`,
           replies: [
@@ -438,15 +451,23 @@ export class RouterSession {
           // reason a room's is: the mask says what the rest of the message contains.
           const asked = Number(typeof fields[3] === 'string' ? fields[3] : '') || Lsm.CHILDGROUPINFO;
           const lobby = DEFAULT_LOBBIES.find((l) => String(l.id) === groupId) ?? DEFAULT_LOBBIES[0]!;
+          this.presence.enter(this.username, lobby.id);
           const rooms = this.rooms.inLobby(lobby.id).map(roomEntry);
+          // The people in the channel, himself among them. Left empty, the client's
+          // player list is empty too, and "Profile" — "look at the results of the
+          // selected players" — has nothing to act on and stays grey.
+          const here = this.presence.inLobby(lobby.id);
+          const members = here.map((name) =>
+            memberEntry(name, lobby.id, this.addressOf(name), PlayerStatus.SILENT, this.presence.info(name)),
+          );
           return {
-            note: `JOIN_LOBBY ${groupId} ("${lobby.name}") — in, ${rooms.length} game(s) listed, mask ${asked}`,
+            note: `JOIN_LOBBY ${groupId} ("${lobby.name}") — in, ${rooms.length} game(s) and ${here.length} player(s) listed, mask ${asked}`,
             replies: [
               build(reply(message, [String(MessageType.GSSUCCESS), [subtype, [groupId]]])),
               build(
                 reply(message, [
                   String(LobbyMsg.GROUP_INFO),
-                  [groupId, String(asked), lobbyEntry(lobby, this.gameId), rooms, []],
+                  [groupId, String(asked), lobbyEntry(lobby, this.gameId, here.length), rooms, members],
                 ]),
               ),
             ],
@@ -536,7 +557,11 @@ export class RouterSession {
         if (subtype === String(LobbyMsg.SET_PLAYER_INFO)) {
           const fields = Array.isArray(inner) ? inner : [];
           const blob = fields.find((field): field is Uint8Array => field instanceof Uint8Array);
-          if (blob) this.playerInfo = blob;
+          if (blob) {
+            this.playerInfo = blob;
+            // Kept per player, not per connection: the other players' records need it.
+            this.presence.remember(this.username, blob);
+          }
           const said = fields.map((field) => (field instanceof Uint8Array ? `<${field.length} bytes>` : JSON.stringify(field)));
           return {
             // The reply's shape is the one every other lobby answer has — result,
@@ -649,6 +674,8 @@ export class RouterSession {
                 .map((r) => `"${r.name}"`)
                 .join(', ')} gone`;
             }
+            // And he is out of that channel's player list.
+            this.presence.leave(this.username);
           }
           return {
             note,
@@ -729,6 +756,8 @@ export class RouterService {
   private readonly rooms = new Rooms();
   /** Shared by every desk, because a rating belongs to the player, not the socket. */
   readonly ladder: Ladder;
+  /** Likewise: who is in which channel is the same fact on every connection. */
+  readonly presence = new Presence();
 
   constructor(waitModule: Endpoint, proxy: Endpoint, proxyWaitModule: Endpoint, lobbyServer: Endpoint, ladderFile = 'data/ladder.json') {
     this.waitModule = waitModule;
@@ -741,6 +770,6 @@ export class RouterService {
   /** A connection on one of the four desks. */
   session(role: Role = 'router'): RouterSession {
     const waitModule = role === 'proxy' ? this.proxyWaitModule : this.waitModule;
-    return new RouterSession(role, waitModule, this.proxy, this.lobbyServer, this.rooms, this.ladder);
+    return new RouterSession(role, waitModule, this.proxy, this.lobbyServer, this.rooms, this.ladder, this.presence);
   }
 }

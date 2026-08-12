@@ -167,6 +167,59 @@ export interface Room {
   members: string[];
 }
 
+/**
+ * Who is in which channel, and what they said about themselves.
+ *
+ * A channel's player list is not decoration: "Profile" reads *"look at the results of
+ * the SELECTED players"*, and "Join" needs a selected game — so with nothing listed
+ * both buttons are dead, which is exactly how they looked. The client asks for the
+ * list by mask (384: members and child groups) and we answered "nobody", the player
+ * himself included.
+ *
+ * A player is in one channel at a time, so entering one leaves the last.
+ */
+export class Presence {
+  private readonly lobbyOf = new Map<string, number>();
+  private readonly blobs = new Map<string, Uint8Array>();
+  private readonly addresses = new Map<string, string>();
+
+  enter(name: string, lobbyId: number): void {
+    if (name) this.lobbyOf.set(name, lobbyId);
+  }
+
+  /** Where a player says he lives, from his lobby-server login. */
+  livesAt(name: string, address: string): void {
+    if (name && address) this.addresses.set(name, address);
+  }
+
+  address(name: string): string {
+    return this.addresses.get(name) ?? '127.0.0.1';
+  }
+
+  leave(name: string): void {
+    this.lobbyOf.delete(name);
+  }
+
+  inLobby(lobbyId: number): string[] {
+    return [...this.lobbyOf.entries()].filter(([, id]) => id === lobbyId).map(([name]) => name);
+  }
+
+  /**
+   * What a player said about himself in SET_PLAYER_INFO.
+   *
+   * Kept per player rather than per connection, because the OTHER players' records
+   * need it too — that is the thing a second client turns from tidiness into a
+   * requirement.
+   */
+  remember(name: string, info: Uint8Array): void {
+    if (name && info.length) this.blobs.set(name, info);
+  }
+
+  info(name: string): Uint8Array | undefined {
+    return this.blobs.get(name);
+  }
+}
+
 /** The rooms that exist, per lobby. Ours to keep; nothing else knows them. */
 export class Rooms {
   private readonly rooms = new Map<number, Room>();
@@ -298,7 +351,7 @@ export function stampRoomIds(info: Uint8Array, roomId: number, lobbyServerId = 1
  * explain that, so this is the cheaper thing to try before reading the filter out
  * of the exe.
  */
-export function lobbyEntry(lobby: Lobby, game = ''): GSValue[] {
+export function lobbyEntry(lobby: Lobby, game = '', members = lobby.members): GSValue[] {
   return [
     String(GroupType.LOBBY),
     lobby.name,
@@ -313,6 +366,7 @@ export function lobbyEntry(lobby: Lobby, game = ''): GSValue[] {
     new Uint8Array(0),
     String(lobby.mode),
     String(lobby.maxMembers),
-    String(lobby.members),
+    // How many are in there now — the number beside the channel on the list screen.
+    String(members),
   ];
 }

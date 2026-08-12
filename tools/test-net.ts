@@ -506,7 +506,20 @@ console.log('\nThe lobby server, from the words the client really said');
   const contents = parse(joined[0]!.replies[1]!);
   const inside = contents?.body?.[1] as GSValue[];
   check('the contents name the channel joined', ((inside?.[2] as GSValue[]) ?? [])[1] === 'Ranked', JSON.stringify((inside?.[2] as GSValue[])?.[1]));
-  check('with no games and no members yet', Array.isArray(inside?.[3]) && (inside[3] as GSValue[]).length === 0);
+  check('with no games in it yet', Array.isArray(inside?.[3]) && (inside[3] as GSValue[]).length === 0);
+
+  // But WITH the player himself. An empty list leaves the client's player panel empty,
+  // and then "Profile" — "look at the results of the selected players" — is grey,
+  // because there is nobody to select.
+  const listed = inside?.[4] as GSValue[];
+  check('and with him in its player list', listed?.length === 1, String(listed?.length));
+  check('under his own name', (listed?.[0] as GSValue[])?.[0] === 'Senyaak', String((listed?.[0] as GSValue[])?.[0]));
+  check(
+    'at the address he reported for himself',
+    (listed?.[0] as GSValue[])?.[2] === '192.168.178.27',
+    String((listed?.[0] as GSValue[])?.[2]),
+  );
+  check('and the channel says how many are in it', ((inside?.[2] as GSValue[]) ?? [])[13] === '1', String(((inside?.[2] as GSValue[]) ?? [])[13]));
 }
 
 console.log('\nHosting a game, from the CREATE_ROOM the player really sent');

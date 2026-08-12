@@ -8,8 +8,13 @@ to be recovered from memory.
 ## How to run it
 
 ```bash
-node tools/net-server.ts          # all our services, one process, logs to _tmp/net/
+node tools/net-server.ts            # all our services, one process, logs to _tmp/net/
+node tools/net-server.ts --ghosts   # plus three synthetic players in every channel
 ```
+
+`npm start` and `npm test` are the same two things. `--ghosts` is a diagnostic: it seats
+players who do not exist, and what the client draws of them is evidence (see the player
+list section).
 
 Then start the game from the copy: `C:\Projects\homm5-game-net\run-net.bat`. That
 bat sets `http_proxy=http://127.0.0.1:8080`, which is the whole redirect — the
@@ -69,15 +74,18 @@ lobby login        -> accepted, three channels pushed
 IRC                -> "IRC welcome", "IRC join channel succeeded"
 join channel       -> "join lobby succeeded(GroupID=1,LobbySrvID=1)"
 NAT address        -> "address request succeeded,address=1.0.0.127:40010"
-ladder             -> query 1281 answered, a row at 1500 for a new player
+ladder             -> answered, and the answer is IGNORED — see below
 create game        -> CREATE_ROOM answered, room 100 in the channel
 join own room      -> "LobbyRcv_RoomInfo", then CStateInRoom / CStateWaitingForPlayers
 settings changes   -> GROUP_CONFIG_UPDATE_RES answered, the room echoed back
+leaving a game     -> destroyed here, announced with GROUP_REMOVE, gone from his list
+joining a dead one -> refused with GSFAIL and a reason, instead of silence
+player list        -> still empty, and it is the last thing in the way
 ```
 
 So a player logs in, enters a channel, hosts a game and **sits in it waiting for
-players**. What has never been tried is a second client — which is also the only way
-the rest of the protocol can be reached.
+players**; games appear and disappear correctly. Two things are open: the channel's
+player list (below) and the second client, which nothing has exercised.
 
 ## Facts worth not re-learning
 
@@ -107,7 +115,18 @@ the rest of the protocol can be reached.
 - **Never invent a member's player-info blob.** The client branches on its length
   (0xDFCDEB): with bytes there it parses them, with none it falls back to the name
   field of the member record. A blob of our own parsed into nothing — "member joined
-  game (Name=,ExtIP=0.0.0.0:0)". Send his own (from SET_PLAYER_INFO) or nothing.
+  game (Name=,ExtIP=0.0.0.0:0)" — so a fabricated blob is worse than none, because the
+  name inside it wins over the name beside it. Send his own (from SET_PLAYER_INFO), or
+  nothing, and read the section on the player list for why "nothing" is not enough
+  either.
+- **Answer everything.** Silence is never right on this wire: an unanswered request is
+  thirty seconds at best (`CStateWait*`) and a permanent dead end at worst — a JOIN_ROOM
+  for a game that had been destroyed parked the client in CStateWaitJoinRoomReply for
+  good. A refusal is `GSFAIL` (39) where success is 38, with the reason after the id.
+- **A mask is read from the field the wire has it in, not the one the log suggests.**
+  JOIN_LOBBY carries [id, password, mask] — the mask is field **2**. Read from field 3 it
+  silently fell back to 256 and the member list we sent was announced as "no members",
+  which the client duly did not draw.
 - **A member list is read as an arrival.** Answering a settings update with the room
   AND its members made the client announce a phantom join, which is a change, which is
   another settings update — five a second, with the game's settings blob growing each
@@ -163,7 +182,69 @@ the editor repo.
 | `ProcessGetLadderRow` — asks, then enumerates the reply | 0xE0BBB0 |
 | member's blob: the branch on its length, and the parser | 0xDFCDEB / 0xDFE850 |
 | `ProcessMemberJoined` (its own log lines are the oracle) | 0xDFCBE0 |
+| the player object a blob is parsed into: name +8, ExtIP +0x14, LocIPs +0x24 | formatter 0xDFE2E0 |
+| the ladder reply handler (three arguments) and the request map | 0xDF4080 / 0x41DF10 |
 | the servers-config fetch, and why an error code names no step | 0xE07A50 / 0xE075B1 |
+
+## The player list, and the one blob everything waits on
+
+The channel's player panel is empty, and that is not cosmetic: "Profile" reads *"look at
+the results of the selected players"* and "Join" needs a selected game, so an empty list
+greys both buttons out.
+
+A run with `--ghosts` (three synthetic players, each announced a different way) settled
+four things at once, from the client's own log:
+
+```
+member joined lobby (Name=Senyaak,   ExtIP=0.0.0.0:0)  -> member has no data attached
+member joined lobby (Name=GhostList, ExtIP=0.0.0.0:0)  -> member has no data attached
+member joined lobby (Name=,          ExtIP=0.0.0.0:0)  <- GhostBlob: the name came out EMPTY
+GhostJoin                                              <- not one line about it
+```
+
+- **The list is fed by the member list inside GROUP_INFO.** All three seated players were
+  accepted as joining the lobby.
+- **The client does not hide only itself.** It took GhostList too and drew neither, so
+  Сеня's guess is ruled out.
+- **A member without a player-info blob is "no data attached"** — the name reads, the
+  member is still not drawn.
+- **With our reconstructed blob the NAME comes out empty**, which proves the blob is
+  parsed and that our layout is wrong: what is in it overrides the record's own name.
+- **MEMBER_JOIN (50) as we sent it is ignored** — wrong shape, wrong direction, or not
+  the mechanism.
+
+So everything hangs on the real layout of the player-info blob, and there are two ways
+to it, either of which unblocks the panel:
+
+1. **Read the parser at 0xDFE850** (called from 0xDFCDEB with the blob's container when
+   its length is non-zero). It fills a player object whose name is at +8, external
+   address at +0x14 and local addresses at +0x24 — the formatter at 0xDFE2E0 shows that
+   much already.
+2. **Make the ladder query resolve.** The client composes its OWN blob and sends it in
+   SET_PLAYER_INFO, but only after the ladder resolves — either way, success or failure
+   ("Ladder info acquired, set OWN player info sent" / "Failed to get Ladder row for
+   myself, setting N/A, set OWN player info sent"). Ours resolves neither way, so it
+   never sends one, and with his own bytes in hand the layout stops mattering.
+
+### The ladder answer: four attempts, all ignored in full
+
+Not refused — **ignored**, with no `LadderQueryRcv_RequestReply` line and no "ladder
+query request failed,reason=" either:
+
+```
+["38", ["1281", [requestId, "", [row]]]]        nested, mirrored 11->8
+["38", ["1281", requestId, ["1", row]]]         echo shape, mirrored 11->8
+["38", requestId, ["1", row]]                   flat, mirrored 11->8
+["38", requestId, ["1", row]]                   flat, sent from 2 instead of 11
+```
+
+What is known: the request number is 0x501 and the only one of its kind; the reply's
+first field is read as a byte and compared with 0x26 (38); the handler at 0xDF4080 takes
+three arguments; the client registers each request in a map keyed by request id
+(0x41DF10) before sending, so an unmatched reply is dropped silently. Four shapes is
+enough guessing — **read the dispatch** rather than try a fifth: find what keys the
+processor for `SLadderQueryRcv_RequestReply` (its RTTI name is in the exe) and what
+message type and party ids it expects.
 
 ## Where the next wall is
 
@@ -174,13 +255,14 @@ design in advance — but there are three things to prepare and one open questio
 
 To prepare:
 
-- **A second player's member record.** Only his own connection knows his player-info
-  blob (`RouterSession.playerInfo`); every other member is currently sent with an empty
-  one, which is a name and no address. Two players in a room means each has to see the
-  other's, so that blob has to live with the player rather than the session.
+- **The player-info blob** — the same one the player list waits on. Done on our side:
+  `Presence` already keeps it per player rather than per connection, so once a real blob
+  exists it reaches everybody's member records.
 - **Arrivals must be announced to the people already there.** Our replies only ever go
-  back to whoever asked. `MEMBER_JOIN` (50) exists for that, and so does `NEW_GROUP`
-  (54) for a game appearing in a channel somebody else is looking at.
+  back to whoever asked. `MEMBER_JOIN` (50) is the message for it, and `NEW_GROUP` (54)
+  for a game appearing in a channel somebody else is looking at — but MEMBER_JOIN as we
+  sent it drew no reaction at all, so its shape is unknown, and a second client is what
+  will show whether the room's own list refreshes without it.
 - **The peers' addresses.** The lobby knows each player's own (`LOBBYSERVERLOGIN`
   reports his LAN address and netmask) and the NAT mirror knows how he looks from
   outside; the port his pings come from is 8888. That is the material for introducing

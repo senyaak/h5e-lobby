@@ -161,6 +161,18 @@ for (const service of [...SERVICES, PROXY, LOBBY]) {
             : label === 'Lobby'
               ? router.session('lobby')
               : null;
+      // Which desk this socket is, so a reply can go out on a connection other than
+      // the one that asked. Only the newest socket per desk is kept: with one player
+              // there is only ever one of each.
+      if (session) {
+        router.desks.set(label, (bytes: Buffer) => {
+          socket.write(bytes);
+          log(`TCP  #${id} ${label}:${port} -> ${bytes.length} bytes, asked for by another desk\n${hexDump(bytes)}`);
+        });
+        socket.on('close', () => {
+          if (router.desks.get(label)) router.desks.delete(label);
+        });
+      }
       const chat = label === 'IRC' ? irc.connection() : null;
       if (chat) {
         chatSockets.set(chat, socket);

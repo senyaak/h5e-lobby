@@ -145,6 +145,8 @@ export class RouterSession {
   private readonly presence: Presence;
   /** And the players' profiles, which are the server's to keep. */
   private readonly profiles: PersistentStore;
+  /** The other open connections, by desk — see `RouterService.desks`. */
+  private readonly desks: Map<string, (bytes: Buffer) => void>;
   /** Seat synthetic players in every channel — a diagnostic, off unless asked for. */
   readonly ghosts: boolean;
 
@@ -157,8 +159,10 @@ export class RouterSession {
     ladder: Ladder,
     presence: Presence,
     profiles: PersistentStore,
+    desks: Map<string, (bytes: Buffer) => void>,
     ghosts = false,
   ) {
+    this.desks = desks;
     this.profiles = profiles;
     this.ghosts = ghosts;
     this.role = role;
@@ -369,10 +373,11 @@ export class RouterSession {
         // Four shapes of a successful reply were ignored in total silence before the
         // client's matcher was read instead of guessed (`moduleReplyBody`): the number
         // has to be nested where it looks for it, and — the part no guess would have
-        // found — the row sits at index 2 of the innermost list, where the getter
-        // accepts ONLY a string (0x4435c0 refuses a list). What is inside that string
-        // is parsed at 0x432c80 and is not known, so a success reply cannot be composed
-        // yet. A refusal can be, completely (`moduleFailureBody`), and the client has a
+        // found — index 2 of the innermost list is read as a NUMBER (0x4435c0 is atoi,
+        // not a string copy), so the row cannot be the nested list we kept sending. What
+        // the rest of that list holds is parsed at 0x432c80 and is not read yet, so a
+        // success reply cannot be composed. A refusal can be, completely, and the client
+        // has a
         // path for it: "Failed to get Ladder row for myself, setting N/A, set OWN
         // player info sent" — which is also how he finally sends his own player info.
         //
@@ -389,11 +394,25 @@ export class RouterSession {
           const pivotEntry = Array.isArray(pivotList) ? pivotList[1] : undefined;
           const pivot = Array.isArray(pivotEntry) && typeof pivotEntry[0] === 'string' ? pivotEntry[0] : this.username;
           const stats = this.ladder.row(pivot);
+          const refusal = build(reply(message, moduleFailureBody(LADDER_QUERY, 'no ladder row for this player yet')));
+          // **An experiment, and the only thing being varied this run.** Every step of
+          // the client's path for a module reply has now been read and it should accept
+          // this — routed by 0x41b150 into the module queue, drained by 0x41bf70,
+          // dispatched by its number's high byte (0x426d50), matched by 0x4286f0 — and
+          // yet an answer on THIS connection is ignored. The one thing never measured is
+          // WHICH connection the module reads: the requests arrive on the proxy's wait
+          // module (40031), but the module's own login happened on the proxy itself
+          // (40030), and both sockets stay open. So this run answers the ladder on the
+          // proxy and the profile where it was asked; whichever appears in the game's
+          // log names the rule, and then both follow it.
+          const onProxy = this.desks.get('Proxy');
+          if (onProxy) onProxy(refusal);
           return {
             note:
-              `LADDER query ${requestId} about "${pivot}" — refused with "no row yet"; ` +
+              `LADDER query ${requestId} about "${pivot}" — refused with "no row yet" ` +
+              `${onProxy ? 'on the Proxy connection (the experiment)' : 'HERE, no Proxy connection open'}; ` +
               `we hold rating ${stats['RATING']}, ${stats['GAMES_PLAYED']} game(s)`,
-            replies: [build(reply(message, moduleFailureBody(LADDER_QUERY, 'no ladder row for this player yet')))],
+            replies: onProxy ? [] : [refusal],
           };
         }
         // The player's profile, kept for him on the persistantdata module. He asks for
@@ -403,29 +422,38 @@ export class RouterSession {
         // fifteen seconds and then offers to create one.
         //
         // We are a store, not a reader: what a profile means is the client's business,
-        // so the bytes it writes are the bytes it gets back. Index 1 of the innermost
-        // list is the record (0x42aec0 reads it and its caller copies it out by
-        // length); index 2 is read too (0x42b400) and nothing is known about it, so it
-        // goes out empty.
+        // so the bytes it writes are the bytes it gets back. The innermost list, read
+        // off 0x42aec0 and 0x42b400 — and the field KINDS matter, because the getters
+        // refuse the wrong one:
+        //
+        //   [0]  the record, as a BLOB whose length must equal [1] exactly (0x442620)
+        //   [1]  that length, as a decimal string read with atoi (0x4435c0)
+        //   [2]  another number, unidentified; 0 until something says otherwise
+        //
+        // With [1] zero the client never even looks at [0] — it allocates nothing and
+        // takes the record as absent, which is the honest answer for a player who has
+        // never saved one.
         if (subtype === String(GET_DATA) || subtype === String(SET_DATA)) {
-          const requestId = typeof message.body?.[1] === 'string' ? message.body[1] : '1';
           const args = Array.isArray(message.body?.[2]) ? message.body[2] : [];
           const key = recordKeyOf(args, this.username);
           const where = `${key.user}'s ${key.section} profile in ${key.game}`;
           const notes: string[] = [];
           if (subtype === String(SET_DATA)) {
             // The record is field 5, right after the section; field 6 is a number we
-            // have no name for.
-            const written = typeof args[5] === 'string' ? args[5] : '';
-            const complaint = this.profiles.set(key, written);
-            if (complaint) notes.push(complaint);
-            notes.push(`saved ${written.length} character(s)`);
+            // have no name for. Which kind field 5 is has not been seen on the wire yet,
+            // so both are accepted and the log says which one arrived.
+            const written = args[5];
+            const bytes = typeof written === 'string' ? Buffer.from(written, 'utf8') : Buffer.from((written as Uint8Array) ?? []);
+            this.profiles.set(key, bytes);
+            notes.push(`saved ${bytes.length} byte(s), sent as a ${typeof written === 'string' ? 'string' : 'blob'}`);
           }
-          const stored = this.profiles.get(key);
-          notes.push(stored === null ? 'nothing stored yet' : `handing back ${stored.length} character(s)`);
+          const stored = this.profiles.get(key) ?? Buffer.alloc(0);
+          notes.push(stored.length ? `handing back ${stored.length} byte(s)` : 'nothing stored yet');
           return {
             note: `${subtype === String(GET_DATA) ? 'PROFILE read' : 'PROFILE write'} — ${where}, ${notes.join(', ')}`,
-            replies: [build(reply(message, moduleReplyBody(subtype, [requestId, stored ?? '', ''])))],
+            replies: [
+              build(reply(message, moduleReplyBody(subtype, [new Uint8Array(stored), String(stored.length), '0']))),
+            ],
           };
         }
         return { note: `PROXY_HANDLER subtype ${String(subtype)} is not implemented`, replies: [] };
@@ -855,6 +883,16 @@ export class RouterService {
   readonly profiles: PersistentStore;
   /** Passed to every session: seat synthetic players, to see what the client draws. */
   ghosts = false;
+  /**
+   * How to reach a connection that is not the one being answered.
+   *
+   * Every reply so far goes back down the socket the request arrived on, which is all
+   * a lone player ever needed. Two things need more: telling the people already in a
+   * channel that somebody has joined, and — right now — answering a module request on
+   * the module's own connection instead of the one it was asked on. The server fills
+   * this in as sockets open; `null` means that desk has nobody on it.
+   */
+  readonly desks = new Map<string, (bytes: Buffer) => void>();
 
   constructor(
     waitModule: Endpoint,
@@ -884,6 +922,7 @@ export class RouterService {
       this.ladder,
       this.presence,
       this.profiles,
+      this.desks,
       this.ghosts,
     );
   }

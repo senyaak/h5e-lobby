@@ -872,15 +872,17 @@ console.log('\nThe profile, from the read the client really asked for');
   const carried = answer?.body?.[1] as GSValue[];
   check('the request number is nested where the matcher looks', carried?.[0] === '1025', String(carried?.[0]));
   const record = carried?.[1] as GSValue[];
-  check('the record echoes the request id', record?.[0] === '2', String(record?.[0]));
-  // Index 1 is the record itself (0x42aec0 reads it, its caller copies it out by
-  // length); index 2 is read as well (0x42b400) and is not understood, so it is empty.
-  check('with nothing stored, the record is empty rather than absent', record?.[1] === '', JSON.stringify(record?.[1]));
-  check('and the field after it is there too, empty', record?.[2] === '', JSON.stringify(record?.[2]));
+  // The kinds are what the client's getters insist on: the record is a BLOB at index 0
+  // and its length a decimal string at index 1, because 0x442620 refuses anything but a
+  // blob and refuses one whose length is not that number. With the length zero the
+  // client never looks at the record at all.
+  check('the record itself is a blob, not a string', record?.[0] instanceof Uint8Array, typeof record?.[0]);
+  check('with nothing stored, its length is nought', record?.[1] === '0', JSON.stringify(record?.[1]));
+  check('and the field after it is there too', record?.[2] === '0', JSON.stringify(record?.[2]));
 
   // A write, then a read: we are a store, so what comes back is what went in — byte
   // for byte, with no opinion about what a profile means.
-  const written = 'HEROES-PROFILE-v1:Senyaak:whatever the game puts here';
+  const written = Buffer.from('HEROES-PROFILE-v1:Senyaak:whatever the game puts here');
   const wrote = session.receive(
     build({
       property: Property.GS,
@@ -888,11 +890,11 @@ console.log('\nThe profile, from the read the client really asked for');
       type: MessageType.PROXY_HANDLER,
       sender: 8,
       receiver: 11,
-      body: ['1026', '3', ['HEROES_29988429c481f219', '0', 'Senyaak', '0', 'PUBLIC', written, '0']],
+      body: ['1026', '3', ['HEROES_29988429c481f219', '0', 'Senyaak', '0', 'PUBLIC', new Uint8Array(written), '0']],
     }),
   );
   check('a profile write is answered', wrote[0]!.replies.length === 1, wrote[0]?.note);
-  check('and it says how much was kept', wrote[0]!.note.includes(`saved ${written.length} character(s)`), wrote[0]?.note);
+  check('and it says how much was kept', wrote[0]!.note.includes(`saved ${written.length} byte(s)`), wrote[0]?.note);
   const again = session.receive(
     build({
       property: Property.GS,
@@ -903,8 +905,13 @@ console.log('\nThe profile, from the read the client really asked for');
       body: ['1025', '4', ['HEROES_29988429c481f219', '0', 'Senyaak', '0', 'PUBLIC']],
     }),
   );
-  const stored = ((parse(again[0]!.replies[0]!)?.body?.[1] as GSValue[])?.[1] as GSValue[])?.[1];
-  check('the record read back is the one written', stored === written, JSON.stringify(stored));
+  const back = (parse(again[0]!.replies[0]!)?.body?.[1] as GSValue[])?.[1] as GSValue[];
+  check(
+    'the record read back is the one written, byte for byte',
+    back?.[0] instanceof Uint8Array && Buffer.from(back[0] as Uint8Array).equals(written),
+    JSON.stringify(back?.[0]),
+  );
+  check('and its length is announced beside it', back?.[1] === String(written.length), String(back?.[1]));
 
   // And it outlives the session, which is the whole point of a profile.
   const later = new RouterService(
@@ -917,7 +924,7 @@ console.log('\nThe profile, from the read the client really asked for');
   );
   check(
     'and a new server still has it, because it is on disk',
-    later.profiles.get({ game: 'HEROES_29988429c481f219', user: 'Senyaak', section: 'PUBLIC' }) === written,
+    later.profiles.get({ game: 'HEROES_29988429c481f219', user: 'Senyaak', section: 'PUBLIC' })?.equals(written) === true,
   );
   // Another player's profile is another record: the key is game, user and section.
   check(

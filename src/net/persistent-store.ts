@@ -10,25 +10,24 @@
 // bytes under their key and hand them over unchanged. It is also why a profile can
 // be supported without understanding a single field of it.
 //
+// A record travels as a BLOB with its length beside it: the reader (0x442620)
+// refuses anything but a blob and refuses one whose length is not the number in the
+// next field. So bytes are what is kept here — base64 in the file, so that a profile
+// with any byte in it survives a round trip through JSON.
+//
 // The two numbers in the key are carried but not used to look anything up: both
 // were 0 in every request seen, and inventing a meaning for them would be a guess.
 //
-// A record is a STRING, not a blob: the client appends it with the string appender
-// (0x442a20 asks for kind 1) and reads it back with a string getter (0x4435c0
-// insists on kind 1, where 2 would be a blob). A GS string is NUL-terminated on the
-// wire, so a profile cannot contain a zero byte — but it can contain bytes that are
-// not valid UTF-8, and `set` says so rather than storing mojibake silently.
-//
 // Exports:
 //   GET_DATA, SET_DATA      the two request numbers
-//   PersistentStore         get(key) / set(key, text), persisted as JSON
+//   PersistentStore         get(key) / set(key, bytes), persisted as JSON
 
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 /** Read a record: `[game, n, user, n, section]`. */
 export const GET_DATA = 1025;
-/** Write one: the same, then the bytes and a number. */
+/** Write one: the same, then the record and a number. */
 export const SET_DATA = 1026;
 
 export interface RecordKey {
@@ -46,13 +45,14 @@ function keyOf({ game, user, section }: RecordKey): string {
 }
 
 export class PersistentStore {
-  private readonly records = new Map<string, string>();
+  private records = new Map<string, Buffer>();
   private readonly file: string;
 
   constructor(file = 'data/profiles.json') {
     this.file = file;
     try {
-      this.records = new Map(Object.entries(JSON.parse(readFileSync(this.file, 'utf8')) as Record<string, string>));
+      const saved = JSON.parse(readFileSync(this.file, 'utf8')) as Record<string, string>;
+      this.records = new Map(Object.entries(saved).map(([key, data]) => [key, Buffer.from(data, 'base64')]));
     } catch {
       // No file yet, or one we cannot read: an empty store is the honest state, and
       // the first write replaces it.
@@ -60,19 +60,13 @@ export class PersistentStore {
   }
 
   /** What is stored under a key, or null when nothing was ever written there. */
-  get(key: RecordKey): string | null {
+  get(key: RecordKey): Buffer | null {
     return this.records.get(keyOf(key)) ?? null;
   }
 
-  /**
-   * Keep a record. The return value is a note for the log: normally null, and a
-   * complaint when the text arrived with bytes that are not valid UTF-8, because
-   * then what we hand back later will not be what was written.
-   */
-  set(key: RecordKey, text: string): string | null {
-    this.records.set(keyOf(key), text);
+  set(key: RecordKey, record: Buffer): void {
+    this.records.set(keyOf(key), Buffer.from(record));
     this.save();
-    return text.includes('�') ? 'the record has bytes that are not UTF-8; it will not round-trip' : null;
   }
 
   get size(): number {
@@ -81,7 +75,9 @@ export class PersistentStore {
 
   save(): void {
     mkdirSync(dirname(this.file), { recursive: true });
-    writeFileSync(this.file, `${JSON.stringify(Object.fromEntries(this.records), null, 2)}\n`);
+    const out: Record<string, string> = {};
+    for (const [key, record] of this.records) out[key] = record.toString('base64');
+    writeFileSync(this.file, `${JSON.stringify(out, null, 2)}\n`);
   }
 }
 

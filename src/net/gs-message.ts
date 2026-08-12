@@ -122,10 +122,11 @@ export function build(message: Omit<GSMessage, 'size'>): Buffer {
  * before this was read instead of guessed, and none of them nested the number where
  * the matcher looks for it.
  *
- * Inside, the fields are read BY KIND: `[1]` and `[2]` of the innermost list are
- * fetched with a string getter that refuses a list (0x4435c0 wants kind 1). That is
- * the other half of what went wrong — the ladder's row was sent as a nested list at
- * a place where only a string is ever read.
+ * Inside, the fields are read BY KIND, and a getter refuses the wrong one outright:
+ * 0x442f10 takes a list, 0x442510 and 0x442620 take a blob, and 0x4435c0 / 0x443680
+ * take a string and run it through `atoi` — they are NUMBER getters, an int and a
+ * short. That is the other half of what went wrong with the ladder: its row was sent
+ * as a nested list where the client reads a number.
  */
 export function moduleReplyBody(request: number | string, fields: readonly GSValue[]): GSValue[] {
   return [String(MessageType.GSSUCCESS), [String(request), [...fields]]];

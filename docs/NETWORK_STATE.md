@@ -300,9 +300,11 @@ body field 1 is a LIST whose field 0 is the request's number
 ```
 
 Nothing else is looked at — not the request id, not the party nibbles. And inside, the
-fields are fetched **by kind**: 0x442f10 takes a list (kind 3) and nothing else, 0x4435c0
-and 0x443680 take a string (kind 1) and refuse a list, 0x442510 takes a blob (kind 2). So
-a reply can match and still be dropped without a word, in the getter.
+fields are fetched **by kind**, a getter refusing the wrong kind outright: 0x442f10 takes
+a list (kind 3), 0x442510 and 0x442620 take a blob (kind 2), and 0x4435c0 / 0x443680 take
+a string (kind 1) and run it through `atoi` — they are NUMBER getters, an int and a short,
+not a way to fetch text. So a reply can match and still be dropped without a word, in the
+getter.
 
 ```
 success   ["38", ["<number>", [ … fields … ]]]
@@ -311,24 +313,41 @@ refusal   ["39", ["<number>", [ "<reason>" ]]]      reason is a STRING at index 
 
 `moduleReplyBody` / `moduleFailureBody` in `src/net/gs-message.ts` are these two.
 
-- **The profile (0x401 read, 0x402 write) is answered for real.** Index 1 of the innermost
-  list is the record (0x42aec0 reads it, its caller copies it out by length); index 2 is
-  read too (0x42b400) and nothing is known about it, so it goes out empty. The record is a
-  **string**, not a blob — the client appends it with the string appender and reads it with
-  a string getter — so a profile cannot contain a zero byte. We keep the bytes under
-  (game, user, section) in `data/profiles.json` and hand them back untouched:
+- **The profile (0x401 read, 0x402 write).** The innermost list, from 0x42aec0 and
+  0x42b400: index **0** is the record as a **BLOB**, index **1** is its length as a
+  decimal string, index **2** is another number nobody has identified. The length is read
+  first and the client allocates from it, so with 0 there it never looks at the record at
+  all — which is the honest answer for a player who has never saved one. We keep the bytes
+  under (game, user, section) in `data/profiles.json` and hand them back untouched:
   `src/net/persistent-store.ts`. **What a profile means was never needed.**
-- **The ladder is refused on purpose.** A successful row belongs at index 2 of the
-  innermost list, where only a string is ever read, and what goes in that string is parsed
-  at 0x432c80 and still unread. A refusal is fully determined, and the client has a path
-  for it: "Failed to get Ladder row for myself, setting N/A, set OWN player info sent" —
-  which is also how it finally sends its own player-info blob. The rating is kept on our
-  side meanwhile. Reading 0x432c80 is what turns the refusal into a real row.
+- **The ladder is refused on purpose.** Index 2 of its innermost list is read as a NUMBER,
+  so the nested row we kept sending could never have been read; what the rest of that list
+  holds is parsed at 0x432c80 and still unread. A refusal is fully determined, and the
+  client has a path for it: "Failed to get Ladder row for myself, setting N/A, set OWN
+  player info sent" — which is also how it finally sends its own player-info blob. The
+  rating is kept on our side meanwhile. Reading 0x432c80 turns the refusal into a real row.
 
 Also read along the way: each module has its own state machine, and both are already past
 their logins — "PS login succeeded" is in the game's log, and the ladder service says
 "initializing Ladder Query Service...succeeded" (it is local, no exchange). So the
 silence was never a login problem.
+
+### And it is STILL ignored, so one thing is being measured
+
+Every step of the client's path has now been read and it should accept the reply above:
+the router (0x41b150) puts a 204 into the module queue at CClient2+0x1b8; the drainer
+(0x41bf70) peeks its key — for a 204 carrying a status, that key IS the nested request
+number (0x4288d0) — and hands it to 0x426d50, which dispatches on the number's high byte,
+0x400 to the profile and 0x500 to the ladder; from there 0x42b590 reads it. Every gate on
+that path is satisfied by what we send, and the game's log still shows nothing.
+
+So the remaining unmeasured thing is **which connection the module reads**. Its requests
+arrive on the proxy's wait module (40031), but its own login happened on the proxy itself
+(40030), and both sockets stay open — and there is a separate pump per transport
+(0x41b4d0, kinds 2, 8 and 16). This run answers **the ladder on the proxy** and **the
+profile where it was asked**; whichever of the two appears in the game's log names the
+rule, and then both follow it. `RouterService.desks` is what makes that possible, and it
+is needed anyway for announcing an arrival to the players already in a channel.
 
 ## Where the next wall is
 

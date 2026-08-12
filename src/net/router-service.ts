@@ -323,6 +323,25 @@ export class RouterSession {
           note: 'LOGINFRIENDS — accepted',
           replies: [build(reply(message, [messageId(MessageType.LOGINFRIENDS)], MessageType.GSSUCCESS))],
         };
+      // Right-clicking a name in the channel is "add to friend", and the game sends it
+      // here: `FriendsSend_AddFriend(Senyaak,,0)` in its log, `[name, "", <4 zero
+      // bytes>]` on the wire. Unanswered it does nothing at all, which is what Сеня saw
+      // when he tried it on himself.
+      //
+      // The answer's shape is the one every plain status reply uses, and the router is
+      // why: for a message of type 38 the client keys on the ONE BYTE in body field 0
+      // (0x41b150 reads it as a one-byte blob), and 75 puts it in the friends queue.
+      // After that the parser at 0x425340 wants a list holding the name — a string of at
+      // most 33 characters — and a number beside it.
+      case MessageType.ADDFRIEND: {
+        const friend = typeof message.body?.[0] === 'string' ? message.body[0] : '';
+        return {
+          note: `ADDFRIEND "${friend}" for "${this.username}" — accepted`,
+          replies: [
+            build(reply(message, [messageId(MessageType.ADDFRIEND), [friend, '0']], MessageType.GSSUCCESS)),
+          ],
+        };
+      }
       case MessageType.PLAYERINFO: {
         // Seven fields; only the first two are known to be the nickname and the
         // real name, and nothing so far has needed the rest.
@@ -394,25 +413,31 @@ export class RouterSession {
           const pivotEntry = Array.isArray(pivotList) ? pivotList[1] : undefined;
           const pivot = Array.isArray(pivotEntry) && typeof pivotEntry[0] === 'string' ? pivotEntry[0] : this.username;
           const stats = this.ladder.row(pivot);
-          const refusal = build(reply(message, moduleFailureBody(LADDER_QUERY, 'no ladder row for this player yet')));
-          // **An experiment, and the only thing being varied this run.** Every step of
-          // the client's path for a module reply has now been read and it should accept
-          // this — routed by 0x41b150 into the module queue, drained by 0x41bf70,
-          // dispatched by its number's high byte (0x426d50), matched by 0x4286f0 — and
-          // yet an answer on THIS connection is ignored. The one thing never measured is
-          // WHICH connection the module reads: the requests arrive on the proxy's wait
-          // module (40031), but the module's own login happened on the proxy itself
-          // (40030), and both sockets stay open. So this run answers the ladder on the
-          // proxy and the profile where it was asked; whichever appears in the game's
-          // log names the rule, and then both follow it.
-          const onProxy = this.desks.get('Proxy');
-          if (onProxy) onProxy(refusal);
+          // **An experiment, and the ladder is the right thing to run it on**, because a
+          // refusal is the one shape that is fully determined AND the client prints the
+          // reason it was given: "ladder query request failed,reason=…". So two refusals
+          // go out with different reasons, one on each candidate connection, and its log
+          // says which one it read.
+          //
+          // Why there is anything left to try: every gate on the client's path has been
+          // read and we satisfy all of them (0x41b150 routes a 204 into the module queue,
+          // 0x41bf70 drains it, 0x426d50 dispatches by the number's high byte, 0x4286f0
+          // matches), and it is still ignored. The first guess — that the module reads
+          // its own connection — is DEAD: the game closes 40030 within a second of being
+          // handed to 40031, exactly as it closes 40000 after 40001, so the only live
+          // socket is the one we already answer on. What is left is that the module's
+          // queue is fed from the ROUTER's connection, which is where the two module
+          // hand-off answers that DO work travel.
+          const here = 'asked on the module connection';
+          const there = 'asked via the router connection';
+          const onRouter = this.desks.get('RouterLauncher');
+          if (onRouter) onRouter(build(reply(message, moduleFailureBody(LADDER_QUERY, there))));
           return {
             note:
-              `LADDER query ${requestId} about "${pivot}" — refused with "no row yet" ` +
-              `${onProxy ? 'on the Proxy connection (the experiment)' : 'HERE, no Proxy connection open'}; ` +
+              `LADDER query ${requestId} about "${pivot}" — refused twice, "${here}" here` +
+              `${onRouter ? ` and "${there}" on the router` : ' (no router connection open)'}; ` +
               `we hold rating ${stats['RATING']}, ${stats['GAMES_PLAYED']} game(s)`,
-            replies: onProxy ? [] : [refusal],
+            replies: [build(reply(message, moduleFailureBody(LADDER_QUERY, here)))],
           };
         }
         // The player's profile, kept for him on the persistantdata module. He asks for

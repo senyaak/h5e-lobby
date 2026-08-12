@@ -831,6 +831,35 @@ console.log('\nThe ladder, from the query the client really sent');
   check('in the exe order, Heaven first and Orcs last', LADDER_KEYS[12] === 'W_HEAVEN' && LADDER_KEYS[19] === 'W_ORCS');
 }
 
+console.log('\nAdding a friend, from the right-click the client really sent');
+{
+  const router = new RouterService(
+    { address: '127.0.0.1', port: 40001 },
+    { address: '127.0.0.1', port: 40030 },
+    { address: '127.0.0.1', port: 40031 },
+    { address: '127.0.0.1', port: 40040 },
+    join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-ladder.json'),
+    join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-profiles.json'),
+  ).session('router');
+  router.username = 'Senyaak';
+
+  // Verbatim off the wire (12.08.2026): he right-clicked his own name in the channel.
+  const clicked = router.receive(Buffer.from('00001a004b41faeeefe197d9f491969be2fb959aeef699939c9c', 'hex'));
+  check('the right-click is an ADDFRIEND', clicked[0]?.note.startsWith('ADDFRIEND'), clicked[0]?.note);
+  check('and it is answered rather than ignored', clicked[0]!.replies.length === 1, clicked[0]?.note);
+
+  const answer = parse(clicked[0]!.replies[0]!);
+  check('the answer is a plain success', answer?.type === MessageType.GSSUCCESS, String(answer?.type));
+  // The routing key for a type-38 message is the single byte in field 0, read as a
+  // one-byte blob (0x41b150). 75 is what puts this in the friends queue rather than
+  // nowhere — the same trick that makes our friends LOGIN reply land.
+  const key = answer?.body?.[0] as Uint8Array;
+  check('and it names the message it answers, in one byte', key instanceof Uint8Array && key.length === 1 && key[0] === 75, JSON.stringify(key));
+  const payload = answer?.body?.[1] as GSValue[];
+  check('with the friend named in a list beside it', payload?.[0] === 'Senyaak', JSON.stringify(payload));
+  check('and a number after him, which the parser reads as an int', payload?.[1] === '0', JSON.stringify(payload?.[1]));
+}
+
 console.log('\nThe profile, from the read the client really asked for');
 {
   // A store that survives its process is the point of this one, so the file has to go

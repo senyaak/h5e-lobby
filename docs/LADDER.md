@@ -67,14 +67,39 @@ empty lists are where key names would go.
 
 **Answered since 12.08.2026**, by `src/net/ladder.ts` plus the `LADDER_QUERY` branch in
 `router-service.ts`: the pivot user is read out of the request (five levels down), his
-row is created at 1500 on first sight, and the reply carries all 46 keys as named pairs.
-The store is a JSON file, `data/ladder.json`, so a rating outlives the process. Whether
-the client *reads* that row is the thing to check in its log — see below.
+row is created at 1500 on first sight, and the reply carries all 46 keys. The store is a
+JSON file, `data/ladder.json`, so a rating outlives the process. It was a refusal until
+13.08.2026 and it is a real table now; whether the client *reads* that table is the thing
+to check in its log — see below.
 
 ### What the answer has to be shaped like
 
-Not known in detail yet, but the client's own vocabulary constrains it. These are
-its ladder calls, as literals in the exe:
+**Read on 13.08.2026**, at 0x432c80 — the parser the payload goes through once the
+envelope has been accepted. The shape, and `ladderPayload` in
+[src/net/ladder.ts](../src/net/ladder.ts) is it:
+
+```
+[ "1",                                 <- atoi'd and compared with 1 (0x443740)
+  [ "<row count>", "0",                <- two numbers, kept at result+8 and +0xC
+    [ ["RATING","1"], ["WINS","1"], … ],   <- the columns: pairs of strings, ≤32 chars
+    [ ["1500","6", … ] ] ] ]               <- the rows: strings, ≤128 chars each
+```
+
+Two rules are the whole of it, and both refuse in silence:
+
+- **a row has exactly as many cells as there are columns.** 0x432b10 divides both
+  vectors by their element size and returns error 3 if the counts differ — there is no
+  such thing as omitting a stat.
+- **every cell is a whole decimal number.** A field is looked up by name in the row's
+  own map and run through `strtol`, and 0x431f20 requires the entire string to have been
+  consumed (0x42bb90 is the call above it). "N/A", "1500 " and "" are all "no such
+  field", which the UI shows as nothing at all.
+
+The two numbers at the head and the second string of each column pair are what is left
+guessed: element 0 of a pair is pushed onto the result's ordered column vector, element 1
+goes into a second map that nothing we have read consults.
+
+Everything below was written before that reading, and it is what constrained the search:
 
 ```
 LadderQuery_CreateRequest(          LadderQuery_RequestPivotUser(

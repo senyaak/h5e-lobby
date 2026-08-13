@@ -25,7 +25,7 @@ import { mkdirSync, createWriteStream } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { NatService } from '../src/net/nat-service.ts';
-import { RouterService } from '../src/net/router-service.ts';
+import { GUEST, RouterService } from '../src/net/router-service.ts';
 import { CdKeyService } from '../src/net/cdkey-service.ts';
 import { IrcConnection, IrcService } from '../src/net/irc.ts';
 
@@ -132,6 +132,12 @@ const router = new RouterService(
 // it puts players there who do not exist.
 router.ghosts = process.argv.includes('--ghosts');
 if (router.ghosts) log('ghosts on — GhostList, GhostBlob and GhostJoin will be in every channel');
+
+// The guest is not a ghost: he is a player with a name, a blob and a ladder row, and
+// he is here so that the things needing SOMEBODY ELSE — a profile read about another
+// player, a friend to add, a rating that is not one's own — can be tried with one
+// copy of the game. He follows whoever enters a channel.
+log(`${GUEST} is seated in whichever channel a player enters — rating ${router.ladder.row(GUEST)['RATING']}`);
 
 // Every key the player types is accepted; see src/net/cdkey-service.ts for why
 // that is the honest answer rather than a shortcut.

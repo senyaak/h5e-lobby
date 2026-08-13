@@ -17,6 +17,10 @@ players who do not exist, and what the client draws of them is evidence (see the
 list section). **Turn it off before a two-client test** — otherwise the channel holds
 strangers who cannot answer.
 
+The **guest** is always there and is not part of that: one player, with a name, a blob and
+a ladder row of his own, seated in whichever channel somebody enters. He is what makes a
+profile read, a friend to add and a foreign rating testable with one copy of the game.
+
 Then start the game from the copy: `C:\Projects\homm5-game-net\run-net.bat`. That
 bat sets `http_proxy=http://127.0.0.1:8080`, which is the whole redirect — the
 game's libcurl asks us for its server list instead of `gsconnect.ubisoft.com`.
@@ -77,11 +81,13 @@ join channel       -> "join lobby succeeded(GroupID=1,LobbySrvID=1)"
 NAT address        -> "address request succeeded,address=1.0.0.127:40010"
 ladder             -> answered and READ: "LadderQueryRcv_RequestReply: (39,0,1)", and
                       the client then does what waited on it — sends its OWN player info
+                      (13.08.2026: a real ROW is sent now, not a refusal — unlaunched)
 profile            -> answered and READ: "PSRcv_GetDataReply: ubType=39,iReason=0,iID=2",
                       "PS get data failed,reason=0", and back to CStateOutOfRoom at once
 player info        -> arrives on its own now, 73 bytes, his and not our invention
 player list        -> WORKS (12.08.2026): the panel draws him
-friends (add)      -> answered and matched, still refused inside its parser (0x425340)
+friends (add)      -> answered, matched, and refused in the getter until 13.08.2026:
+                      field 1 is a STRING, not a list (unlaunched)
 create game        -> CREATE_ROOM answered, room 100 in the channel
 join own room      -> "LobbyRcv_RoomInfo", then CStateInRoom / CStateWaitingForPlayers
 settings changes   -> GROUP_CONFIG_UPDATE_RES answered, the room echoed back
@@ -93,11 +99,15 @@ So a player logs in, enters a channel with his name in its player list, hosts a 
 **sits in it waiting for players**; games appear and disappear correctly. **The module
 request/reply protocol is solved** (13.08.2026): the ladder and the profile are both read
 and acted on, and the client now sends its own player-info blob unprompted, which is the
-one thing the room's member records were missing. What is left of that family is the
-ladder's SUCCESS row (the refusal is what we send; a real row needs 0x432c80 read) and the
-friends parser at 0x425340, which refuses a reply it has already matched.
+one thing the room's member records were missing.
 
-The second client is the thing nothing has exercised.
+Since then the three things that were left of that family have been READ rather than
+guessed, and all three are written but **not yet seen in a launch**: the friends reply's
+one wrong field, the ladder's real row, and the shape of a profile write. What each turned
+out to be is in "Reading the client's dispatch" below.
+
+The second client is the thing nothing has exercised — and the **guest** now stands in for
+half of what it was needed for.
 
 ## Facts worth not re-learning
 
@@ -225,7 +235,13 @@ the editor repo.
 | **a module reply: the matcher, and the status/number check** | 0x4286F0 / 0x427170 |
 | the queue a received message is pushed onto, and the drainer's key | 0x4285E0 / 0x4288D0 |
 | the readers a matched reply then goes through: ladder, profile | 0x42C7F0 / 0x42AEC0 + 0x42B400 |
-| the friends reply's own parser | 0x425340 |
+| the friends reply's own parser — **not the one we answer**, see below | 0x425340 |
+| the three queue drainers: lobby, **friends**, and the module/router one | 0x41B620 / 0x41B840 / 0x41BAD0 |
+| the friends drainer's switch: index bytes, then jump table | 0x41BA34 / 0x41B9EC |
+| ADDFRIEND (75): the reply's handler, its parser, and the status helper | 0x429A20 / 0x4292D0 / 0x428FD0 |
+| the ladder's payload parser, and the row/column count rule inside it | 0x432C80 / 0x432B10 |
+| a ladder field by name: the map find, then `strtol` over the whole cell | 0x42BB90 / 0x431F20 |
+| the profile WRITE: request builder, and its reply's reader | 0x42B1E0 / 0x42B2E0 |
 | the getters, by kind: list, string, number, blob | 0x442F10 / 0x4435C0 / 0x443680 / 0x442510 |
 | a module request is sent and registered here | 0x41DF10 |
 | the profile: read request and reply, write request | 0x42B100 + 0x42AEC0 / 0x42B1E0 |
@@ -362,12 +378,12 @@ creating a game" was: not the room code, the profile answer eating the wait.
   all — which is the honest answer for a player who has never saved one. We keep the bytes
   under (game, user, section) in `data/profiles.json` and hand them back untouched:
   `src/net/persistent-store.ts`. **What a profile means was never needed.**
-- **The ladder is refused on purpose.** Index 2 of its innermost list is read as a NUMBER,
-  so the nested row we kept sending could never have been read; what the rest of that list
-  holds is parsed at 0x432c80 and still unread. A refusal is fully determined, and the
-  client has a path for it: "Failed to get Ladder row for myself, setting N/A, set OWN
-  player info sent" — which is also how it finally sends its own player-info blob. The
-  rating is kept on our side meanwhile. Reading 0x432c80 turns the refusal into a real row.
+- **The ladder was refused on purpose until 0x432c80 was read** (13.08.2026). Index 2 of
+  its innermost list is a NUMBER, so the nested row we used to send could never have been
+  read; the rest of that list is a table, and its layout is now in `ladderPayload` and in
+  "The ladder's real row" above. The refusal remains the client's fallback path —
+  "Failed to get Ladder row for myself, setting N/A, set OWN player info sent" — so a row
+  it does not like costs nothing but the N/A.
 
 Also read along the way: each module has its own state machine, and both are already past
 their logins — "PS login succeeded" is in the game's log, and the ladder service says
@@ -462,20 +478,104 @@ profile where it was asked**; whichever of the two appears in the game's log nam
 rule, and then both follow it. `RouterService.desks` is what makes that possible, and it
 is needed anyway for announcing an arrival to the players already in a channel.
 
+## Reading the client's dispatch, instead of guessing at three replies
+
+13.08.2026. Three answers were wrong or missing, and all three were settled in one sitting
+by reading how the client routes a message rather than by launching the game at each guess.
+The method is worth as much as the answers.
+
+**A reply lands in a QUEUE, and each queue has its own drainer with its own switch.**
+0x41b150 sorts a received message into one of them; the drainer takes the first message's
+key (0x4288d0) and dispatches:
+
+```
+type 204 / 209        the key is the nested request number under the status
+type 38 / 39          the key is body field 0, read as a ONE-BYTE BLOB (0x442620)
+anything else         the key is the message type itself
+```
+
+Each drainer's switch is a byte table plus a jump table, and decoding those two arrays says
+exactly which parser sees which key — `_tmp/gs-dispatch.ts` in the editor repo does it. That
+is what showed the friends drainer (0x41b840) sending **75 to 0x429a20**, and it is what
+showed the parser this document used to name — 0x425340, key **51** — to be a different
+message we never send. A reading that was never wrong on its own terms, about the wrong
+function.
+
+The complementary listing is "which request does each parser scan for": every parser calls
+the matcher at 0x4286f0 with one number, so walking back from each call site gives the whole
+map (`_tmp/gs-requests.ts`). Request 75's parser is 0x4292d0, and it says in five
+instructions what four launches could not have.
+
+### The friends reply: one field, and it was the kind
+
+```
+success   type 38, [ <byte 75>, "<the friend's name>" ]
+refusal   type 39, [ <byte 75>, [ <four bytes of reason> ] ]
+```
+
+0x4292d0 fetches body field 1 with 0x4426c0, which takes a **string and nothing else**; we
+had been sending a list, so the message was matched, consumed and dropped in the getter
+— the same silent death as everything else in this protocol. 0x428fd0 checks the rest: type
+38 or 39, and field 0 says 75 again as a one-byte blob. A refusal's reason is read with
+0x442620 asking for **exactly four bytes**, and that getter refuses a length that differs.
+
+### The ladder's real row
+
+`ladderPayload` in [src/net/ladder.ts](../src/net/ladder.ts) is the shape, and its comment
+names every gate. In short, the payload under the request number is
+
+```
+[ "1",                                   <- 0x443740, atoi, must be 1, else reason 63
+  [ "<rows>", "<0>",                     <- two numbers kept at result+8 and +0xC
+    [ ["RATING","1"], … ],               <- columns: pairs of strings, ≤32 chars
+    [ ["1500","0", … ], … ] ] ]          <- rows: strings, ≤128 chars
+```
+
+Two rules decide it. **A row must have exactly as many cells as there are columns** —
+0x432b10 compares the counts and returns error 3 otherwise. And **every cell is a whole
+decimal number**: a field is fetched by name and run through `strtol`, and 0x431f20 insists
+the whole string was consumed, so "N/A" or a trailing space is a field that does not exist.
+
+### A profile write, before ever seeing one
+
+The request builder is 0x42b1e0, so its arguments are not a guess:
+`[game, n, user, n, "PUBLIC", <record as a BLOB>, <that record's length>]`. Field 5 is a
+blob and field 6 is its length — the "unidentified number" this document carried.
+
+The reply is thinner than the read's: 0x42b2e0 takes body[1] as a list, its [1] as a list it
+never looks inside, and its [2] as the request id. So a write is answered with an **empty**
+payload; handing the record back passed by accident and said something nobody asked.
+
+### The guest, and what he is not
+
+A player the server seats itself: a name, a player-info blob, a ladder row with games in it,
+and he follows whoever enters a channel (`GUEST` in `src/net/router-service.ts`). He exists
+because half of what needed a second client only needs somebody ELSE — a row to read that is
+not one's own, a name to right-click, a profile that is not yours. He is not a ghost:
+`--ghosts` seats players with nothing behind them to see what the panel draws.
+
+**He cannot answer.** Nothing about starting a game is closer for his being there.
+
 ## What to pick up next
 
-Three things, and none of them needs a launch to make progress on:
+All three of the previous three are written; **one launch would say whether the reading was
+right**, and it is the same launch for all of them. What to watch for in the game's log,
+each line being the verdict on one of them:
 
-1. **The friends reply.** Type 75 is answered and the client MATCHES it (the probe: "scanned
-   for request 75, found a message of type 38") and then its parser at 0x425340 refuses it.
-   Read that parser with `net-probe --frame` — it wants a list holding the friend's name and
-   a number, and the indices are what to get right. Right-clicking a name in the channel is
-   how the client asks.
-2. **The ladder's real row.** We refuse; a success needs the payload 0x432c80 parses. Same
-   tool, same method. The rating is already stored per player (`data/ladder.json`).
-3. **The profile's own creation.** Refused honestly, the client should offer to create one
-   and then WRITE it as request 0x402 — which the store already accepts and keeps. Nothing
-   more may be needed than watching for that write on the wire.
+1. `LadderQuery_StartResultEntryEnumeration(…) succeeded` — the row parsed. Against it:
+   "ladder query request failed,reason=63" (the leading tag was not 1) and "…reason=64"
+   (0x432c80 gave up inside the table — a row whose cell count differs from the column
+   count is error 3 and lands here).
+2. `FriendsRcv_AddFriend` with the name in it, after right-clicking the guest. Silence
+   means the string field is still not what 0x4426c0 wants.
+3. **The write we have never seen.** With the profile refused, the client should offer to
+   create one and then send 0x402. The store keeps it, the reply is now the empty one its
+   reader wants, and the log line to look for is `PSRcv_SetDataReply`. If it never comes,
+   the question is what the client asks BEFORE writing, not what we answer.
+
+And two things that only a launch can decide, both about the guest: whether the client
+draws him in the player list beside the player himself, and whether his ladder row is what
+"Profile" shows when he is the one selected.
 
 And then the wall proper:
 
@@ -522,11 +622,11 @@ a push to the other players rather than a reply to the sender. The first sender 
 GS library at 0x4196F0 — that is where the subtype numbers live if the wire does not
 show them.
 
-**The ladder is answered, and its row layout is the open guess.** `PROXY_HANDLER`
-subtype 1281 (0x501) now gets a real row from `src/net/ladder.ts` — 46 keys, a new
-player at 1500, stored in `data/ladder.json`. What is measured: the request's shape and
-that the reply's first field is read as a byte and compared with 0x26 (38). What is
-guessed: how a row is laid out. The verdict is one line in the game's log —
+**The ladder is answered with a row whose layout is read, not guessed.** `PROXY_HANDLER`
+subtype 1281 (0x501) gets a table from `src/net/ladder.ts` — 46 columns, one row, a new
+player at 1500, stored in `data/ladder.json`. What is still guessed inside it is only the
+pair of numbers at the head of the table and the second string of a column descriptor;
+everything else is what 0x432c80 reads. The verdict is one line in the game's log —
 `LadderQuery_StartResultEntryEnumeration(…) succeeded` against `ladder query request
 failed,reason=…` — so read that before changing anything about it.
 [LADDER.md](LADDER.md) has the rest, including the four handler names behind the proxy.

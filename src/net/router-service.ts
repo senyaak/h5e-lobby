@@ -23,7 +23,8 @@
 //   RouterService     new(waitModule) -> session(); session.receive(buf) -> Buffer[]
 
 import { hostU32String } from './address.ts';
-import { Ladder, ladderRow } from './ladder.ts';
+import { Friends } from './friends.ts';
+import { Ladder, ladderPayload } from './ladder.ts';
 import { GET_DATA, PersistentStore, SET_DATA, recordKeyOf } from './persistent-store.ts';
 import {
   DEFAULT_LOBBIES,
@@ -96,6 +97,56 @@ function messageId(type: number): GSValue {
   return new Uint8Array([type & 0xff]);
 }
 
+/**
+ * The guest: a second player who is always there, and the only way to exercise half
+ * of this server without a second copy of the game.
+ *
+ * Everything a lone host can do, he does — but the things that need somebody ELSE are
+ * exactly the ones still unproven: a profile read about another player, adding a name
+ * to the friends list, a ladder row that is not one's own. So one player is seated by
+ * the server itself. He is not a ghost (`--ghosts` seats three of those to see what
+ * the panel draws of a player with no data): he has a name, a player-info blob, a
+ * ladder row with games in it, and he follows whoever enters a channel into it.
+ *
+ * What he cannot do is answer. He never joins a room and nothing starts a game against
+ * him — that still needs the second client, and nothing here pretends otherwise.
+ */
+export const GUEST = 'Guest';
+
+/**
+ * His ladder row, once, with numbers that could not be a default.
+ *
+ * A row of zeroes proves nothing when the question is "did the client read the row at
+ * all" — 6 wins out of 10 is visible on the screen and unmistakably ours.
+ */
+function seatGuest(ladder: Ladder, presence: Presence): void {
+  ladder.seed(GUEST, {
+    RATING: 1560,
+    GAMES_PLAYED: 10,
+    WINS: 6,
+    LOSSES: 4,
+    MAX_WINS_STREAK: 3,
+    CUR_WINS_STREAK: 1,
+    W_HEAVEN: 4,
+    L_HEAVEN: 2,
+    W_ORCS: 2,
+    L_ORCS: 2,
+    AVERAGE_HERO_LEVEL: 12,
+  });
+  presence.remember(GUEST, namedPlayerInfo(GUEST));
+}
+
+/**
+ * A refusal's reason, as the friends parser reads one: four bytes, no more and no
+ * fewer. 0x442620 compares the blob's length with what the caller asked for and says
+ * no if they differ, so a shorter reason is the same as no reason at all.
+ */
+function reasonCode(code: number): GSValue {
+  const out = Buffer.alloc(4);
+  out.writeUInt32LE(code >>> 0, 0);
+  return new Uint8Array(out);
+}
+
 /** A little-endian u32 body value — how a port travels. */
 function u32(value: number): GSValue {
   const out = Buffer.alloc(4);
@@ -145,6 +196,8 @@ export class RouterSession {
   private readonly presence: Presence;
   /** And the players' profiles, which are the server's to keep. */
   private readonly profiles: PersistentStore;
+  /** And who has whom on his friends list. */
+  private readonly friends: Friends;
   /** The other open connections, by desk — see `RouterService.desks`. */
   private readonly desks: Map<string, (bytes: Buffer) => void>;
   /** Seat synthetic players in every channel — a diagnostic, off unless asked for. */
@@ -159,11 +212,13 @@ export class RouterSession {
     ladder: Ladder,
     presence: Presence,
     profiles: PersistentStore,
+    friends: Friends,
     desks: Map<string, (bytes: Buffer) => void>,
     ghosts = false,
   ) {
     this.desks = desks;
     this.profiles = profiles;
+    this.friends = friends;
     this.ghosts = ghosts;
     this.role = role;
     this.waitModule = waitModule;
@@ -348,18 +403,38 @@ export class RouterSession {
       // bytes>]` on the wire. Unanswered it does nothing at all, which is what Сеня saw
       // when he tried it on himself.
       //
-      // The answer's shape is the one every plain status reply uses, and the router is
-      // why: for a message of type 38 the client keys on the ONE BYTE in body field 0
-      // (0x41b150 reads it as a one-byte blob), and 75 puts it in the friends queue.
-      // After that the parser at 0x425340 wants a list holding the name — a string of at
-      // most 33 characters — and a number beside it.
+      // The answer is read in two places and BOTH were found by walking the dispatch
+      // rather than guessing (13.08.2026):
+      //
+      //   the routing key is the one byte in body field 0, read as a one-byte blob
+      //   (0x428934) — 75 is what sends this down the friends queue's own drainer
+      //   (0x41b840), whose table hands 75 to the parser at 0x429a20;
+      //   0x428fd0 then insists the type is 38 or 39 and that field 0 says 75 again;
+      //   0x4292d0 takes body field 1 as a **STRING** (0x4426c0 refuses any other
+      //   kind) and copies it out as the friend's name.
+      //
+      // A list there — which is what we sent until now — is exactly the silent refusal
+      // the probe saw: matched, consumed, and dropped in the getter. The earlier reading
+      // of 0x425340 was a different parser altogether: it belongs to key 51 in another
+      // drainer's table, and nothing we send is ever keyed 51.
+      //
+      // A refusal is 39 with a list under the key, holding a FOUR-byte reason (0x429053).
       case MessageType.ADDFRIEND: {
         const friend = typeof message.body?.[0] === 'string' ? message.body[0] : '';
+        if (!friend) {
+          return {
+            note: `ADDFRIEND with no name from "${this.username}" — refused`,
+            replies: [
+              build(reply(message, [messageId(MessageType.ADDFRIEND), [reasonCode(1)]], MessageType.GSFAIL)),
+            ],
+          };
+        }
+        const added = this.friends.add(this.username, friend);
         return {
-          note: `ADDFRIEND "${friend}" for "${this.username}" — accepted`,
-          replies: [
-            build(reply(message, [messageId(MessageType.ADDFRIEND), [friend, '0']], MessageType.GSSUCCESS)),
-          ],
+          note:
+            `ADDFRIEND "${friend}" for "${this.username}" — ${added ? 'added' : 'already there'}, ` +
+            `${this.friends.of(this.username).length} friend(s) now`,
+          replies: [build(reply(message, [messageId(MessageType.ADDFRIEND), friend], MessageType.GSSUCCESS))],
         };
       }
       case MessageType.PLAYERINFO: {
@@ -408,18 +483,17 @@ export class RouterSession {
         // pivot the client asked about (`LadderQuery_RequestPivotUser`), and the three
         // empty lists are where named keys would go if it wanted only some of them.
         //
-        // **We refuse it, on purpose, and that is the honest answer we can give.**
-        // A successful row belongs where index 2 of a list is read as a NUMBER (0x4435c0
-        // is atoi, not a string copy), and what the rest of that list holds is parsed at
-        // 0x432c80 and still unread — so a success cannot be composed. A refusal can, and
-        // the client has a path for it: "Failed to get Ladder row for myself, setting N/A,
-        // set OWN player info sent", which is also how he finally sends his own player
-        // info. The rating is kept here meanwhile and reported in the log.
+        // **Answered with a real row since 13.08.2026.** What made that possible is
+        // 0x432c80, the parser the payload goes through once the envelope is accepted:
+        // a tag that must read as 1, two numbers, a list of column names and a list of
+        // rows with exactly one cell per column. `ladderPayload` is that shape and the
+        // comment on it names every step that refuses in silence.
         //
-        // It is still refused SILENTLY, and the probe has narrowed that to one place: the
-        // reply is queued, keyed, scanned, found, and its status read as 39 — and then the
-        // ladder's own reader (0x42c7f0) says no. Which field it was reading when it said
-        // so is what the getter probe now prints.
+        // The refusal we used to send is still a path the client knows — "Failed to get
+        // Ladder row for myself, setting N/A, set OWN player info sent" — and it is what
+        // it falls back to if this row is wrong. Its own log says which happened:
+        // `LadderQuery_StartResultEntryEnumeration(…) succeeded` against "ladder query
+        // request failed,reason=63/64".
         if (subtype === String(LADDER_QUERY)) {
           // Three fields at the top, not two: the number, the id, and the query — so
           // the query is body[2] and `inner` (body[1]) is the id itself.
@@ -430,11 +504,13 @@ export class RouterSession {
           const pivotEntry = Array.isArray(pivotList) ? pivotList[1] : undefined;
           const pivot = Array.isArray(pivotEntry) && typeof pivotEntry[0] === 'string' ? pivotEntry[0] : this.username;
           const stats = this.ladder.row(pivot);
-          const sent = this.answerModule(build(reply(message, moduleFailureBody(LADDER_QUERY, 'no row yet', requestId))));
+          const sent = this.answerModule(
+            build(reply(message, moduleReplyBody(LADDER_QUERY, ladderPayload([stats]), requestId))),
+          );
           return {
             note:
-              `LADDER query ${requestId} about "${pivot}" — refused ${sent.where}; ` +
-              `we hold rating ${stats['RATING']}, ${stats['GAMES_PLAYED']} game(s)`,
+              `LADDER query ${requestId} about "${pivot}" — one row (rating ${stats['RATING']}, ` +
+              `${stats['GAMES_PLAYED']} game(s)), answered ${sent.where}`,
             replies: sent.replies,
           };
         }
@@ -465,13 +541,25 @@ export class RouterSession {
           const where = `${key.user}'s ${key.section} profile in ${key.game}`;
           const notes: string[] = [];
           if (subtype === String(SET_DATA)) {
-            // The record is field 5, right after the section; field 6 is a number we
-            // have no name for. Which kind field 5 is has not been seen on the wire yet,
-            // so both are accepted and the log says which one arrived.
+            // The write's arguments, read off the builder at 0x42b1e0 rather than
+            // inferred: [game, n, user, n, "PUBLIC", record, length]. The record is a
+            // BLOB (0x442a20 takes a pointer and a length) and field 6 is that same
+            // length repeated. A string is accepted too, because a profile has no NUL
+            // in it and an early capture could have been read either way.
             const written = args[5];
             const bytes = typeof written === 'string' ? Buffer.from(written, 'utf8') : Buffer.from((written as Uint8Array) ?? []);
             this.profiles.set(key, bytes);
             notes.push(`saved ${bytes.length} byte(s), sent as a ${typeof written === 'string' ? 'string' : 'blob'}`);
+            // A write is answered with an EMPTY payload, and that is not laziness: its
+            // reply reader (0x42b2e0) asks for a list at index 1 and a number at index 2
+            // and never looks inside the list. Handing back the record instead — which
+            // is what this did while the write had never been seen — passes by accident
+            // and says something the client did not ask about.
+            const sent = this.answerModule(build(reply(message, moduleReplyBody(SET_DATA, [], requestId))));
+            return {
+              note: `PROFILE write — ${where}, ${notes.join(', ')}, answered ${sent.where}`,
+              replies: sent.replies,
+            };
           }
           // A record that was never written is REFUSED, not answered with nothing. "Here
           // it is" followed by zero bytes is a lie, and the client believed it exactly
@@ -486,9 +574,7 @@ export class RouterSession {
             : moduleFailureBody(subtype, 'no such record', requestId);
           const sent = this.answerModule(build(reply(message, answer)));
           return {
-            note:
-              `${subtype === String(GET_DATA) ? 'PROFILE read' : 'PROFILE write'} — ${where}, ` +
-              `${notes.join(', ')}, answered ${sent.where}`,
+            note: `PROFILE read — ${where}, ${notes.join(', ')}, answered ${sent.where}`,
             replies: sent.replies,
           };
         }
@@ -555,6 +641,11 @@ export class RouterSession {
           const asked = Number(typeof fields[2] === 'string' ? fields[2] : '') || Lsm.GROUPMEMBERS | Lsm.CHILDGROUPINFO;
           const lobby = DEFAULT_LOBBIES.find((l) => String(l.id) === groupId) ?? DEFAULT_LOBBIES[0]!;
           this.presence.enter(this.username, lobby.id);
+          // The guest follows whoever comes in, rather than sitting in one channel and
+          // being absent from the other two. Presence keeps one channel per name, so
+          // this moves him; with two real clients in different channels he is in the
+          // last one entered, which is a thing to notice rather than to fix now.
+          this.presence.enter(GUEST, lobby.id);
           const rooms = this.rooms.inLobby(lobby.id).map(roomEntry);
           // The people in the channel, himself among them. Left empty, the client's
           // player list is empty too, and "Profile" — "look at the results of the
@@ -917,6 +1008,8 @@ export class RouterService {
   readonly presence = new Presence();
   /** And a profile belongs to the player too, outliving every session. */
   readonly profiles: PersistentStore;
+  /** Friendships, likewise: added once, still there next launch. */
+  readonly friends: Friends;
   /** Passed to every session: seat synthetic players, to see what the client draws. */
   ghosts = false;
   /**
@@ -937,6 +1030,7 @@ export class RouterService {
     lobbyServer: Endpoint,
     ladderFile = 'data/ladder.json',
     profileFile = 'data/profiles.json',
+    friendsFile = 'data/friends.json',
   ) {
     this.waitModule = waitModule;
     this.proxy = proxy;
@@ -944,6 +1038,8 @@ export class RouterService {
     this.lobbyServer = lobbyServer;
     this.ladder = new Ladder(ladderFile);
     this.profiles = new PersistentStore(profileFile);
+    this.friends = new Friends(friendsFile);
+    seatGuest(this.ladder, this.presence);
   }
 
   /** A connection on one of the four desks. */
@@ -958,6 +1054,7 @@ export class RouterService {
       this.ladder,
       this.presence,
       this.profiles,
+      this.friends,
       this.desks,
       this.ghosts,
     );

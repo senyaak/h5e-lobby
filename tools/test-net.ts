@@ -14,7 +14,7 @@ import { HEADER_SIZE, Flags, buildSegment, checksum, parseSegment, verify } from
 import { MessageType, Property, build, parse } from '../src/net/gs-message.ts';
 import { NatService, inetU32 } from '../src/net/nat-service.ts';
 import { KEY_BLOB_SIZE, decryptWith, encryptTo, generateKeyPair, parsePublicKey, publicKeyBlob } from '../src/net/pkc.ts';
-import { RouterService } from '../src/net/router-service.ts';
+import { GUEST, RouterService } from '../src/net/router-service.ts';
 import { Blowfish } from '../src/net/blowfish.ts';
 import { CdKeyRequest, CdKeyService } from '../src/net/cdkey-service.ts';
 import { LobbyMsg, Lsm, RoomUpdate, namedPlayerInfo } from '../src/net/lobby.ts';
@@ -531,9 +531,19 @@ console.log('\nThe lobby server, from the words the client really said');
   // But WITH the player himself. An empty list leaves the client's player panel empty,
   // and then "Profile" — "look at the results of the selected players" — is grey,
   // because there is nobody to select.
+  //
+  // Two of them, because the guest is seated by the server itself: he is the other
+  // player a lone tester needs — somebody to select, to read a ladder row about, and
+  // to add as a friend — and he follows whoever enters a channel into it.
   const listed = inside?.[4] as GSValue[];
-  check('and with him in its player list', listed?.length === 1, String(listed?.length));
+  check('and with him in its player list', listed?.length === 2, String(listed?.length));
   check('under his own name', (listed?.[0] as GSValue[])?.[0] === 'Senyaak', String((listed?.[0] as GSValue[])?.[0]));
+  check('with the guest beside him, to have somebody to select', (listed?.[1] as GSValue[])?.[0] === GUEST, String((listed?.[1] as GSValue[])?.[0]));
+  check(
+    'and the guest carries a blob, so his record is not an empty name',
+    (listed?.[1] as GSValue[])?.[4] instanceof Uint8Array,
+    JSON.stringify((listed?.[1] as GSValue[])?.[4]),
+  );
   check(
     'at the address he reported for himself',
     (listed?.[0] as GSValue[])?.[2] === '192.168.178.27',
@@ -544,7 +554,7 @@ console.log('\nThe lobby server, from the words the client really said');
   // CPlayersController::OnMemberJoined (0x9108f0) drops a member whose status is
   // anything but 0, silently, after the game log has already said he arrived.
   check('and with a status the player panel accepts', (listed?.[0] as GSValue[])?.[7] === '0', String((listed?.[0] as GSValue[])?.[7]));
-  check('and the channel says how many are in it', ((inside?.[2] as GSValue[]) ?? [])[13] === '1', String(((inside?.[2] as GSValue[]) ?? [])[13]));
+  check('and the channel says how many are in it', ((inside?.[2] as GSValue[]) ?? [])[13] === '2', String(((inside?.[2] as GSValue[]) ?? [])[13]));
 }
 
 console.log("\nThe game's own serialisation, the format inside a blob");
@@ -815,21 +825,43 @@ console.log('\nThe ladder, from the query the client really sent');
 
   const answer = parse(asked[0]!.replies[0]!);
   check('the answer is a PROXY_HANDLER', answer?.type === MessageType.PROXY_HANDLER, String(answer?.type));
-  // It is a REFUSAL, and deliberately: a successful row has to sit at index 2 of the
-  // innermost list, where the client's getter takes a string and nothing else, and
-  // what belongs in that string is still unread. A refusal's shape is known whole.
-  check('and it refuses, with 39 rather than 38', answer?.body?.[0] === '39', String(answer?.body?.[0]));
-  const refusal = answer?.body?.[1] as GSValue[];
-  check('the request number is nested where the matcher looks for it', refusal?.[0] === '1281', String(refusal?.[0]));
-  check('and the reason is a string at index 0 under it', typeof (refusal?.[1] as GSValue[])?.[0] === 'string', JSON.stringify(refusal?.[1]));
+  // A REAL ROW since 13.08.2026: the refusal was only ever a stand-in for a payload
+  // nobody had read, and 0x432c80 is that payload's parser.
+  check('and it succeeds, with 38 rather than 39', answer?.body?.[0] === '38', String(answer?.body?.[0]));
+  const carried = answer?.body?.[1] as GSValue[];
+  check('the request number is nested where the matcher looks for it', carried?.[0] === '1281', String(carried?.[0]));
   // The three, and the third is the REQUEST ID. 0x42c8d2 reads index 2 as a number and
   // 0x42b810 then looks it up among the requests still pending; anything that matches
   // nothing pending ends the read without a word, which is what "the ladder read said
   // 0" was while the status right before it read fine.
-  check('and it is a THREE: number, payload, request id', refusal?.length === 3, String(refusal?.length));
-  check('with the id the client asked with, which is what is looked up', refusal?.[2] === '1', JSON.stringify(refusal?.[2]));
-  // The rating itself is ours and it is kept, so nothing is lost by not sending it.
-  check('the rating is still recorded on our side', asked[0]!.note.includes(String(STARTING_RATING)), asked[0]?.note);
+  check('and it is a THREE: number, payload, request id', carried?.length === 3, String(carried?.length));
+  check('with the id the client asked with, which is what is looked up', carried?.[2] === '1', JSON.stringify(carried?.[2]));
+
+  // The payload, field by field, against what 0x432c80 does with each one. Every one of
+  // these refuses in silence, so each is worth its own line.
+  const payload = carried?.[1] as GSValue[];
+  check('the payload opens with the tag the parser insists reads as 1', payload?.[0] === '1', JSON.stringify(payload?.[0]));
+  const table = payload?.[1] as GSValue[];
+  check('and the table under it is a four', table?.length === 4, String(table?.length));
+  check('whose first number is how many rows follow', table?.[0] === '1', JSON.stringify(table?.[0]));
+  const columns = table?.[2] as GSValue[];
+  const rows = table?.[3] as GSValue[];
+  check('the columns are the 46 keys the exe names', columns?.length === LADDER_KEYS.length, String(columns?.length));
+  check('each one a pair whose first string is the name', (columns?.[0] as GSValue[])?.[0] === 'RATING', JSON.stringify(columns?.[0]));
+  check('no column name is longer than the 32 characters the getter copies', columns.every((column) => ((column as GSValue[])[0] as string).length <= 32));
+  // The rule that decides everything: 0x432b10 counts the cells against the columns and
+  // returns error 3 if they differ. A row is never shortened, however empty the stat.
+  check('one row came back', rows?.length === 1, String(rows?.length));
+  check('with exactly one cell per column, which 0x432b10 checks', (rows?.[0] as GSValue[])?.length === columns?.length, String((rows?.[0] as GSValue[])?.length));
+  // And every cell is a whole decimal number: the field getter runs strtol over it and
+  // insists the whole string was consumed (0x431f20), so "1500 " or "N/A" is a refusal.
+  check(
+    'and every cell a plain decimal, which is all strtol will take',
+    (rows?.[0] as GSValue[]).every((cell) => typeof cell === 'string' && /^-?\d+$/.test(cell)),
+    JSON.stringify((rows?.[0] as GSValue[])?.slice(0, 4)),
+  );
+  check('the rating in it is the one we hold', (rows?.[0] as GSValue[])?.[0] === String(STARTING_RATING), JSON.stringify((rows?.[0] as GSValue[])?.[0]));
+  check('the rating is named in the log too', asked[0]!.note.includes(String(STARTING_RATING)), asked[0]?.note);
   const stats = new Ladder(join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-ladder.json')).row('Senyaak');
   check('with all 46 named fields in the store', Object.keys(stats).length === 46, String(Object.keys(stats).length));
   check('starting rated, not at zero', stats['RATING'] === STARTING_RATING, String(stats['RATING']));
@@ -839,6 +871,10 @@ console.log('\nThe ladder, from the query the client really sent');
 
 console.log('\nAdding a friend, from the right-click the client really sent');
 {
+  // Its own file, emptied first: a store that outlives the process would otherwise
+  // answer "already there" to the first check and pass for last week's reasons.
+  const friendsFile = join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-friends.json');
+  rmSync(friendsFile, { force: true });
   const router = new RouterService(
     { address: '127.0.0.1', port: 40001 },
     { address: '127.0.0.1', port: 40030 },
@@ -846,6 +882,7 @@ console.log('\nAdding a friend, from the right-click the client really sent');
     { address: '127.0.0.1', port: 40040 },
     join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-ladder.json'),
     join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-profiles.json'),
+    friendsFile,
   ).session('router');
   router.username = 'Senyaak';
 
@@ -861,9 +898,22 @@ console.log('\nAdding a friend, from the right-click the client really sent');
   // nowhere — the same trick that makes our friends LOGIN reply land.
   const key = answer?.body?.[0] as Uint8Array;
   check('and it names the message it answers, in one byte', key instanceof Uint8Array && key.length === 1 && key[0] === 75, JSON.stringify(key));
-  const payload = answer?.body?.[1] as GSValue[];
-  check('with the friend named in a list beside it', payload?.[0] === 'Senyaak', JSON.stringify(payload));
-  check('and a number after him, which the parser reads as an int', payload?.[1] === '0', JSON.stringify(payload?.[1]));
+  // A STRING, not a list. 0x4292d0 fetches field 1 with the getter at 0x4426c0, which
+  // refuses anything whose kind is not 1 — which is exactly how the list we used to
+  // send was matched, consumed and then dropped without a word.
+  check('with the friend named beside it, as a plain string', answer?.body?.[1] === 'Senyaak', JSON.stringify(answer?.body?.[1]));
+  check('and the friendship is kept, not just acknowledged', clicked[0]!.note.includes('added, 1 friend(s)'), clicked[0]?.note);
+
+  // A nameless request is refused rather than answered with an empty name, and a
+  // refusal's reason is FOUR bytes: 0x442620 compares the blob's length with what the
+  // reader asked for and says no to anything else.
+  const empty = router.receive(
+    build({ property: Property.GS, priority: 0, type: MessageType.ADDFRIEND, sender: 4, receiver: 2, body: ['', '', new Uint8Array(4)] }),
+  );
+  const refused = parse(empty[0]!.replies[0]!);
+  check('an ADDFRIEND with no name is refused', refused?.type === MessageType.GSFAIL, String(refused?.type));
+  const reason = (refused?.body?.[1] as GSValue[])?.[0];
+  check('and its reason is a four-byte blob under the key', reason instanceof Uint8Array && reason.length === 4, JSON.stringify(reason));
 }
 
 console.log('\nThe profile, from the read the client really asked for');

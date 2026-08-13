@@ -7,16 +7,16 @@
 // chosen here rather than scattered through the wire code.
 //
 // What is measured and what is guessed:
-//   measured  the key names, their order, and that the client asks for one row
-//             pivoted on a player (LadderQuery_RequestPivotUser)
-//   guessed   how a row is laid out in the reply — `ladderRow` marks it, and the
-//             client's own log line is the oracle: `LadderQueryRcv_RequestReply`
-//             prints "succeeded" or "ladder query request failed,reason=…"
+//   measured  the key names, their order, that the client asks for one row pivoted
+//             on a player (LadderQuery_RequestPivotUser), and — since 13.08.2026 —
+//             the whole layout of the answer, read out of the parser at 0x432c80
+//   guessed   what the two numbers at the head of the table mean, and what the second
+//             string of a column descriptor is for; both are marked below
 //
 // Exports:
 //   LADDER_KEYS         every stat the client names, in the exe's order
 //   Ladder              the store: row(name), record(name, patch), top(n)
-//   ladderRow(...)      one row as the reply carries it
+//   ladderPayload(...)  the whole result table, as the reply carries it
 
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -98,6 +98,18 @@ export class Ladder {
     return fresh;
   }
 
+  /**
+   * A row for a player the SERVER invents, put in without touching the file.
+   *
+   * The guest's numbers are code, not history: writing them out would mean every test
+   * that builds a service leaves a row behind in whatever ladder file it defaulted to.
+   * A player who really exists gets his row through `record`.
+   */
+  seed(name: string, stats: LadderStats): void {
+    if (this.players.has(name)) return;
+    this.players.set(name, { ...this.row(name), ...stats });
+  }
+
   /** Change some of a player's numbers and write the file. */
   record(name: string, patch: LadderStats): LadderStats {
     const row = { ...this.row(name), ...patch };
@@ -126,14 +138,47 @@ export class Ladder {
 }
 
 /**
- * One row as the reply carries it: the player, then his numbers as named pairs.
+ * The result table, in the shape the client's own parser takes it apart in.
  *
- * **This layout is the guess in the whole file.** What is known is that the client
- * enumerates entries (`LadderQuery_StartResultEntryEnumeration`) and then asks each
- * one for a field BY NAME (`LadderQuery_GetCurrentEntryField`), which is why the keys
- * travel with the values instead of being implied by position. If the client reads it
- * as something else, its log says so in one line — see the file header.
+ * Read at 0x432c80, which is the whole of what a successful ladder answer has to be.
+ * Every step of it refuses in silence, so each one is worth naming:
+ *
+ *   payload[0]  a decimal string that must read as **1** (0x443740 is atoi on a
+ *               string field); anything else and the parser returns 7, which the
+ *               caller turns into "failed, reason 63"
+ *   payload[1]  the table, a list of four:
+ *     [0], [1]  two numbers (0x4435c0, atoi). They are kept as fields of the result
+ *               (+8 and +0xC); +8 is what the game reads back as a count. Ours are
+ *               the number of rows and 0 — **the meaning is a guess**, and the only
+ *               one left in this file
+ *     [2]       the COLUMNS: a list of pairs of strings, each at most 32 characters.
+ *               Element 0 is the column's name and it is pushed onto the result's own
+ *               ordered vector; element 1 goes into a second map and nothing we have
+ *               read ever looks at it — "1" is ours, and a guess
+ *     [3]       the ROWS: a list of lists of strings, at most 128 characters each
+ *
+ * The rule that makes or breaks it: 0x432b10 compares a row's cell count with the
+ * column count and returns error 3 if they differ — so every row is exactly as long
+ * as the column list, no shortcuts for absent stats. Each row becomes a map from
+ * column name to cell, and `LadderQuery_GetCurrentEntryField` runs the cell through
+ * `strtol` and insists the WHOLE cell was consumed (0x431f20). So every value here is
+ * a plain decimal number: no names, no empty cells, no units.
+ *
+ * The verdict is one line in the game's log — `LadderQueryRcv_RequestReply: (38,…)`
+ * and `LadderQuery_StartResultEntryEnumeration(…) succeeded` against "ladder query
+ * request failed,reason=…", where 63 is a bad tag and 64 a table the parser gave up on.
  */
-export function ladderRow(name: string, stats: LadderStats, keys: readonly string[] = LADDER_KEYS): GSValue[] {
-  return [name, keys.map((key) => [key, String(stats[key] ?? 0)])];
+export function ladderPayload(
+  rows: readonly LadderStats[],
+  keys: readonly string[] = LADDER_KEYS,
+): GSValue[] {
+  return [
+    '1',
+    [
+      String(rows.length),
+      '0',
+      keys.map((key) => [key, '1']),
+      rows.map((row) => keys.map((key) => String(Math.trunc(row[key] ?? 0)))),
+    ],
+  ];
 }

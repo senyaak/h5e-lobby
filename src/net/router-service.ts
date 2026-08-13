@@ -473,11 +473,18 @@ export class RouterSession {
             this.profiles.set(key, bytes);
             notes.push(`saved ${bytes.length} byte(s), sent as a ${typeof written === 'string' ? 'string' : 'blob'}`);
           }
-          const stored = this.profiles.get(key) ?? Buffer.alloc(0);
-          notes.push(stored.length ? `handing back ${stored.length} byte(s)` : 'nothing stored yet');
-          const sent = this.answerModule(
-            build(reply(message, moduleReplyBody(subtype, [new Uint8Array(stored), String(stored.length), '0'], requestId))),
-          );
+          // A record that was never written is REFUSED, not answered with nothing. "Here
+          // it is" followed by zero bytes is a lie, and the client believed it exactly
+          // that far: it read the answer (the probe says so — "the profile length read
+          // said 1"), made no profile out of it, and put up "Не удалось создать профиль".
+          // A refusal is the truth and the client has a path for it, the same one the
+          // ladder's refusal already travels.
+          const stored = this.profiles.get(key);
+          notes.push(stored ? `handing back ${stored.length} byte(s)` : 'nothing stored — refusing, there is no such record');
+          const answer = stored
+            ? moduleReplyBody(subtype, [new Uint8Array(stored), String(stored.length), '0'], requestId)
+            : moduleFailureBody(subtype, 'no such record', requestId);
+          const sent = this.answerModule(build(reply(message, answer)));
           return {
             note:
               `${subtype === String(GET_DATA) ? 'PROFILE read' : 'PROFILE write'} — ${where}, ` +

@@ -903,21 +903,17 @@ console.log('\nThe profile, from the read the client really asked for');
   // number nested there the reply is passed over in silence.
   const answer = parse(read[0]!.replies[0]!);
   check('the answer is a PROXY_HANDLER', answer?.type === MessageType.PROXY_HANDLER, String(answer?.type));
-  check('its first field is the 38 the client compares against', answer?.body?.[0] === '38', String(answer?.body?.[0]));
+  // NOTHING STORED IS A REFUSAL, not a success carrying nothing. Answered "38" with a
+  // zero-length record the client read it happily — the probe said "the profile length
+  // read said 1" — made no profile of it and put up "could not create a profile". 39 is
+  // the truth, and it is the shape the ladder's refusal already travels.
+  check('with nothing stored it refuses, rather than saying yes to nothing', answer?.body?.[0] === '39', String(answer?.body?.[0]));
   const carried = answer?.body?.[1] as GSValue[];
   check('the request number is nested where the matcher looks', carried?.[0] === '1025', String(carried?.[0]));
   check('and what carries it is a three, as the reader wants', carried?.length === 3, String(carried?.length));
   // The capture asked with id 2, so 2 is what has to come back: it is looked up among
   // the pending requests, not counted.
   check('its last field being the id the request carried', carried?.[2] === '2', JSON.stringify(carried?.[2]));
-  const record = carried?.[1] as GSValue[];
-  // The kinds are what the client's getters insist on: the record is a BLOB at index 0
-  // and its length a decimal string at index 1, because 0x442620 refuses anything but a
-  // blob and refuses one whose length is not that number. With the length zero the
-  // client never looks at the record at all.
-  check('the record itself is a blob, not a string', record?.[0] instanceof Uint8Array, typeof record?.[0]);
-  check('with nothing stored, its length is nought', record?.[1] === '0', JSON.stringify(record?.[1]));
-  check('and the field after it is there too', record?.[2] === '0', JSON.stringify(record?.[2]));
 
   // WHERE it goes, which cost more to learn than what is in it. The module's queue is
   // fed by the router's connection, and a reply on the socket the request came in on is

@@ -129,18 +129,21 @@ export function build(message: Omit<GSMessage, 'size'>): Buffer {
  * short. That is the other half of what went wrong with the ladder: its row was sent
  * as a nested list where the client reads a number.
  *
- * And the list under the number is a THREE, always: `[number, payload, count]`. Both
- * readers fetch index 2 of it as a number before they look at anything else — the
- * ladder at 0x42c8d2, the profile at 0x42b4c4 — so a reply that stops at the payload
- * is refused there, and the probe inside the game is what finally said so:
+ * And the list under the number is a THREE: `[number, payload, requestId]`. Index 2 is
+ * fetched as a number and then LOOKED UP among the requests the client is waiting on
+ * (0x42c8d2 then 0x42b810 for the ladder, 0x42b4c4 for the profile); a value that
+ * matches nothing pending ends the read then and there, without a word. So the id the
+ * request carried has to come back in it — which is what "the client registers each
+ * request in a map keyed by id" meant all along, in the one place it is read.
  *
- *   reading the status for request 1281 … said 1, and the status is 39
- *   the ladder read said 0
- *
- * The status was read; what came after it was one field short.
+ * The reading that finally got this right was done with `net-probe --frame`, which
+ * names each `[esp+N]` slot from the function's entry instead of leaving the arithmetic
+ * to the eye. Three readings by eye, three different wrong answers; one with the tool,
+ * and the three reads it makes are plain: body[1] a list, its [1] a list, its [2] a
+ * number that must be the pending request's id.
  */
-export function moduleReplyBody(request: number | string, fields: readonly GSValue[], count = '0'): GSValue[] {
-  return [String(MessageType.GSSUCCESS), [String(request), [...fields], count]];
+export function moduleReplyBody(request: number | string, fields: readonly GSValue[], requestId: string): GSValue[] {
+  return [String(MessageType.GSSUCCESS), [String(request), [...fields], requestId]];
 }
 
 /**
@@ -148,11 +151,11 @@ export function moduleReplyBody(request: number | string, fields: readonly GSVal
  *
  * The status branch is shorter — 0x427242 reads the list under the number and takes
  * its field 0 — but the reader that runs afterwards does not care whether the answer
- * was yes or no: it fetches index 2 of `[number, …]` either way. So a refusal is the
- * same three, with an empty payload and a count of nothing.
+ * was yes or no: it fetches index 2 and looks the id up either way. So a refusal is
+ * the same three, with the reason where the payload goes.
  */
-export function moduleFailureBody(request: number | string, reason: string): GSValue[] {
-  return [String(MessageType.GSFAIL), [String(request), [reason], '0']];
+export function moduleFailureBody(request: number | string, reason: string, requestId: string): GSValue[] {
+  return [String(MessageType.GSFAIL), [String(request), [reason], requestId]];
 }
 
 /** An answer to `to`: its type, its parties the other way round, our body. */

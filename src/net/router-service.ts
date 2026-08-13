@@ -430,7 +430,7 @@ export class RouterSession {
           const pivotEntry = Array.isArray(pivotList) ? pivotList[1] : undefined;
           const pivot = Array.isArray(pivotEntry) && typeof pivotEntry[0] === 'string' ? pivotEntry[0] : this.username;
           const stats = this.ladder.row(pivot);
-          const sent = this.answerModule(build(reply(message, moduleFailureBody(LADDER_QUERY, 'no row yet'))));
+          const sent = this.answerModule(build(reply(message, moduleFailureBody(LADDER_QUERY, 'no row yet', requestId))));
           return {
             note:
               `LADDER query ${requestId} about "${pivot}" — refused ${sent.where}; ` +
@@ -457,6 +457,9 @@ export class RouterSession {
         // takes the record as absent, which is the honest answer for a player who has
         // never saved one.
         if (subtype === String(GET_DATA) || subtype === String(SET_DATA)) {
+          // The id it asked with, which has to come back inside the answer: index 2 of
+          // the list under the number is looked up among the requests still pending.
+          const requestId = typeof message.body?.[1] === 'string' ? message.body[1] : '1';
           const args = Array.isArray(message.body?.[2]) ? message.body[2] : [];
           const key = recordKeyOf(args, this.username);
           const where = `${key.user}'s ${key.section} profile in ${key.game}`;
@@ -473,7 +476,7 @@ export class RouterSession {
           const stored = this.profiles.get(key) ?? Buffer.alloc(0);
           notes.push(stored.length ? `handing back ${stored.length} byte(s)` : 'nothing stored yet');
           const sent = this.answerModule(
-            build(reply(message, moduleReplyBody(subtype, [new Uint8Array(stored), String(stored.length), '0']))),
+            build(reply(message, moduleReplyBody(subtype, [new Uint8Array(stored), String(stored.length), '0'], requestId))),
           );
           return {
             note:

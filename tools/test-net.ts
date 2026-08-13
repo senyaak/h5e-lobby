@@ -822,11 +822,12 @@ console.log('\nThe ladder, from the query the client really sent');
   const refusal = answer?.body?.[1] as GSValue[];
   check('the request number is nested where the matcher looks for it', refusal?.[0] === '1281', String(refusal?.[0]));
   check('and the reason is a string at index 0 under it', typeof (refusal?.[1] as GSValue[])?.[0] === 'string', JSON.stringify(refusal?.[1]));
-  // The three. A reply that stops at the payload is refused at 0x42c8d2, which fetches
-  // index 2 as a number whatever the status said — the probe caught exactly that: "the
-  // status is 39" and then "the ladder read said 0".
-  check('and it is a THREE: number, payload, count', refusal?.length === 3, String(refusal?.length));
-  check('with the count a number, which is what is read there', refusal?.[2] === '0', JSON.stringify(refusal?.[2]));
+  // The three, and the third is the REQUEST ID. 0x42c8d2 reads index 2 as a number and
+  // 0x42b810 then looks it up among the requests still pending; anything that matches
+  // nothing pending ends the read without a word, which is what "the ladder read said
+  // 0" was while the status right before it read fine.
+  check('and it is a THREE: number, payload, request id', refusal?.length === 3, String(refusal?.length));
+  check('with the id the client asked with, which is what is looked up', refusal?.[2] === '1', JSON.stringify(refusal?.[2]));
   // The rating itself is ours and it is kept, so nothing is lost by not sending it.
   check('the rating is still recorded on our side', asked[0]!.note.includes(String(STARTING_RATING)), asked[0]?.note);
   const stats = new Ladder(join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-ladder.json')).row('Senyaak');
@@ -906,7 +907,9 @@ console.log('\nThe profile, from the read the client really asked for');
   const carried = answer?.body?.[1] as GSValue[];
   check('the request number is nested where the matcher looks', carried?.[0] === '1025', String(carried?.[0]));
   check('and what carries it is a three, as the reader wants', carried?.length === 3, String(carried?.length));
-  check('its last field being the number read at 0x42b4c4', carried?.[2] === '0', JSON.stringify(carried?.[2]));
+  // The capture asked with id 2, so 2 is what has to come back: it is looked up among
+  // the pending requests, not counted.
+  check('its last field being the id the request carried', carried?.[2] === '2', JSON.stringify(carried?.[2]));
   const record = carried?.[1] as GSValue[];
   // The kinds are what the client's getters insist on: the record is a BLOB at index 0
   // and its length a decimal string at index 1, because 0x442620 refuses anything but a

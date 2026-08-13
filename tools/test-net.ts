@@ -23,7 +23,7 @@ import { LADDER_KEYS, Ladder, STARTING_RATING } from '../src/net/ladder.ts';
 import { Accounts } from '../src/net/accounts.ts';
 import { Friends } from '../src/net/friends.ts';
 import { openDatabase } from '../src/net/database.ts';
-import { IrcService, frame, unframe } from '../src/net/irc.ts';
+import { IrcService, chatLine, frame, lobbyChannel, unframe } from '../src/net/irc.ts';
 import { readFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1220,9 +1220,12 @@ console.log('\nChat, unwrapped from what the client actually sent');
   const joined = chat.receive(JOIN);
   const lines = joined[0]!.replies.flatMap((reply) => unframe(reply).lines);
   check('a channel join is echoed with a member list', lines.length === 3, JSON.stringify(lines));
-  check('the echo is the join itself', lines[0] === ':Senyaak JOIN :#LobbyGrp1.1', String(lines[0]));
+  // The colon is IRC's "rest of the line" marker, not part of the name: the client
+  // JOINs ":#LobbyGrp1.2" and then talks to "#LobbyGrp1.2", and kept as they arrived
+  // those are two channels — a message to one reaching nobody sitting in the other.
+  check('the echo is the join itself, with the name as a name', lines[0] === ':Senyaak JOIN #LobbyGrp1.1', String(lines[0]));
   check('the names list ends properly', lines[2]?.includes('366') === true, String(lines[2]));
-  check('and the channel is remembered', chat.channels.has(':#LobbyGrp1.1'));
+  check('and the channel is remembered without the colon', chat.channels.has('#LobbyGrp1.1'));
 
   // The guest talks, and he has no connection to talk down. Everything about a second
   // player rests on a line reaching a client from somebody who is not himself, and
@@ -1235,14 +1238,21 @@ console.log('\nChat, unwrapped from what the client actually sent');
   const namesList = listener.receive(JOIN)[0]!.replies.flatMap((reply) => unframe(reply).lines);
   check('the guest is in the name list a joiner gets', namesList[1]?.endsWith(`:Senyaak ${GUEST}`) === true, String(namesList[1]));
 
-  const said = service.say(GUEST, ':#LobbyGrp1.1', "I'M THE BEST!");
+  // And the channel is named server FIRST — entering channel 2 on lobby server 1 joins
+  // "#LobbyGrp1.2", off the wire. Read the other way round the guest talked into a
+  // channel that does not exist, and his first run was silent.
+  check('a lobby channel is server first, group second', lobbyChannel(2) === '#LobbyGrp1.2', lobbyChannel(2));
+  const said = service.say(GUEST, '#LobbyGrp1.1', chatLine(GUEST, "I'M THE BEST!"));
   check('a line from the guest reaches whoever is in the channel', said.to.length === 1, String(said.to.length));
+  // The text carries the client's own presentation, verbatim from a line Сеня typed:
+  // nick, colour, size, two flags, font, and only then the words. A bare sentence is
+  // not a chat line to this client, which is the other half of why nothing appeared.
   check(
-    'and it is an ordinary PRIVMSG, which is all the client knows how to read',
-    unframe(said.line).lines[0] === `:${GUEST} PRIVMSG :#LobbyGrp1.1 :I'M THE BEST!`,
+    'and it is an ordinary PRIVMSG, wrapped the way the client wraps its own',
+    unframe(said.line).lines[0] === `:${GUEST} PRIVMSG #LobbyGrp1.1 :${GUEST}%16777215%9%0%0%Arial%I'M THE BEST!`,
     String(unframe(said.line).lines[0]),
   );
-  check('nobody hears it in a channel they are not in', service.say(GUEST, ':#LobbyGrp9.1', 'hello').to.length === 0);
+  check('nobody hears it in a channel they are not in', service.say(GUEST, '#LobbyGrp9.1', 'hello').to.length === 0);
 }
 
 console.log('\nThe keep-alive, and the channel counts');

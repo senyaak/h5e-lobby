@@ -27,7 +27,7 @@ import { fileURLToPath } from 'node:url';
 import { NatService } from '../src/net/nat-service.ts';
 import { GUEST, GUEST_LOBBY, RouterService } from '../src/net/router-service.ts';
 import { CdKeyService } from '../src/net/cdkey-service.ts';
-import { IrcConnection, IrcService } from '../src/net/irc.ts';
+import { IrcConnection, IrcService, chatLine, lobbyChannel } from '../src/net/irc.ts';
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -175,13 +175,14 @@ const BOT_SAYS = "I'M THE BEST!";
 const BOT_EVERY = 2 * 60 * 1000;
 if (!process.argv.includes('--quiet-bot')) {
   setInterval(() => {
-    // Only where he actually is. A player is in one channel at a time and so is the
-    // guest — a voice from a channel nobody is sitting in would be a bug pretending
-    // to be a feature. The chat's channel is `#LobbyGrp<lobby>.<server>`, and the
-    // client sends the name with a colon in front of it, so it is matched by the
-    // lobby number rather than rebuilt from one.
-    for (const channel of irc.channels.filter((name) => new RegExp(`#LobbyGrp${GUEST_LOBBY}\\.`).test(name))) {
-      const { line, to } = irc.say(GUEST, channel, BOT_SAYS);
+    // Only where he actually is: his channel, named the way the client spells it —
+    // `#LobbyGrp<server>.<group>`, server FIRST. Written the other way round the first
+    // time, and he then talked into a channel that does not exist, which is why the
+    // first run of this bot was silent. The other half of that silence was the text:
+    // a chat line carries the client's own presentation inside it (`chatLine`), and a
+    // bare sentence is not something it knows how to draw.
+    for (const channel of irc.channels.filter((name) => name === lobbyChannel(GUEST_LOBBY))) {
+      const { line, to } = irc.say(GUEST, channel, chatLine(GUEST, BOT_SAYS));
       for (const listener of to) chatSockets.get(listener)?.write(line);
       if (to.length) log(`IRC  ${GUEST} -> ${channel}: ${BOT_SAYS} (to ${to.length} listener(s))`);
     }

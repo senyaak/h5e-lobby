@@ -67,6 +67,44 @@ export interface IrcEvent {
   broadcast: Array<{ channel: string; line: Buffer }>;
 }
 
+/**
+ * A channel name as it is stored and compared.
+ *
+ * The client JOINs `:#LobbyGrp1.2` and then PRIVMSGs to `#LobbyGrp1.2` — the colon is
+ * IRC's "the rest of the line is one argument" marker and it belongs to the wire, not
+ * to the name. Kept as it arrived, the two spellings are two different channels: a
+ * message addressed to one reaches nobody sitting in the other, which is precisely
+ * what player-to-player chat would have done the first time two clients tried it.
+ */
+function channelName(raw: string): string {
+  return raw.replace(/^:/, '');
+}
+
+/**
+ * The channel of a lobby, as the client spells it: `#LobbyGrp<server>.<group>`.
+ *
+ * Server FIRST, group second — off the wire, where entering channel 2 on lobby server
+ * 1 joins `#LobbyGrp1.2`. Read the other way round (which is how it was written the
+ * first time) the guest talked into a channel that does not exist and nobody heard a
+ * thing.
+ */
+export function lobbyChannel(group: number, server = 1): string {
+  return `#LobbyGrp${server}.${group}`;
+}
+
+/**
+ * One line of chat, in the wrapper the client puts round its own.
+ *
+ * Verbatim from a message Сеня typed: `Senyaak%16777215%9%0%0%Arial%123` — the nick,
+ * a colour as a decimal RGB, a size, two flags nobody has identified, a font name, and
+ * only then the text. The client packs its own presentation into the message body
+ * because IRC carries no room for it, and it parses what arrives the same way: a bare
+ * sentence is not a chat line to it.
+ */
+export function chatLine(nick: string, text: string, colour = 0xffffff, size = 9, font = 'Arial'): string {
+  return `${nick}%${colour}%${size}%0%0%${font}%${text}`;
+}
+
 export class IrcConnection {
   nick = '';
   readonly channels = new Set<string>();
@@ -110,7 +148,7 @@ export class IrcConnection {
         event.note = `IRC user ${rest.join(' ')}`;
         break;
       case 'JOIN': {
-        const channel = rest[0] ?? '';
+        const channel = channelName(rest[0] ?? '');
         if (channel) {
           this.channels.add(channel);
           const names = [this.nick, ...this.residents.filter((name) => name !== this.nick)];
@@ -125,7 +163,7 @@ export class IrcConnection {
         break;
       }
       case 'PART': {
-        const channel = rest[0] ?? '';
+        const channel = channelName(rest[0] ?? '');
         this.channels.delete(channel);
         event.replies.push(frame(`:${this.nick} PART ${channel}`));
         event.broadcast.push({ channel, line: frame(`:${this.nick} PART ${channel}`) });
@@ -137,7 +175,7 @@ export class IrcConnection {
         event.note = 'IRC ping';
         break;
       case 'PRIVMSG': {
-        const target = rest[0] ?? '';
+        const target = channelName(rest[0] ?? '');
         const text = rest.slice(1).join(' ');
         const said = frame(`:${this.nick} PRIVMSG ${target} ${text}`);
         if (target.startsWith('#')) event.broadcast.push({ channel: target, line: said });

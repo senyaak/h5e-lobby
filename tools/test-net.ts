@@ -1402,8 +1402,20 @@ console.log('\nThe login on the wire, which is where an account is made');
   check('and named as a returning player', again[0]!.note.includes('password matched'), again[0]?.note);
 
   const wrong = login('Senyaak', 'archer');
-  check('a wrong password is REFUSED', parse(wrong[0]!.replies[0]!)?.type === MessageType.GSFAIL, wrong[0]?.note);
+  const refusal = parse(wrong[0]!.replies[0]!);
+  check('a wrong password is REFUSED', refusal?.type === MessageType.GSFAIL, wrong[0]?.note);
   check('and the log says why', wrong[0]!.note.includes('wrong password'), wrong[0]?.note);
+
+  // In the shape the client's own parser reads, and nothing else reaches it: 0x42ac00
+  // asks 0x428fd0 for the reply, which wants field 0 to be a ONE-byte blob repeating
+  // the request (102) and — for a 39 — field 1 to be a LIST whose field 0 is a
+  // FOUR-byte blob. Sent with a string there, the refusal was dropped in the parser
+  // and the login screen sat there saying nothing, which is how this was found.
+  const key = refusal?.body?.[0];
+  check('the refusal repeats the request as a one-byte blob', key instanceof Uint8Array && key.length === 1 && key[0] === MessageType.LOGIN, JSON.stringify(key));
+  const why = (refusal?.body?.[1] as GSValue[])?.[0];
+  check('and carries a four-byte reason under it', why instanceof Uint8Array && why.length === 4, JSON.stringify(why));
+  check('which is 9 — the client\'s own number for a wrong password', why instanceof Uint8Array && Buffer.from(why).readUInt32LE(0) === 9, JSON.stringify(why));
 
   // The password must not be in the log, and the log is the one place it could leak:
   // everything else about a body goes in whole, and this is the exception that makes

@@ -15,8 +15,8 @@
 //
 //   node tools/net-server.ts [--host 127.0.0.1] [--http 8080]
 //
-// The log goes to _tmp/net/ as well as the console, in full — a truncated dump
-// of an unknown protocol is worth nothing.
+// The log goes to logs/ as well as the console, in full — a truncated dump of an
+// unknown protocol is worth nothing. logs/latest.log is whichever run is current.
 
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createServer as createTcpServer, type Socket } from 'node:net';
@@ -76,17 +76,29 @@ function serversIni(): string {
   return `${lines.join('\r\n')}\r\n`;
 }
 
-const logDir = join(repo, '_tmp', 'net');
+// Where the log goes: `logs/`, which is where this server's first version put it and
+// where Сеня looks. It moved to `_tmp/net/` at some point and the only thing that
+// announced the move was a line in this file's own header — so the obvious place kept
+// a log from the day before and every run after that looked like a server that had
+// stopped writing. Sessions before 13.08.2026 are still in `_tmp/net/`.
+//
+// TWO files, always: `session-<stamp>.log` keeps every run, and `latest.log` is the
+// run happening now — a name that can be tailed without looking up a timestamp first,
+// and the reason is that this server is usually started by somebody else's hand.
+const logDir = join(repo, 'logs');
 mkdirSync(logDir, { recursive: true });
 const started = new Date();
 const stamp = started.toISOString().replace(/[:.]/g, '-');
-const logFile = createWriteStream(join(logDir, `session-${stamp}.log`));
+const sessionPath = join(logDir, `session-${stamp}.log`);
+const logFile = createWriteStream(sessionPath);
+const latest = createWriteStream(join(logDir, 'latest.log'));
 
 function log(line: string): void {
   const at = new Date().toISOString().slice(11, 23);
   const text = `${at}  ${line}`;
   console.log(text);
   logFile.write(`${text}\n`);
+  latest.write(`${text}\n`);
 }
 
 /** Hex and text, 16 bytes to a line, however long the buffer is. */
@@ -314,5 +326,5 @@ for (const service of [...SERVICES, PROXY, LOBBY]) {
   }
 }
 
-log(`logging to ${join(logDir, `session-${stamp}.log`)}`);
+log(`logging to ${sessionPath} — and to ${join(logDir, 'latest.log')}, which is always this run`);
 log(`serving this list:\n${serversIni().replace(/\r\n/g, '\n')}`);

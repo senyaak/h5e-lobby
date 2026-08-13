@@ -175,6 +175,14 @@ function reasonCode(code: number): GSValue {
 }
 
 /**
+ * The reasons themselves, in the client's own numbering — read off
+ * NUbi::NLAN::SContext::CanEnterGame (0xdeebe0), where the client refuses a LAN game
+ * on the server's behalf and so has to name the reasons the way the server does.
+ * Only the ones seen there are named; the rest are numbers nobody has read yet.
+ */
+const WRONG_PASSWORD = 9;
+
+/**
  * How a message body goes into the log: whole, with blobs as hex.
  *
  * A login is the one message whose fields nobody has ever listed — the name is field 0
@@ -476,13 +484,31 @@ export class RouterSession {
         }
         const verdict: LoginVerdict = this.accounts.login(this.username, password);
         if (verdict === 'wrong-password') {
-          // The client knows this path — "router login failed,reason=" — and it is the
-          // only thing this server can say about it, so it says it rather than letting
-          // a stranger in under somebody's name.
+          // The client knows this path — "router login failed,reason=" — but it only
+          // knows it in ONE shape, and the first refusal we sent was not it: a wrong
+          // password left the screen sitting there with nothing said, and the game's own
+          // log showed CStateWaitLoginRouterResult entered and then left again without
+          // ProcessLoginRouterResult ever running. The reply was dropped BEFORE the
+          // handler, in the parser, and the parser says what it wants (13.08.2026):
+          //
+          //   the router queue's drainer (0x41b620) hands key 102 to 0x42ac00, which
+          //   asks 0x428fd0 to open the reply: the type must be 38 or 39 (0x428fe9),
+          //   field 0 must be a ONE-byte blob whose value is 102 again, and for a 39 —
+          //   and only for a 39 — field 1 must be a LIST whose own field 0 is a
+          //   FOUR-byte blob (0x429053). That blob is the reason.
+          //
+          // A string there is refused by 0x442620 exactly as a blob of the wrong length
+          // would be, and the whole reply is then thrown away without a word. Which is
+          // what "ничего не происходит" was.
+          //
+          // 9 is the client's own number for this: NUbi::NLAN::SContext::CanEnterGame
+          // (0xdeebe0) is the client playing server for a LAN game, and it refuses with
+          // 1 for a version mismatch, 2 for a checksum, 5 for no such game and 9 right
+          // after logging "wrong password".
           return {
-            note: `LOGIN as "${this.username}" REFUSED — wrong password, ${said}`,
+            note: `LOGIN as "${this.username}" REFUSED — wrong password, reason ${WRONG_PASSWORD}, ${said}`,
             replies: [
-              build(reply(message, [messageId(MessageType.LOGIN), ['1']], MessageType.GSFAIL)),
+              build(reply(message, [messageId(MessageType.LOGIN), [reasonCode(WRONG_PASSWORD)]], MessageType.GSFAIL)),
             ],
           };
         }

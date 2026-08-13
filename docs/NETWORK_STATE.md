@@ -8,7 +8,7 @@ to be recovered from memory.
 ## How to run it
 
 ```bash
-node tools/net-server.ts            # all our services, one process, logs to _tmp/net/
+node tools/net-server.ts            # all our services, one process, logs to logs/
 node tools/net-server.ts --ghosts   # plus synthetic players in every channel
 node tools/net-server.ts --seed-profile   # hand a first-time player a minimal profile
 ```
@@ -31,7 +31,7 @@ Two logs matter, and they answer different questions:
 
 | log | says |
 |---|---|
-| `_tmp/net/session-*.log` | every byte in and out of our services, decoded |
+| `logs/latest.log` (and `logs/session-*.log`) | every byte in and out of our services, decoded — `latest.log` is always the run happening now |
 | `<game copy>/bin/homm5-editor-*.log` | **the game's own narration**, mirrored by our DLL |
 
 The second one is the important one and it exists because of
@@ -802,6 +802,34 @@ random bytes of salt, compared with `timingSafeEqual`, and it is never written t
 log — the login body goes into the log whole, but every string after the name goes in
 as its LENGTH, which is enough to identify the field and useless to anyone reading the
 file.
+
+### A refusal has one shape, and a string in it is the same as silence
+
+The first wrong password did nothing at all: the screen sat there, and the game's own
+log showed `CStateWaitLoginRouterResult` entered and left again with
+`ProcessLoginRouterResult` never running. The refusal was thrown away one step earlier
+than the handler — in the parser — and the parser is exact about what it takes:
+
+| where | what it insists on |
+|---|---|
+| `0x41b620` | the router queue's drainer; key 102 (`LOGIN`) goes to `0x42ac00` |
+| `0x428fd0` | type must be **38 or 39**, and field 0 a **one-byte** blob repeating 102 |
+| `0x429053` | for a **39 only**: field 1 must be a **list** whose field 0 is a **four-byte** blob — the reason |
+| `0x442620` | reads a blob of exactly the asked-for length; anything else is `false`, and `false` means the whole reply is dropped without a word |
+
+So a refusal is `39`, `[<1 byte: 102>, [<4 bytes: reason>]]`. We had sent the reason as
+the string `"1"`, which is why nothing happened. This is the same shape the friends
+refusal already used — the two were found on different days and only the second one
+made it a rule.
+
+Past the parser, `ProcessLoginRouterResult` (0xe0e500) compares the type byte at `+0x0C`
+with `0x26` and, when it is not, logs `router login failed,reason=<the dword at +0x10>`
+and posts `{0x16, 1, reason}` to the state machine's listener.
+
+**The reason numbers are the client's own.** `NUbi::NLAN::SContext::CanEnterGame`
+(0xdeebe0) is the client playing server for a LAN game, so it has to name refusals the
+way the server does: `1` version mismatch, `2` checksum mismatch, `5` no such game,
+`9` wrong password. We send 9.
 
 Two things to know before the next launch:
 

@@ -16,7 +16,7 @@ service at this machine.
 
 ```bash
 npm install
-npm start                             # every service, one process, logs to _tmp/net/
+npm start                             # every service, one process, logs to logs/latest.log
 npm test                              # 260+ checks against bytes a real client sent
 npm run typecheck
 node tools/net-decode.ts --file dump.txt   # a hex dump from the log, back into a message

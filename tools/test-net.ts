@@ -1697,6 +1697,87 @@ console.log('\nStarting the game: the chain both players wait on');
   check('and it is said plainly in the log', alone[0]!.note.includes('no room of his'), alone[0]?.note);
 }
 
+console.log('\nRating a rated game: the ladder, written once');
+{
+  const dbPath = join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-rating.db');
+  rmSync(dbPath, { force: true });
+  const service = new RouterService(
+    { address: '127.0.0.1', port: 40001 },
+    { address: '127.0.0.1', port: 40030 },
+    { address: '127.0.0.1', port: 40031 },
+    { address: '127.0.0.1', port: 40040 },
+    dbPath,
+  );
+  const lobbyMsg = (body: GSValue[]): Buffer =>
+    build({ property: Property.GS, priority: 0, type: MessageType.LOBBY_MSG, sender: 4, receiver: 2, body });
+
+  const host = service.session('lobby');
+  host.username = 'Senyaak';
+  host.send = () => {};
+  const guest = service.session('lobby');
+  guest.username = 'Player2';
+  guest.send = () => {};
+
+  // A room of our own making, so the CHANNEL can be chosen: rated games are the ones
+  // played in the rated channel, which is our rule — the client asks for one ladder and
+  // never says which channel it means.
+  const settings = Buffer.from([0x02, 0x08, 0xff, 0xff, 0xff, 0xff, 0x03, 0x08, 0xff, 0xff, 0xff, 0xff]);
+  const hostRoom = (channel: number, name: string): string => {
+    const made = host.receive(
+      lobbyMsg([
+        String(LobbyMsg.CREATE_ROOM),
+        [String(channel), name, 'HEROES', '7', '2', '0', settings, '', '3.1', '1.0', new Uint8Array(0)],
+      ]),
+    );
+    return String(((parse(made[0]!.replies[0]!)?.body?.[1] as GSValue[])?.[1] as GSValue[])?.[0]);
+  };
+
+  // The real table of the third rated match, with the names changed: the guest won it
+  // playing faction 1, the host lost playing faction 7, and it took 267 seconds.
+  const resultsFor = (matchId: string): GSValue[] => [
+    matchId,
+    '0',
+    ['Senyaak', '21', '22', '4194303', ['0', '7', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '2', '0', '65536', '267', '0', '0', '0', '1']],
+    ['Player2', '21', '22', '4194303', ['1', '1', '0', '350', '0', '0', '0', '0', '0', '1', '0', '0', '0', '0', '0', '1', '98304', '267', '0', '0', '0', '0']],
+  ];
+
+  const rated = hostRoom(2, 'A rated game');
+  guest.receive(lobbyMsg([String(LobbyMsg.JOIN_ROOM), [rated, '', '448', '0', '']]));
+  const started = host.receive(lobbyMsg([String(LobbyMsg.START_MATCH), [rated]]));
+  check('a game in the rated channel is marked rated when it starts', started[0]!.note.includes('RATED'), started[0]?.note);
+
+  const first = host.receive(lobbyMsg([String(LobbyMsg.SUBMIT_MATCH), resultsFor(rated)]));
+  check('the result is settled, and the log says how', first[0]!.note.includes('beat'), first[0]?.note.split('\n')[0]);
+  const winner = service.ladder.row('Player2');
+  const loser = service.ladder.row('Senyaak');
+  // Even ratings, so the winner takes half of K and the loser gives it up.
+  check('the winner gains sixteen from an even start', winner['RATING'] === 1516, String(winner['RATING']));
+  check('and the loser gives up the same', loser['RATING'] === 1484, String(loser['RATING']));
+  check('a game is counted for both', winner['GAMES_PLAYED'] === 1 && loser['GAMES_PLAYED'] === 1);
+  check('as a win and a loss', winner['WINS'] === 1 && loser['LOSSES'] === 1);
+  check('with the streaks each player is on', winner['CUR_WINS_STREAK'] === 1 && loser['CUR_LOSSES_STREAK'] === 1 && winner['MAX_WINS_STREAK'] === 1);
+  // The profile draws hours played and average game length out of this one.
+  check('the time played is the match, in seconds', winner['TOT_TIME_PLAYED'] === 267, String(winner['TOT_TIME_PLAYED']));
+  // Faction 1 is PRESERVE and faction 7 is ORCS, and the profile has a row per faction.
+  check('the win is credited to the faction he played', winner['W_PRESERVE'] === 1, JSON.stringify({ W_PRESERVE: winner['W_PRESERVE'] }));
+  check('and the loss to his', loser['L_ORCS'] === 1, JSON.stringify({ L_ORCS: loser['L_ORCS'] }));
+
+  // AND THE SECOND COPY CHANGES NOTHING. Both players submit the same table, a second
+  // apart — a ladder written straight from the message would count every game twice.
+  const second = guest.receive(lobbyMsg([String(LobbyMsg.SUBMIT_MATCH), resultsFor(rated)]));
+  check('the other player’s copy of the same table is answered too', second[0]!.replies.length === 2, second[0]?.note.split('\n')[0]);
+  check('but it does not count the game again', service.ladder.row('Player2')['GAMES_PLAYED'] === 1, String(service.ladder.row('Player2')['GAMES_PLAYED']));
+  check('nor move the rating a second time', service.ladder.row('Player2')['RATING'] === 1516, String(service.ladder.row('Player2')['RATING']));
+
+  // And a game in an ordinary channel is played, reported, answered — and not rated.
+  const casual = hostRoom(1, 'A casual game');
+  guest.receive(lobbyMsg([String(LobbyMsg.JOIN_ROOM), [casual, '', '448', '0', '']]));
+  const unrated = host.receive(lobbyMsg([String(LobbyMsg.START_MATCH), [casual]]));
+  check('a game in another channel is not marked rated', unrated[0]!.note.includes('unrated'), unrated[0]?.note);
+  host.receive(lobbyMsg([String(LobbyMsg.SUBMIT_MATCH), resultsFor(casual)]));
+  check('and its result leaves the ladder alone', service.ladder.row('Player2')['GAMES_PLAYED'] === 1, String(service.ladder.row('Player2')['GAMES_PLAYED']));
+}
+
 console.log('\nThe keep-alive, and the channel counts');
 {
   const service = new RouterService(

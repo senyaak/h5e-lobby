@@ -252,6 +252,36 @@ export class Presence {
   }
 }
 
+/**
+ * The matches that have been started, so a result is judged once and only once.
+ *
+ * **Both players submit the same table**, a second or two apart — measured, three times —
+ * so a ladder written straight from the message would count every game twice, once per
+ * player. And whether a game is rated is known at START_MATCH (from the channel its room
+ * is in) but not at SUBMIT_MATCH, by which time the room may already be gone.
+ *
+ * The id is the one we hand out in `MATCH_STARTED` and the client quotes back.
+ */
+export class Matches {
+  private readonly started = new Map<string, { rated: boolean; settled: boolean }>();
+
+  start(matchId: string, rated: boolean): void {
+    this.started.set(matchId, { rated, settled: false });
+  }
+
+  rated(matchId: string): boolean {
+    return this.started.get(matchId)?.rated ?? false;
+  }
+
+  /** True for the FIRST result of a match, false for every one after it. */
+  settle(matchId: string): boolean {
+    const match = this.started.get(matchId);
+    if (!match || match.settled) return false;
+    match.settled = true;
+    return true;
+  }
+}
+
 /** The rooms that exist, per lobby. Ours to keep; nothing else knows them. */
 export class Rooms {
   private readonly rooms = new Map<number, Room>();

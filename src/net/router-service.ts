@@ -26,13 +26,15 @@ import { hostU32String } from './address.ts';
 import { Accounts, type LoginVerdict } from './accounts.ts';
 import { openDatabase } from './database.ts';
 import { Friends, friendUpdate, type FriendState } from './friends.ts';
-import { Ladder, ladderPayload } from './ladder.ts';
+import { Ladder, ladderPayload, matchResult, settleMatch } from './ladder.ts';
 import { GET_DATA, PersistentStore, SET_DATA, recordKeyOf } from './persistent-store.ts';
 import {
   DEFAULT_LOBBIES,
+  GameMode,
   GroupType,
   LobbyMsg,
   Lsm,
+  Matches,
   PlayerStatus,
   Presence,
   RoomUpdate,
@@ -282,6 +284,8 @@ export class RouterSession {
   private readonly rooms: Rooms;
   /** Also shared: the ratings, which outlive every connection. */
   private readonly ladder: Ladder;
+  /** And the matches under way, so a result counts once however many report it. */
+  private readonly matches: Matches;
   /** And who is in which channel, which is what a player list is made of. */
   private readonly presence: Presence;
   /** And the players' profiles, which are the server's to keep. */
@@ -320,6 +324,7 @@ export class RouterSession {
     lobbyServer: Endpoint,
     rooms: Rooms,
     ladder: Ladder,
+    matches: Matches,
     presence: Presence,
     profiles: PersistentStore,
     friends: Friends,
@@ -340,6 +345,7 @@ export class RouterSession {
     this.lobbyServer = lobbyServer;
     this.rooms = rooms;
     this.ladder = ladder;
+    this.matches = matches;
     this.presence = presence;
   }
 
@@ -1459,8 +1465,15 @@ export class RouterSession {
           }
           const running: GSValue[] = [String(MessageType.GSSUCCESS), matchStartedEntry(room)];
           const told = this.tellRoomThat(room, running);
+          // Whether this game counts is decided HERE, while the room still exists and
+          // still knows which channel it was made in. By the time the results arrive the
+          // host may have left and taken the room with him.
+          const rated = room.eventId === GameMode.RATED;
+          this.matches.start(String(room.id), rated);
           return {
-            note: `START_MATCH — "${room.name}" (${room.id}) is running, ${told} other(s) told`,
+            note:
+              `START_MATCH — "${room.name}" (${room.id}) is running${rated ? ' and RATED' : ', unrated'}, ` +
+              `${told} other(s) told`,
             replies: [this.lobbyYes(message, subtype, room), build(reply(message, running))],
           };
         }
@@ -1514,11 +1527,24 @@ export class RouterSession {
           // only at the type byte and the id. The new ratings do not travel here; the
           // client goes and asks the ladder. So each player gets his rating as it stands,
           // which is honest and parses.
+          // AND THE LADDER IS WRITTEN, once. Both players submit the same table a second
+          // or two apart, so the first of them settles the match and the second finds it
+          // settled; and only a game started in the rated channel counts, which is our
+          // rule rather than the protocol's — the client asks for one ladder and never
+          // says which channel it is about.
+          let settled = '';
+          if (this.matches.rated(matchId) && this.matches.settle(matchId)) {
+            const results = rows.map((row) => matchResult(row)).filter((result) => result !== null);
+            settled = `, ${settleMatch(this.ladder, results)}`;
+          }
+          // The ratings that go back out are read AFTER that, so the winner sees his new
+          // one — though the client does not read them here anyway and asks the ladder
+          // itself a moment later.
           const standings: GSValue[] = played.map((name) => [name, [String(this.ladder.row(name)['RATING'] ?? 0)]]);
           return {
             note:
               `SUBMIT_MATCH ${matchId} — results from ${this.username} for ${played.join(' vs ')}, ` +
-              `answered and the final results pushed back\n` +
+              `answered and the final results pushed back${settled}\n` +
               `             the table as it arrived: ${said(inner)}`,
             replies: [
               build(reply(message, [String(MessageType.GSSUCCESS), [subtype, [matchId]]])),
@@ -1772,6 +1798,7 @@ export class RouterService {
   private readonly proxyWaitModule: Endpoint;
   private readonly lobbyServer: Endpoint;
   private readonly rooms = new Rooms();
+  private readonly matches = new Matches();
   /** Shared by every desk, because a rating belongs to the player, not the socket. */
   readonly ladder: Ladder;
   /** Likewise: who is in which channel is the same fact on every connection. */
@@ -1839,6 +1866,7 @@ export class RouterService {
       this.lobbyServer,
       this.rooms,
       this.ladder,
+      this.matches,
       this.presence,
       this.profiles,
       this.friends,

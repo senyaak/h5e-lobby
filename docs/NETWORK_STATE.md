@@ -75,20 +75,22 @@ lobby login        -> accepted, three channels pushed
 IRC                -> "IRC welcome", "IRC join channel succeeded"
 join channel       -> "join lobby succeeded(GroupID=1,LobbySrvID=1)"
 NAT address        -> "address request succeeded,address=1.0.0.127:40010"
-ladder             -> refused on purpose, in the one shape that is fully known
-profile            -> read and written for real, kept in data/profiles.json
+ladder             -> answered, MATCHED, and dropped inside the body reader
+profile            -> the same; the store behind it works, the reply's body does not
+friends (add)      -> the same again: type 75 answered, matched, dropped in its parser
+player list        -> WORKS (12.08.2026): the panel draws him
 create game        -> CREATE_ROOM answered, room 100 in the channel
 join own room      -> "LobbyRcv_RoomInfo", then CStateInRoom / CStateWaitingForPlayers
 settings changes   -> GROUP_CONFIG_UPDATE_RES answered, the room echoed back
 leaving a game     -> destroyed here, announced with GROUP_REMOVE, gone from his list
 joining a dead one -> refused with GSFAIL and a reason, instead of silence
-player list        -> was empty for one reason, found in the exe and fixed (below);
-                      not yet confirmed in a live run
 ```
 
-So a player logs in, enters a channel, hosts a game and **sits in it waiting for
-players**; games appear and disappear correctly. The player list has its answer and
-wants one run to confirm it. The second client is the thing nothing has exercised.
+So a player logs in, enters a channel with his name in its player list, hosts a game and
+**sits in it waiting for players**; games appear and disappear correctly. Three things —
+the ladder, the profile and adding a friend — are answered, matched, and then dropped
+inside the client's own body readers; that is now ONE question with three faces, and a
+probe says exactly where each dies. The second client is the thing nothing has exercised.
 
 ## Facts worth not re-learning
 
@@ -115,6 +117,20 @@ wants one run to confirm it. The second client is the thing nothing has exercise
 - **Order matters: the room info goes out BEFORE the acceptance.** The client
   dispatches in arrival order, so given the "yes" first it runs
   `ProcessJoinRoomReply` against a list that is still empty.
+- **Silence means a getter said no, and the getters are typed.** Every reply that "was
+  ignored" turned out to be found and consumed, then dropped inside a parser because a
+  field was the wrong KIND — a list where a number is read, a string where a blob is.
+  Nothing in this protocol reports that; the message simply stops. So when a reply gets no
+  reaction, the question is never "did it arrive" but "which field is the wrong kind".
+- **Measure before the third guess.** Reading the client's code found the right answer
+  five times and the wrong one twice, and each wrong reading cost a launch — Сеня's launch.
+  The probe (editor repo, `--log net/ubi-module-probe`) settles in one run what two rounds
+  of reading could not, and it is cheap now that it exists.
+- **A detour's head must end where an instruction ends.** Five bytes is what the jump
+  needs, not what the head is: the trampoline is the copied head plus a jump past it, so a
+  head cut mid-instruction resumes the original inside one and the game dies at an address
+  belonging to nothing. `npm run test-native-anchors` now checks this for every head a
+  detour displaces.
 - **A member's status field decides whether he is ever seen.** The channel's player panel
   (0x9108f0) returns immediately unless it is 0 — silently, and after the game log has
   already announced the arrival. Every other part of the message can be right and the
@@ -200,6 +216,9 @@ the editor repo.
 | the ladder reply handler (three arguments) and the request map | 0xDF4080 / 0x41DF10 |
 | the servers-config fetch, and why an error code names no step | 0xE07A50 / 0xE075B1 |
 | **a module reply: the matcher, and the status/number check** | 0x4286F0 / 0x427170 |
+| the queue a received message is pushed onto, and the drainer's key | 0x4285E0 / 0x4288D0 |
+| the readers a matched reply then goes through: ladder, profile | 0x42C7F0 / 0x42AEC0 + 0x42B400 |
+| the friends reply's own parser | 0x425340 |
 | the getters, by kind: list, string, number, blob | 0x442F10 / 0x4435C0 / 0x443680 / 0x442510 |
 | a module request is sent and registered here | 0x41DF10 |
 | the profile: read request and reply, write request | 0x42B100 + 0x42AEC0 / 0x42B1E0 |
@@ -332,7 +351,36 @@ their logins — "PS login succeeded" is in the game's log, and the ladder servi
 "initializing Ladder Query Service...succeeded" (it is local, no exchange). So the
 silence was never a login problem.
 
-### And it is STILL ignored, so one thing is being measured
+### Measured, at last: three of the four stages are RIGHT
+
+A probe inside the game (`native/net/ubi-module-probe.c` in the editor repo, built with
+`--log net/ubi-module-probe`) watched the points a reply has to pass. Its answer, for our
+ladder refusal:
+
+```
+module probe: queued a message of type 204
+module probe:   into the queue at 955393712      <- the MODULE queue
+module probe: dispatching request …0501          <- keyed 1281, correct
+module probe: scanned for request 1281
+module probe:   found a message of type 204      <- MATCHED
+```
+
+So the envelope, the routing, the queue and the matcher are all right; the reply is found
+and consumed. **What is left is the body**, read after the match by 0x427170 and then by
+the request's own reader, each of which returns false without a word when a field is not
+the kind it wants. The same run shows the friends reply matched too (`scanned for request
+75, found a message of type 38`), so that one dies in the same place — its parser.
+
+The queue addresses in that log are worth keeping, because they name the subsystem a
+message was classified into: the friends queue and the lobby queue and the module queue
+are 24 bytes apart (…640, …688, …712), and a reply in the wrong one is a reply nobody
+will look for.
+
+Also measured, and it settles a guess that cost two runs: the game **closes 40030 within
+a second** of being handed to 40031, exactly as it closes 40000 after 40001. There is
+only ever one live socket per desk, and we were always answering on it.
+
+### The older question, and why it was the wrong one
 
 Every step of the client's path has now been read and it should accept the reply above:
 the router (0x41b150) puts a 204 into the module queue at CClient2+0x1b8; the drainer

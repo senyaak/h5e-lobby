@@ -28,6 +28,7 @@ import { NatService } from '../src/net/nat-service.ts';
 import { GUEST, GUEST_LOBBY, RouterService } from '../src/net/router-service.ts';
 import { CdKeyService } from '../src/net/cdkey-service.ts';
 import { IrcConnection, IrcService, chatLine, lobbyChannel } from '../src/net/irc.ts';
+import { probeRoomFields } from '../src/net/lobby.ts';
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -144,6 +145,12 @@ const router = new RouterService(
 // it puts players there who do not exist.
 router.ghosts = process.argv.includes('--ghosts');
 if (router.ghosts) log('ghosts on — GhostList, GhostBlob and GhostJoin will be in every channel');
+
+// A diagnostic for one launch: every room field we are unsure of goes out as its own
+// number, so the extension's dump of the record says where each of them landed. Games
+// are not joinable while it is on — the version field is deliberately nonsense.
+probeRoomFields.on = process.argv.includes('--probe-room-fields');
+if (probeRoomFields.on) log('probe-room-fields on — room fields 3,4,5,6,11,14,15 go out as 8003…8015; nothing will be joinable');
 
 // The guest is not a ghost: he is a player with a name, a blob and a ladder row, and
 // he is here so that the things needing SOMEBODY ELSE — a profile read about another

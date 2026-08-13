@@ -281,24 +281,45 @@ export class Rooms {
  * `allowed_games` and `games` are empty for a room: the game it belongs to is
  * already settled by the channel it is in.
  */
+/**
+ * A diagnostic, off unless `--probe-room-fields` is on the command line.
+ *
+ * The client packs our twenty fields into a record whose layout is ours to work out,
+ * and it REFUSES to let anybody join a game whose version field is not one it knows
+ * (0x10000…0x10032, or 0x20000/0x20001 — 0x8768B0 and 0xDE2660). Ours reads 0x30001,
+ * which is (field 4 << 16) | field 3 — our channel id and our "1" — so at least those
+ * two are not where we thought they were.
+ *
+ * One field at a time is one launch at a time. With this on, every number we are not
+ * sure of goes out as its own recognisable value (8003 for field 3, 8004 for field 4,
+ * and so on), and the probe's dump of the record then says where each of them landed —
+ * the whole map in a single run. The game will not be joinable during it; that is what
+ * a diagnostic is.
+ */
+export const probeRoomFields = { on: false };
+
+function numbered(field: number, real: string): string {
+  return probeRoomFields.on ? String(8000 + field) : real;
+}
+
 export function roomEntry(room: Room): GSValue[] {
   return [
     String(room.type),
     room.name,
     String(room.id),
-    '1',
-    String(room.parentId),
-    String(Lsm.ALLINFO | (room.password ? Lsm.PRIVATE : 0)),
-    '1',
+    numbered(3, '1'),
+    numbered(4, String(room.parentId)),
+    numbered(5, String(Lsm.ALLINFO | (room.password ? Lsm.PRIVATE : 0))),
+    numbered(6, '1'),
     room.master,
     '',
     '',
     room.info,
-    String(room.eventId),
+    numbered(11, String(room.eventId)),
     String(room.maxPlayers),
     String(room.members.length),
-    String(room.maxVisitors),
-    '0',
+    numbered(14, String(room.maxVisitors)),
+    numbered(15, '0'),
     room.gameVersion,
     room.gsVersion,
     room.address,

@@ -238,37 +238,45 @@ value)`, and they come out in id order 0…21 — which confirms that the positi
 IS the stat id, and nothing more. **They are not ladder keys**: id 0 would be RATING, and
 it arrives as 0 or 1.
 
-Two rated matches, both on the same map, both between the same two accounts:
+Three rated matches, same map, same two accounts. The third was played on purpose with
+the **host losing**, which is what separated "who won" from "which seat":
 
 ```
-             id: 0  1  3    9  14 15 16     17   19   21
-game A (18:56)  the host was Senyaak2
-  Senyaak       0  1  980  1  2  0  65536  474  0    0
-  Senyaak2      1  7  0    0  0  1  65536  474  250  1
-game B (20:38)  the host was Senyaak, and RED won
-  Senyaak       1  7  0    0  0  1  65536  111  250  1
-  Senyaak2      0  1  0    1  1  0  65536  111  0    0
+             id: 0  1  3    9  14 15 16      17   19   21
+game A (18:56)  host Senyaak2
+  Senyaak       0  1  980  1  2  0  65536   474  0    0
+  Senyaak2      1  7  0    0  0  1  65536   474  250  1
+game B (20:38)  host Senyaak, and RED won
+  Senyaak       1  7  0    0  0  1  65536   111  250  1
+  Senyaak2      0  1  0    1  1  0  65536   111  0    0
+game C (20:49)  host Senyaak, and he LOST — BLUE won
+  Senyaak       0  7  0    0  2  0  65536   267  0    1
+  Senyaak2      1  1  350  1  0  1  98304   267  0    0
 ```
 
-(Every id not listed was 0 for both players in both games.)
+(Every id not listed was 0 for everybody in all three.)
 
-What can be said:
+Game C also came with the end-of-game screens of both players, which turns guesses into
+readings:
 
-- **id 17 is the length of the match in seconds**, near enough: 474 against 495 seconds of
-  wall clock, 111 against 93 — the difference being the load before play starts.
-- **id 16 is 65536 for everybody, always** — a version or a fixed-point 1.0, not a
-  measurement.
-- **ids 0, 15, 21 and 19 travel together**, one player getting 1/1/1/250 and the other
-  0/0/0/0, and **id 9 travels the other way**. One of them is the win. But in BOTH games
-  that set belonged to **the player who hosted the room** — and in game B the host also
-  won. So "who won" and "which seat" are still the same column as far as the data goes.
-- **id 1 is 7 for that player and 1 for the other, in both games.** If it is the faction,
-  the two of them kept their seats; it moved with the seat, not with the account.
+| id | what it is | how it was read |
+|---|---|---|
+| **0** | **the WIN, 1 or 0** | C's winner was the guest, not the host — the column followed the winner. Confirmed against A and B, and against "red won" in B. |
+| 1 | the faction | 7 for the player who played Stronghold, 1 for Sylvan; it stays with the SEAT across games, not with the account |
+| 9 | the seat/colour | 0 for red, 1 for blue in all three; it is why this and the faction looked like they carried the result |
+| 14 | heroes lost — **or** battles lost | red's screen says both, and both are 2; nothing in three games separates them |
+| 15 | towns captured — **or** heroes killed | blue's screen says both, and both are 1 |
+| 17 | **the match in seconds** | 267 exactly matches the wire (20:49:40 → 20:54:07); 474 vs 495 and 111 vs 93 differ by the load |
+| 16 | 65536, and 98304 once | 0x10000 and 0x18000 — a fixed-point 1.0 and 1.5. Not read. |
+| 3, 19 | 980, 350, 250 | nothing on either screen matches these. Not read. |
+| 21 | artefacts collected | red's screen: 1 artefact, and red has 21:1 in B and C; blue, with none, has 0 |
 
-**The experiment that separates them is one match in which the host LOSES.** If the set
-follows the winner, it is the result; if it stays with the host, it is the seat and the
-result is elsewhere. Until then the table is logged whole and **the ladder is left
-alone** — a rating computed from a column nobody has identified would be worse than none.
+Plenty on the screens — gold, creatures recruited, resources — **does not travel at all**,
+so the table is a selection, not a dump.
+
+**id 0 is enough to rate a game**: it names the winner outright, and the length is in id 17
+if a rating should care about it. Nothing computes a rating yet — that is a decision about
+numbers, not about the protocol.
 
 ## The 46 keys, in the exe's own order
 

@@ -1060,15 +1060,28 @@ SUBMIT_MATCH 30       <- from BOTH, the whole results table
 MATCH_FINISH 45       <- once every player has stopped
 ```
 
-The shapes are in [LADDER.md](LADDER.md), including why 71 must not be wrapped. **A duel
-sends none of this** — it goes from `GAME_CONNECTED` straight into play and ends with
-`GAME_FINISH` 35 — which is why an earlier version of this section declared the rated
-branch dead code and removed the `MATCH_STARTED` push as an unprovable guess. It was
-proved by the next game. The gate on `[ctx+0xE8]` (0xE12DC3) is real, its polarity was
-read correctly, and what sets the byte the first time is still not found: it is not the
-channel, not `eventId`, not our push, and not anything the room carries — the code between
-`GAME_CONNECTED` and the gate reads none of them. **Answer the rated chain unconditionally;
-it turns on without us.**
+The shapes are in [LADDER.md](LADDER.md), including why 71 must not be wrapped.
+
+**THE CHANNEL DECIDES, measured three ways on 13.08.2026:**
+
+| channel | eventId | what was played | `START_MATCH` | how it ended |
+|---|---|---|---|---|
+| 1v1 | 2 | a duel | no | `GAME_FINISH` 35, no table |
+| Ranked | 1 | an ordinary map | **yes** | the whole chain, results submitted |
+| Casual | 0 | the same ordinary map | no | `GAME_FINISH` 35, no table |
+
+The last two differ in nothing but the channel they were hosted in, so **a game is rated
+because it was made in the rated channel** — the client's own decision, not a rule of ours.
+Which also means the gate on `[ctx+0xE8]` (0xE12DC3) is fed from the channel somewhere: the
+byte is not written anywhere in NUbi except after a StartMatchReply, and the code between
+`GAME_CONNECTED` and the gate reads nothing about the room, so whatever sets it lives
+outside that range and has not been found. It does not matter for the server — **answer the
+rated chain unconditionally, and decide what to COUNT by the channel**, which is what
+`Matches` does.
+
+An earlier version of this section declared the whole rated branch dead code and removed
+the `MATCH_STARTED` push as an unprovable guess, on the evidence of the duel. The next game
+disproved it.
 
 **`GAME_FINISH` (35) is how a game ends, and it is not answered.** `ProcessGameFinish`
 (0xE1CFE0) branches on the same dead flag, so every game takes the unrated door:

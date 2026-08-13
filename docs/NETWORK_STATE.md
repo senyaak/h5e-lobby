@@ -857,6 +857,25 @@ which a second client is by definition half the time. The port is a config line 
 expected: `own-profile` on in that copy, and `net_game_port = 8889` in its own
 `Profiles/global_a2.cfg`. Both are documented in the editor repo's `docs/QOL.md`.
 
+**What two clients showed at once (13.08.2026), and what each cost:**
+
+- *the player list did not refresh* and *a game did not appear* — one fix, above: nobody
+  was ever told anything. GROUP_INFO to everybody else in the channel, on four triggers.
+- *the host was not told when somebody entered his game* — the same again one level down,
+  a room's GROUP_INFO **with its members**, and only where somebody actually joined or
+  left. A member list sent after a mere settings update is read as an arrival and starts
+  the loop that once spammed "somebody joined" several times a second.
+- *profiles worked for the guest only* — because the guest was the only one with a record
+  and everybody else was refused. Refusing is honest and it is also a profile screen that
+  does not open, so **every player with no record now gets the seed**; `--seed-profile` is
+  gone as a flag, it is simply what happens. The first write from any client still
+  replaces it, and every write is still hex-dumped.
+- *the game appears but Join stays grey* — OPEN. Reading gives two candidates and no way
+  to choose: the row is drawn from `[record+0x34]` (a padlock) and `[record+0x90]`
+  (STARTED), either of which would explain it; or the button is simply dead because
+  nothing is selected, which is what 0x799140 decides by asking the list. The editor repo
+  has a probe printing both — `--log net/ubi-room-probe`.
+
 **Two clients want two accounts.** The first login of a name creates it, so the second
 client logs in as another name and nothing has to be prepared here.
 

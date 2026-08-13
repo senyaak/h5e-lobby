@@ -150,8 +150,8 @@ if (router.ghosts) log('ghosts on — GhostList, GhostBlob and GhostJoin will be
 // player, a friend to add, a rating that is not one's own — can be tried with one
 // copy of the game. He sits in the Ranked channel — one channel, because a player is
 // in one channel at a time and so is he.
-router.seedProfile = process.argv.includes('--seed-profile');
-if (router.seedProfile) log('seed-profile on — a player with no profile is handed a minimal one, to see what his profile screen does with it');
+// `--seed-profile` was here and is now what always happens: a player with no profile of
+// his own is handed a minimal one, because refusing is a profile screen that stays shut.
 
 // One database now holds accounts, profiles, ratings and friendships (src/net/database.ts).
 if (router.imported.length) log(`brought across from the old JSON files: ${router.imported.join(', ')}`);

@@ -1168,11 +1168,13 @@ console.log('\nThe profile, from the read the client really asked for');
   // number nested there the reply is passed over in silence.
   const answer = parse(read[0]!.replies[0]!);
   check('the answer is a PROXY_HANDLER', answer?.type === MessageType.PROXY_HANDLER, String(answer?.type));
-  // NOTHING STORED IS A REFUSAL, not a success carrying nothing. Answered "38" with a
-  // zero-length record the client read it happily — the probe said "the profile length
-  // read said 1" — made no profile of it and put up "could not create a profile". 39 is
-  // the truth, and it is the shape the ladder's refusal already travels.
-  check('with nothing stored it refuses, rather than saying yes to nothing', answer?.body?.[0] === '39', String(answer?.body?.[0]));
+  // NOTHING STORED IS A SEED, not a refusal and not a success carrying nothing. All
+  // three were tried: a zero-length record the client read happily and made nothing of
+  // ("could not create a profile"); a refusal it understood and answered by keeping the
+  // profile screen shut, which is what двойной клик по игроку hit; a minimal document it
+  // takes ("PS get data succeeded") and can then write over.
+  check('with nothing stored it seeds, rather than refusing', answer?.body?.[0] === '38', String(answer?.body?.[0]));
+  check('and the log says the record was ours, so no reader mistakes it for his own', read[0]!.note.includes('seeding'), read[0]?.note);
   const carried = answer?.body?.[1] as GSValue[];
   check('the request number is nested where the matcher looks', carried?.[0] === '1025', String(carried?.[0]));
   check('and what carries it is a three, as the reader wants', carried?.length === 3, String(carried?.length));
@@ -1180,60 +1182,17 @@ console.log('\nThe profile, from the read the client really asked for');
   // the pending requests, not counted.
   check('its last field being the id the request carried', carried?.[2] === '2', JSON.stringify(carried?.[2]));
 
-  // And with `--seed-profile` the same read is answered with a minimal record instead.
-  // That is an EXPERIMENT, not a better answer: nobody has ever seen a profile record,
-  // the client composes them, and it will not write one while its own read fails — so
-  // the refusal is a closed loop and this is the way out of it. The seed is the skeleton
-  // every document the game writes begins with; whether the profile's own tags look
-  // anything like it is what the launch is for.
+  // The record itself, and that it is a whole document rather than a blob of zeroes.
   {
-    const seeding = new RouterService(
-      { address: '127.0.0.1', port: 40001 },
-      { address: '127.0.0.1', port: 40030 },
-      { address: '127.0.0.1', port: 40031 },
-      { address: '127.0.0.1', port: 40040 },
-      join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-seed.db'),
-    );
-
-    seeding.seedProfile = true;
-    const asked = seeding.session('proxy').receive(
-      build({
-        property: Property.GS,
-        priority: 0,
-        type: MessageType.PROXY_HANDLER,
-        sender: 8,
-        receiver: 11,
-        body: ['1025', '2', ['HEROES_29988429c481f219', '0', 'Senyaak', '0', 'PUBLIC']],
-      }),
-    );
-    const seeded = parse(asked[0]!.replies[0]!);
-    check('with --seed-profile the read succeeds instead', seeded?.body?.[0] === '38', String(seeded?.body?.[0]));
-    const payload = (seeded?.body?.[1] as GSValue[])?.[1] as GSValue[];
+    const payload = (answer?.body?.[1] as GSValue[])?.[1] as GSValue[];
     const record = payload?.[0] as Uint8Array;
     check('carrying a record, with its length beside it as the reader insists', record instanceof Uint8Array && payload?.[1] === String(record.length), JSON.stringify(payload?.[1]));
-    check('and the record is a whole document, not a blob of zeroes', readFields(Buffer.from(record)).map((f) => f.tag).join(',') === '4,1', JSON.stringify(readFields(Buffer.from(record)).map((f) => f.tag)));
-    check('the log says it was seeded, so no reader mistakes it for his own', asked[0]!.note.includes('seeding'), asked[0]?.note);
+    check('and the record is a whole document', readFields(Buffer.from(record)).map((f) => f.tag).join(',') === '4,1', JSON.stringify(readFields(Buffer.from(record)).map((f) => f.tag)));
   }
 
-  // And the GUEST has one whatever the flag says. Double-clicking a name asks for that
-  // player's profile, and a refusal is the screen not opening — which is what the guest
-  // was for, so he carries a profile the way he carries a ladder row.
+  // Every player, not only the guest. Double-clicking a name asks for THAT player's
+  // profile, and a name nobody has a record for is every name until a client writes one.
   {
-    const guestAsked = session.receive(
-      build({
-        property: Property.GS,
-        priority: 0,
-        type: MessageType.PROXY_HANDLER,
-        sender: 8,
-        receiver: 11,
-        body: ['1025', '4', ['HEROES_29988429c481f219', '0', GUEST, '0', 'PUBLIC']],
-      }),
-    );
-    const forGuest = parse(guestAsked[0]!.replies[0]!);
-    check("the guest's profile is answered without --seed-profile", forGuest?.body?.[0] === '38', String(forGuest?.body?.[0]));
-    check('and it is his that was asked for', guestAsked[0]!.note.includes(`${GUEST}'s PUBLIC profile`), guestAsked[0]?.note);
-    // The same session refuses everybody else: this is the guest's own rule, not the
-    // flag turned on by the back door.
     const forOther = parse(
       session.receive(
         build({
@@ -1246,7 +1205,19 @@ console.log('\nThe profile, from the read the client really asked for');
         }),
       )[0]!.replies[0]!,
     );
-    check('while a player who never wrote one is still refused', forOther?.body?.[0] === '39', String(forOther?.body?.[0]));
+    check('a player who never wrote one is answered too', forOther?.body?.[0] === '38', String(forOther?.body?.[0]));
+    const guestAsked = session.receive(
+      build({
+        property: Property.GS,
+        priority: 0,
+        type: MessageType.PROXY_HANDLER,
+        sender: 8,
+        receiver: 11,
+        body: ['1025', '4', ['HEROES_29988429c481f219', '0', GUEST, '0', 'PUBLIC']],
+      }),
+    );
+    check('and so is the guest', parse(guestAsked[0]!.replies[0]!)?.body?.[0] === '38', guestAsked[0]?.note);
+    check('each under his own name', guestAsked[0]!.note.includes(`${GUEST}'s PUBLIC profile`), guestAsked[0]?.note);
   }
 
   // WHERE it goes, which cost more to learn than what is in it. The module's queue is
@@ -1475,13 +1446,37 @@ console.log('\nTwo players in one channel, and what the other one is told');
   check('the game is gone from his channel', after.games.length === 0, JSON.stringify(after.games));
   check('and so is the player', !after.names.includes('Player2'), JSON.stringify(after.names));
 
+  // Inside a game, the host has to hear about his guest — nothing else tells him, and a
+  // host who thinks he is alone starts nothing.
+  {
+    const hostRoom = two.receive(capturedCreateRoom());
+    const id = String(((parse(hostRoom[0]!.replies[0]!)?.body?.[1] as GSValue[])?.[1] as GSValue[])?.[0]);
+    second.length = 0;
+    first.length = 0;
+    const joined = one.receive(lobbyMsg([String(LobbyMsg.JOIN_ROOM), [id, '', '448', '0', '']]));
+    check('joining a game tells the people in it', second.length >= 1, joined[0]?.note);
+    check('and the log says so', joined[0]!.note.includes('in the room told'), joined[0]?.note);
+    const room = pushed(second[0]);
+    check('what the host gets is his room', room.group === id, String(room.group));
+    check('with both players in it', room.names.length === 2, JSON.stringify(room.names));
+    // Leaving is the same message with one name fewer.
+    const out = one.receive(lobbyMsg([String(LobbyMsg.GROUP_LEAVE), [id]]));
+    check('and leaving tells him too', out[0]!.note.includes('still in it told'), out[0]?.note);
+    const lastRoom = second.map(pushed).filter((p) => p.group === id).pop();
+    check('with the room down to its host', lastRoom?.names.length === 1, JSON.stringify(lastRoom?.names));
+    two.receive(lobbyMsg([String(LobbyMsg.GROUP_LEAVE), ['1']]));
+    first.length = 0;
+    second.length = 0;
+  }
+
   // A connection dropping is the same news: the client that is still there has no other
   // way of hearing it, and a name that stays is a name nobody can host under again.
   two.receive(lobbyMsg([String(LobbyMsg.JOIN_LOBBY), ['1', '', '384']]));
+  first.length = 0;
   const left = two.close();
-  check('a dropped connection tells the channel', first.length === 5, String(first.length));
+  check('a dropped connection tells the channel', first.length === 1, String(first.length));
   check('and the log says how many heard it', String(left).includes('1 player(s) told'), String(left));
-  check('with him off the list', !pushed(first[4]).names.includes('Player2'), JSON.stringify(pushed(first[4]).names));
+  check('with him off the list', !pushed(first[0]).names.includes('Player2'), JSON.stringify(pushed(first[0]).names));
 }
 
 console.log('\nThe keep-alive, and the channel counts');

@@ -170,12 +170,14 @@ function seatGuest(ladder: Ladder, presence: Presence): void {
 }
 
 /**
- * The record handed to a player who has none, when `--seed-profile` is on.
+ * The record handed to a player who has none — which, so far, is every player.
  *
  * A document of the shape everything the game serialises begins with: a four-byte kind
  * under tag 4, and an empty container under tag 1. What the profile's own tags are is
  * unknown — this exists to break the loop where the client will not write a profile
- * because reading one failed.
+ * because reading one failed. It was `--seed-profile`, an experiment, until the run of
+ * 13.08.2026 showed the loop from the other side: a refusal is a profile screen that
+ * does not open, and no client has ever offered a record of its own to refuse with.
  */
 const SEED_PROFILE = writeFields([
   { tag: 4, value: Buffer.from([4, 0, 0, 0]) },
@@ -292,8 +294,6 @@ export class RouterSession {
   send: ((bytes: Buffer) => void) | null = null;
   /** Seat synthetic players in every channel — a diagnostic, off unless asked for. */
   readonly ghosts: boolean;
-  /** Hand a player with no profile a minimal one, to see what his screen then does. */
-  readonly seedProfile: boolean;
 
   constructor(
     role: Role,
@@ -309,7 +309,6 @@ export class RouterSession {
     desks: Map<string, (bytes: Buffer) => void>,
     peers: Set<RouterSession>,
     ghosts = false,
-    seedProfile = false,
   ) {
     this.desks = desks;
     this.peers = peers;
@@ -317,7 +316,6 @@ export class RouterSession {
     this.friends = friends;
     this.accounts = accounts;
     this.ghosts = ghosts;
-    this.seedProfile = seedProfile;
     this.role = role;
     this.waitModule = waitModule;
     this.proxy = proxy;
@@ -385,6 +383,43 @@ export class RouterSession {
   private tellChannel(lobbyId: number): number {
     const others = this.othersIn(lobbyId);
     for (const peer of others) peer.send?.(peer.channelInfo(UNASKED, lobbyId));
+    return others.length;
+  }
+
+  /**
+   * And the same for the people INSIDE a game: the room, with who is in it now.
+   *
+   * A room's GROUP_INFO is the message the joiner already gets, and the host needs the
+   * same one — nothing else tells him a second player has arrived, and a host looking at
+   * an empty room will not start anything. The mask is the one the client asks a room
+   * with, 448.
+   *
+   * **With the members and only when they changed.** A room info carrying a member list
+   * is read as somebody arriving, and when that was sent after a mere settings update the
+   * client answered with another settings update, which we answered with another member
+   * list, several times a second until the room was closed. So this is called where
+   * somebody actually joined or left, and GROUP_CONFIG_UPDATE_RES still answers with the
+   * room and an empty list.
+   */
+  private tellRoom(room: Room): number {
+    const others = [...this.peers].filter(
+      (peer) =>
+        peer !== this &&
+        peer.role === 'lobby' &&
+        peer.send !== null &&
+        peer.username !== '' &&
+        room.members.includes(peer.username),
+    );
+    for (const peer of others) {
+      peer.send?.(
+        build(
+          reply(UNASKED, [
+            String(LobbyMsg.GROUP_INFO),
+            [String(room.id), String(Lsm.ALLINFO), roomEntry(room), [], peer.membersOf(room)],
+          ]),
+        ),
+      );
+    }
     return others.length;
   }
 
@@ -899,14 +934,11 @@ export class RouterSession {
               replies: sent.replies,
             };
           }
-          // A record that was never written is REFUSED, not answered with nothing. "Here
-          // it is" followed by zero bytes is a lie, and the client believed it exactly
-          // that far: it read the answer (the probe says so — "the profile length read
-          // said 1"), made no profile out of it, and put up "Не удалось создать профиль".
-          // A refusal is the truth and the client has a path for it, the same one the
-          // ladder's refusal already travels.
-          // With `--seed-profile` a player who has none is handed a MINIMAL RECORD
-          // instead, and that is a deliberate experiment rather than a better answer.
+          // A record that was never written is answered with a MINIMAL ONE. Answering
+          // with nothing is a lie the client half-believes — it reads the reply ("the
+          // profile length read said 1"), makes no profile of it and puts up "Не удалось
+          // создать профиль" — and refusing outright is honest and is also the screen
+          // staying shut, which is what двойной клик по игроку did until 13.08.2026.
           //
           // The reasoning: nobody has ever seen a profile record, we cannot invent one,
           // and the only thing that can produce a real one is the client — which will
@@ -921,20 +953,14 @@ export class RouterSession {
           // is a GUESS about the profile's own tags, and the game's log is the verdict:
           // "PS get data succeeded" and then whatever the profile screen does with it.
           //
-          // THE GUEST always has one, flag or no flag. Double-clicking a name in the
-          // panel asks for that player's profile, and for him the answer was a refusal —
-          // "PS get data failed,reason=0" and straight back to CStateOutOfRoom, which is
-          // what "профиль не открывается" was. He exists to be the somebody else there
-          // is to look at, so a profile is part of what he is, the same as his ladder
-          // row. A real player's is still his own to write.
+          // The first write from any client replaces it with the real thing, and that
+          // write is still the only description of the format there will ever be.
           const stored = this.profiles.get(key);
-          const seeded = !stored && (this.seedProfile || key.user === GUEST) ? SEED_PROFILE : null;
+          const seeded = stored ? null : SEED_PROFILE;
           notes.push(
             stored
               ? `handing back ${stored.length} byte(s)`
-              : seeded
-                ? `nothing stored — seeding ${seeded.length} byte(s) to see what the screen does: ${seeded.toString('hex')}`
-                : 'nothing stored — refusing, there is no such record',
+              : `nothing stored — seeding ${seeded!.length} byte(s): ${seeded!.toString('hex')}`,
           );
           const record = stored ?? seeded;
           const answer = record
@@ -1140,10 +1166,20 @@ export class RouterSession {
               ],
             };
           }
-          if (!room.members.includes(this.username)) room.members.push(this.username);
+          const wasIn = room.members.includes(this.username);
+          if (!wasIn) room.members.push(this.username);
           const members = this.membersOf(room);
+          // The host, and anybody else already sitting in there. Without this his room
+          // still says he is alone in it, and a host alone in his room starts nothing.
+          const inside = wasIn ? 0 : this.tellRoom(room);
+          // And the channel, because the game's "2 of 2" is drawn from the same record
+          // in the list everybody else is looking at.
+          const outside = this.tellChannel(room.parentId);
           return {
-            note: `JOIN_ROOM ${roomId} ("${room.name}") — in, ${room.members.length} of ${room.maxPlayers}, mask ${asked}`,
+            note:
+              `JOIN_ROOM ${roomId} ("${room.name}") — in, ${room.members.length} of ${room.maxPlayers}, mask ${asked}` +
+              (inside ? `, ${inside} in the room told` : '') +
+              (outside ? `, ${outside} in the channel told` : ''),
             replies: [
               build(
                 reply(message, [String(LobbyMsg.GROUP_INFO), [String(roomId), String(asked), roomEntry(room), [], members]]),
@@ -1280,7 +1316,12 @@ export class RouterSession {
               removed.push(room.id);
               note = `GROUP_LEAVE ${groupId} — the host left, "${room.name}" is gone`;
             } else {
-              note = `GROUP_LEAVE ${groupId} — ${this.username} left "${room.name}"`;
+              // The room lives on, so the people still in it get it back with one name
+              // fewer — the same message they got when he arrived.
+              const still = this.tellRoom(room);
+              note =
+                `GROUP_LEAVE ${groupId} — ${this.username} left "${room.name}"` +
+                (still ? `, ${still} still in it told` : '');
             }
           } else {
             // The id is a LOBBY, and this is the message a host actually sends when
@@ -1472,8 +1513,6 @@ export class RouterService {
   readonly imported: string[];
   /** Passed to every session: seat synthetic players, to see what the client draws. */
   ghosts = false;
-  /** Likewise: answer a first profile read with a seed instead of the truthful refusal. */
-  seedProfile = false;
   /**
    * How to reach a connection that is not the one being answered.
    *
@@ -1532,7 +1571,6 @@ export class RouterService {
       this.desks,
       this.sessions,
       this.ghosts,
-      this.seedProfile,
     );
     this.sessions.add(session);
     return session;

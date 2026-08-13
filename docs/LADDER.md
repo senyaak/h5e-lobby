@@ -313,25 +313,34 @@ next, and the bar itself is the remainder over 100. The level is then looked up 
 of eleven ranks that lives in the game's data, not the exe —
 `UI/UIGameRoot.(UIGameRoot).xdb`, node `<ranks>` — matched as `min ≤ level < max`:
 
-| rank | levels | so, rating |
-|---|---|---|
-| peasant / slave | 0 … 15 | 0 … 1599 |
-| recruit / minion | 16 … 19 | 1600 … 1999 |
-| scout / harbinger | 20 … 31 | 2000 … 3199 |
-| legionnaire / beast | 32 … 63 | 3200 … 6399 |
-| captain / taskmaster | 64 … 95 | 6400 … 9599 |
-| squire / pack hound | 96 … 127 | 9600 … 12799 |
-| knight / pack leader | 128 … 191 | 12800 … 19199 |
-| champion / ringleader | 192 … 255 | 19200 … 25599 |
-| baron / mastermind | 256 … 319 | 25600 … 31999 |
-| duke / overseer | 320 … 399 | 32000 … 39999 |
-| regent / overlord | 400 and up | 40000 and up |
+Read out of the file itself (`data.pak`, `UI/UIGameRoot.(UIGameRoot).xdb`), eleven bands
+thirty levels wide, each with a good and an evil face:
 
-**Which says what the number was meant to be.** A scale whose top rank begins at 40000 and
-whose first band is 1600 wide is not an Elo rating — it is an accumulating score, points
-per game played. Our 1500 start therefore lands a brand-new player in the FIRST rank
-already (level 15 of a band that ends at 16), and Elo's ±16 a game would keep him there
-for life: a hundred wins would move him one rank.
+| levels | rating | good | evil |
+|---|---|---|---|
+| 0 … 29 | 0 … 2999 | peasant, Haven's Peasant | slave, Inferno's Familiar |
+| 30 … 59 | 3000 … 5999 | recruit, Militiaman | minion, Imp |
+| 60 … 89 | 6000 … 8999 | scout, **Sylvan's Wood Elf** | harbinger, Dark Assassin |
+| 90 … 119 | 9000 … 11999 | legionnaire, Swordsman | beast, Horned Demon |
+| 120 … 149 | 12000 … 14999 | captain, Footman | taskmaster, Blood Witch |
+| 150 … 179 | 15000 … 17999 | squire, **Sylvan's Druid** | Marauder |
+| 180 … 209 | 18000 … 20999 | knight, Cavalier | Vampire Lord |
+| 210 … 239 | 21000 … 23999 | champion, Paladin | ringleader, Matron |
+| 240 … 269 | 24000 … 26999 | baron, Priest | mastermind |
+| 270 … 299 | 27000 … 29999 | duke, **Academy's Giant** | overseer, Arch Devil |
+| 300 and up | 30000 and up | regent, Arch Angel | overlord, Shadow Dragon |
+
+The portrait beside the rank is a CREATURE — the same 128px face the combat arena uses —
+and which creature is fixed by the band, not by what the player plays: the good ladder is
+mostly Haven with a wood elf, a druid and a giant along the way, the evil one mostly
+Inferno and Dungeon with two undead at the end. Twenty-two portraits in all, and a player
+"unlocks" one by reaching the band, which is the whole of that mechanism.
+
+**Which says what the number was meant to be.** A scale whose top rank begins at 30000 and
+whose bands are 3000 wide is not an Elo rating — it is an accumulating score, points per
+game played. Our 1500 start lands a new player halfway through the FIRST band, and Elo's
+±16 a game would keep him there for life: it would take a hundred wins to move a rank at
+all. At a hundred experience per win, the second rank is fifteen wins away.
 
 A rating below zero is worse than useless: the level matches no row and the screen draws an
 empty rank with no icon (0x93D451). Zero itself is fine — level 0, first rank, empty bar —

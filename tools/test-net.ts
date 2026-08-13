@@ -17,8 +17,8 @@ import { KEY_BLOB_SIZE, decryptWith, encryptTo, generateKeyPair, parsePublicKey,
 import { GUEST, GUEST_LOBBY, RouterService, type RouterSession } from '../src/net/router-service.ts';
 import { Blowfish } from '../src/net/blowfish.ts';
 import { CdKeyRequest, CdKeyService } from '../src/net/cdkey-service.ts';
-import { GAME_PORT, LobbyMsg, Lsm, RoomUpdate, playerInfo } from '../src/net/lobby.ts';
-import { readFields, writeFields } from '../src/net/structure.ts';
+import { GAME_PORT, LobbyMsg, Lsm, RoomUpdate, playerInfo, withRating } from '../src/net/lobby.ts';
+import { findField, readFields, writeFields } from '../src/net/structure.ts';
 import { LADDER_KEYS, Ladder, STARTING_RATING } from '../src/net/ladder.ts';
 import { Accounts } from '../src/net/accounts.ts';
 import { Friends } from '../src/net/friends.ts';
@@ -1768,6 +1768,21 @@ console.log('\nRating a rated game: the ladder, written once');
   check('the other player’s copy of the same table is answered too', second[0]!.replies.length === 2, second[0]?.note.split('\n')[0]);
   check('but it does not count the game again', service.ladder.row('Player2')['GAMES_PLAYED'] === 1, String(service.ladder.row('Player2')['GAMES_PLAYED']));
   check('nor move the rating a second time', service.ladder.row('Player2')['RATING'] === 1516, String(service.ladder.row('Player2')['RATING']));
+
+  // THE PANEL'S NUMBER COMES FROM HIS OWN BLOB, and he composes it once, on entering —
+  // so after a rated game it showed what he was worth before it, until he left the channel
+  // and came back. The rating is the one field of that document we own, so it is written
+  // over on the way out and nothing else is touched.
+  const his = playerInfo('Player2', 1500, '192.168.1.5', 8888);
+  const fresher = withRating(his, 1516);
+  const inner = readFields(Buffer.from(fresher)).find((field) => field.tag === 1);
+  const parts = inner ? readFields(inner.value) : [];
+  check('the rating in his blob is brought up to date', Buffer.from(findField(parts, 5) ?? Buffer.alloc(0)).readInt32LE(0) === 1516);
+  check('and his name is left exactly as he wrote it', findField(parts, 2)?.toString('utf8') === 'Player2');
+  check('as is the rest of it, byte for byte', findField(parts, 4)?.equals(findField(readFields(readFields(Buffer.from(his)).find((f) => f.tag === 1)!.value), 4) ?? Buffer.alloc(0)) === true);
+  // A document we do not recognise is his and stays his.
+  const foreign = new Uint8Array([9, 4, 1, 2]);
+  check('a blob we cannot read goes back untouched', Buffer.from(withRating(foreign, 1600)).equals(Buffer.from(foreign)));
 
   // And a game in an ordinary channel is played, reported, answered — and not rated.
   const casual = hostRoom(1, 'A casual game');

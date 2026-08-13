@@ -18,7 +18,7 @@
 //   lobbyEntry(lobby)     one lobby as the client reads it
 
 import { type GSValue } from './gs-data.ts';
-import { writeFields } from './structure.ts';
+import { readFields, writeFields } from './structure.ts';
 
 /**
  * LOBBY_MSG subtypes — the whole table, not only what we answer today.
@@ -520,6 +520,39 @@ export function playerInfo(name: string, rating: number, address = '127.0.0.1', 
       ]),
     },
   ]);
+}
+
+/**
+ * His own blob, with the rating brought up to date — and nothing else touched.
+ *
+ * The rating drawn beside a name in the channel comes from tag 5 of the player's own
+ * player-info document (0xdfea70 reads it into `+0x38`, and `OnMemberJoined` 0x9108f0
+ * copies that into the row). **The client composes that document once, when it enters,
+ * and never sends it again** — so after a rated game the panel kept showing what he was
+ * worth before it, and only leaving the channel and coming back fixed it: that made the
+ * client ask the ladder, compose a fresh blob and send it.
+ *
+ * The rating is the one thing in there that is OURS — we compute it — so it is the one
+ * thing written over. Everything else is his: his name, his addresses, his port. If the
+ * document is not in the shape we know (tag 1 with a tag 5 inside), it goes back exactly
+ * as it came rather than being rebuilt from a guess.
+ */
+export function withRating(info: Uint8Array, rating: number): Uint8Array {
+  try {
+    const outer = readFields(Buffer.from(info));
+    const inner = outer.find((field) => field.tag === 1);
+    if (!inner) return info;
+    const fields = readFields(inner.value);
+    if (!fields.some((field) => field.tag === 5)) return info;
+    const bytes = Buffer.alloc(4);
+    bytes.writeInt32LE(Math.trunc(rating), 0);
+    const updated = fields.map((field) => (field.tag === 5 ? { tag: 5, value: bytes } : field));
+    return writeFields(outer.map((field) => (field.tag === 1 ? { tag: 1, value: writeFields(updated) } : field)));
+  } catch {
+    // A document we cannot read is still his, and passing it on unchanged is what this
+    // server did before rating existed at all.
+    return info;
+  }
 }
 
 /**

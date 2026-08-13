@@ -26,7 +26,7 @@ import { hostU32String } from './address.ts';
 import { Accounts, type LoginVerdict } from './accounts.ts';
 import { openDatabase } from './database.ts';
 import { Friends, friendUpdate, type FriendState } from './friends.ts';
-import { Ladder, ladderPayload, matchResult, settleMatch } from './ladder.ts';
+import { Ladder, STARTING_RATING, ladderPayload, matchResult, settleMatch } from './ladder.ts';
 import { GET_DATA, PersistentStore, SET_DATA, recordKeyOf } from './persistent-store.ts';
 import {
   DEFAULT_LOBBIES,
@@ -45,6 +45,7 @@ import {
   memberEntry,
   playerInfo,
   roomEntry,
+  withRating,
   stampRoomIds,
   type Room,
 } from './lobby.ts';
@@ -537,7 +538,7 @@ export class RouterSession {
    */
   private membersOf(room: Room): GSValue[] {
     return room.members.map((name) =>
-      memberEntry(name, room.id, this.addressOf(name), PlayerStatus.GAMECONNECTED, this.presence.info(name)),
+      memberEntry(name, room.id, this.addressOf(name), PlayerStatus.GAMECONNECTED, this.infoOf(name)),
     );
   }
 
@@ -595,6 +596,20 @@ export class RouterSession {
     return build(reply(message, [String(MessageType.GSSUCCESS), [subtype, [String(room?.id ?? 0)]]]));
   }
 
+  /**
+   * His self-description, with the rating we hold written into it.
+   *
+   * The client composes that document once, on entering, and never sends another — so
+   * after a rated game the channel's panel showed the rating he had BEFORE it, until he
+   * left the channel and came back. Ours is the newer number, and it is the only field
+   * of his document we own.
+   */
+  private infoOf(name: string): Uint8Array | undefined {
+    const own = this.presence.info(name);
+    if (!own) return own;
+    return withRating(own, this.ladder.row(name)['RATING'] ?? STARTING_RATING);
+  }
+
   /** Where to say a player is: what he told us, or this machine. */
   private addressOf(name: string): string {
     return name === this.username && this.localAddress ? this.localAddress : this.presence.address(name);
@@ -628,7 +643,7 @@ export class RouterSession {
     const members = [
       ...this.presence
         .inLobby(lobby.id)
-        .map((name) => memberEntry(name, lobby.id, this.addressOf(name), PlayerStatus.NONE, this.presence.info(name))),
+        .map((name) => memberEntry(name, lobby.id, this.addressOf(name), PlayerStatus.NONE, this.infoOf(name))),
       ...extra,
     ];
     // The games in the channel — and the ONE place the room-field diagnostic numbers
@@ -1536,6 +1551,11 @@ export class RouterSession {
           if (this.matches.rated(matchId) && this.matches.settle(matchId)) {
             const results = rows.map((row) => matchResult(row)).filter((result) => result !== null);
             settled = `, ${settleMatch(this.ladder, results)}`;
+            // And the people standing in the channel are handed the list again, because
+            // the number beside a name has just changed and nothing else would say so.
+            const inChannel = this.presence.lobbyOf(this.username);
+            const told = inChannel === null ? 0 : this.tellChannel(inChannel);
+            if (told) settled += `, ${told} in the channel told`;
           }
           // The ratings that go back out are read AFTER that, so the winner sees his new
           // one — though the client does not read them here anyway and asks the ladder

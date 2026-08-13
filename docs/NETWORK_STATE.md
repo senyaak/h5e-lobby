@@ -75,10 +75,13 @@ lobby login        -> accepted, three channels pushed
 IRC                -> "IRC welcome", "IRC join channel succeeded"
 join channel       -> "join lobby succeeded(GroupID=1,LobbySrvID=1)"
 NAT address        -> "address request succeeded,address=1.0.0.127:40010"
-ladder             -> answered, MATCHED, and dropped inside the body reader
-profile            -> the same; the store behind it works, the reply's body does not
-friends (add)      -> the same again: type 75 answered, matched, dropped in its parser
+ladder             -> answered and READ: "LadderQueryRcv_RequestReply: (39,0,1)", and
+                      the client then does what waited on it — sends its OWN player info
+profile            -> answered and READ: "PSRcv_GetDataReply: ubType=39,iReason=0,iID=2",
+                      "PS get data failed,reason=0", and back to CStateOutOfRoom at once
+player info        -> arrives on its own now, 73 bytes, his and not our invention
 player list        -> WORKS (12.08.2026): the panel draws him
+friends (add)      -> answered and matched, still refused inside its parser (0x425340)
 create game        -> CREATE_ROOM answered, room 100 in the channel
 join own room      -> "LobbyRcv_RoomInfo", then CStateInRoom / CStateWaitingForPlayers
 settings changes   -> GROUP_CONFIG_UPDATE_RES answered, the room echoed back
@@ -87,10 +90,14 @@ joining a dead one -> refused with GSFAIL and a reason, instead of silence
 ```
 
 So a player logs in, enters a channel with his name in its player list, hosts a game and
-**sits in it waiting for players**; games appear and disappear correctly. Three things —
-the ladder, the profile and adding a friend — are answered, matched, and then dropped
-inside the client's own body readers; that is now ONE question with three faces, and a
-probe says exactly where each dies. The second client is the thing nothing has exercised.
+**sits in it waiting for players**; games appear and disappear correctly. **The module
+request/reply protocol is solved** (13.08.2026): the ladder and the profile are both read
+and acted on, and the client now sends its own player-info blob unprompted, which is the
+one thing the room's member records were missing. What is left of that family is the
+ladder's SUCCESS row (the refusal is what we send; a real row needs 0x432c80 read) and the
+friends parser at 0x425340, which refuses a reply it has already matched.
+
+The second client is the thing nothing has exercised.
 
 ## Facts worth not re-learning
 
@@ -367,6 +374,36 @@ their logins — "PS login succeeded" is in the game's log, and the ladder servi
 "initializing Ladder Query Service...succeeded" (it is local, no exchange). So the
 silence was never a login problem.
 
+### Solved, and what each piece turned out to be
+
+Four things had to be right at once, and each was wrong in its own way. In the order the
+client reads them:
+
+| what | and what it had to be |
+|---|---|
+| the connection | the **router's** wait module, not the one the request came in on |
+| the envelope | `[status, [number, payload, requestId]]`, type 204 |
+| index 2 | the **request id**, looked up among the pending requests (0x42b810) — not a count |
+| an absent record | **39**, a refusal. "38 with nothing in it" is a lie and it is believed |
+
+That last one is worth its own line, because it cost a launch and a false alarm about
+broken game creation: answered "here it is" with zero bytes, the client read the answer,
+made no profile out of it, showed "could not create a profile" — and, being consumed but
+useless, the message left the state machine to sit out its whole timeout, during which the
+lobby cannot create a game. Refused honestly, the client says "PS get data failed,reason=0"
+and returns to `CStateOutOfRoom` **immediately**.
+
+The proof, from the game's own log:
+
+```
+LadderQueryRcv_RequestReply: (39,0,1)
+Failed to get Ladder row for myself, setting N/A → LobbySend_SetPlayerInfo(,,73)
+ProcessSetPlayerInfoReply: set OWN player info succeeded
+PSRcv_GetDataReply: ubType=39,iReason=0,iID=2,pData=0,iSize=0
+ProcessPSRcv_GetDataReply: PS get data failed,reason=0
+Entering state: class NUbi::CStateOutOfRoom
+```
+
 ### Measured, at last: three of the four stages are RIGHT
 
 A probe inside the game (`native/net/ubi-module-probe.c` in the editor repo, built with
@@ -425,7 +462,22 @@ profile where it was asked**; whichever of the two appears in the game's log nam
 rule, and then both follow it. `RouterService.desks` is what makes that possible, and it
 is needed anyway for announcing an arrival to the players already in a channel.
 
-## Where the next wall is
+## What to pick up next
+
+Three things, and none of them needs a launch to make progress on:
+
+1. **The friends reply.** Type 75 is answered and the client MATCHES it (the probe: "scanned
+   for request 75, found a message of type 38") and then its parser at 0x425340 refuses it.
+   Read that parser with `net-probe --frame` — it wants a list holding the friend's name and
+   a number, and the indices are what to get right. Right-clicking a name in the channel is
+   how the client asks.
+2. **The ladder's real row.** We refuse; a success needs the payload 0x432c80 parses. Same
+   tool, same method. The rating is already stored per player (`data/ladder.json`).
+3. **The profile's own creation.** Refused honestly, the client should offer to create one
+   and then WRITE it as request 0x402 — which the store already accepts and keeps. Nothing
+   more may be needed than watching for that write on the wire.
+
+And then the wall proper:
 
 **The second player, and it is the whole of the gap.** Everything a lone host can do,
 he does; nothing has asked for START_GAME because starting needs somebody to start

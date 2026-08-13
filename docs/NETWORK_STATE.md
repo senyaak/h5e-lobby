@@ -154,9 +154,9 @@ half of what it was needed for.
   `:#LobbyGrp1.2` and then talks to `#LobbyGrp1.2` — in IRC the colon means "the rest of
   the line is one argument". Stored as it arrives, those are two channels, and one
   player's message would reach nobody sitting in "the other one".
-- **The login body is `[name, password, game, 1]`.** Field 1 is the password — three
-  characters in the capture, and Сеня's password is "123", which is what settled it
-  rather than another reading. Field 2 is the game id (`HEROES_…`, 23 characters) and
+- **The login body is `[name, password, game, 1]`.** Field 1 is the password: its length in
+  the capture matched the password actually typed, which is what settled it rather than
+  another reading. Field 2 is the game id (`HEROES_…`, 23 characters) and
   field 3 is one byte, 01. The proxy's login is `[name, game]` and carries no password
   at all, which is why only the router checks one.
 

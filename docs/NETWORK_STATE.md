@@ -872,11 +872,28 @@ expected: `own-profile` on in that copy, and `net_game_port = 8889` in its own
   does not open, so **every player with no record now gets the seed**; `--seed-profile` is
   gone as a flag, it is simply what happens. The first write from any client still
   replaces it, and every write is still hex-dumped.
-- *the game appears but Join stays grey* — OPEN. Reading gives two candidates and no way
-  to choose: the row is drawn from `[record+0x34]` (a padlock) and `[record+0x90]`
-  (STARTED), either of which would explain it; or the button is simply dead because
-  nothing is selected, which is what 0x799140 decides by asking the list. The editor repo
-  has a probe printing both — `--log net/ubi-room-probe`.
+- *"Игра не существует, возможно сервер прекратил игру. Код ошибки 0.5.0"* — what the
+  client puts up when the room it is handed makes no sense to it. **5 is its own number
+  for "no such game"** (`CanEnterGame`, 0xdeebe0: 1 version, 2 checksum, 5 no such game,
+  9 wrong password), so the code reads `<0>.<reason>.<0>`. It came up when the
+  field-mapping diagnostic went out on EVERY copy of a room and the host could no longer
+  enter the game he had just made. The diagnostic now numbers fields only in the channel
+  push — what other players are shown — and a host's own room stays honest.
+- *the game appears but Join stays grey* — OPEN, and now read rather than guessed.
+  Neither the padlock (`[record+0x34]`) nor STARTED (`[record+0x90]`) is set: measured.
+  What decides is **0x8768B0**, and it wants three things of the selected game:
+
+  ```
+  a game is selected            else grey
+  0xDE2660(game) == false       else grey
+  game[+0x18] != 0              else grey
+  ```
+
+  0xDE2660 reads `[+0x8C]` as a VERSION: `0x10000…0x10032` or `0x20000/0x20001` send it
+  on to `[+0x18] == 0`; anything else — ours reads 0x30001 — to `[+0x17C]`. The record the
+  UI holds is a copy of the room's description (0x8DCE7B builds a 0x1A0-byte `CGameData`
+  and copies from `+0x0C`), so those offsets are its offsets. `[+0x04]` is our field 3,
+  measured; where the other nineteen land is what the numbering answers.
 
 **Two clients want two accounts.** The first login of a name creates it, so the second
 client logs in as another name and nothing has to be prepared here.

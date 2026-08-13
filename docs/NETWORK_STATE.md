@@ -326,9 +326,25 @@ not a way to fetch text. So a reply can match and still be dropped without a wor
 getter.
 
 ```
-success   ["38", ["<number>", [ … fields … ]]]
-refusal   ["39", ["<number>", [ "<reason>" ]]]      reason is a STRING at index 0
+success   ["38", ["<number>", [ … fields … ], "<count>"]]
+refusal   ["39", ["<number>", [ "<reason>" ], "0"]]
 ```
+
+**The list under the number is a THREE**, and that was the wall: both readers fetch its
+index 2 as a number before looking at anything else — the ladder at 0x42c8d2, the profile
+at 0x42b4c4 — whatever the status said. The probe named it exactly:
+
+```
+reading the status for request 1281 … said 1, and the status is 39
+the ladder read said 0
+```
+
+The status was read; what came after it was one field short. **And a reply that is
+consumed but unreadable is worse than no reply at all**: the message is off the queue, so
+the client's state machine gets no event and waits out its FULL timeout — about thirty
+seconds in `CStateWaitWithReturn<CStateOutOfRoom, CStateWaitPSGetDataReplyBase>`, during
+which the lobby is not in the state where a game can be created. That is what "you broke
+creating a game" was: not the room code, the profile answer eating the wait.
 
 `moduleReplyBody` / `moduleFailureBody` in `src/net/gs-message.ts` are these two.
 

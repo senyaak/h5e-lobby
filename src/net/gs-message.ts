@@ -128,21 +128,31 @@ export function build(message: Omit<GSMessage, 'size'>): Buffer {
  * take a string and run it through `atoi` — they are NUMBER getters, an int and a
  * short. That is the other half of what went wrong with the ladder: its row was sent
  * as a nested list where the client reads a number.
+ *
+ * And the list under the number is a THREE, always: `[number, payload, count]`. Both
+ * readers fetch index 2 of it as a number before they look at anything else — the
+ * ladder at 0x42c8d2, the profile at 0x42b4c4 — so a reply that stops at the payload
+ * is refused there, and the probe inside the game is what finally said so:
+ *
+ *   reading the status for request 1281 … said 1, and the status is 39
+ *   the ladder read said 0
+ *
+ * The status was read; what came after it was one field short.
  */
-export function moduleReplyBody(request: number | string, fields: readonly GSValue[]): GSValue[] {
-  return [String(MessageType.GSSUCCESS), [String(request), [...fields]]];
+export function moduleReplyBody(request: number | string, fields: readonly GSValue[], count = '0'): GSValue[] {
+  return [String(MessageType.GSSUCCESS), [String(request), [...fields], count]];
 }
 
 /**
- * A refusal, in the form the same matcher reads for status 39.
+ * A refusal, in the form the same readers take for status 39.
  *
- * It takes a different turn there (0x427242): the list under the number is read, and
- * its field **0** is fetched as a string — the reason. Nothing else is required, so
- * this shape is completely determined, which makes it the one honest answer we can
- * give to a request whose success payload we cannot yet compose.
+ * The status branch is shorter — 0x427242 reads the list under the number and takes
+ * its field 0 — but the reader that runs afterwards does not care whether the answer
+ * was yes or no: it fetches index 2 of `[number, …]` either way. So a refusal is the
+ * same three, with an empty payload and a count of nothing.
  */
 export function moduleFailureBody(request: number | string, reason: string): GSValue[] {
-  return [String(MessageType.GSFAIL), [String(request), [reason]]];
+  return [String(MessageType.GSFAIL), [String(request), [reason], '0']];
 }
 
 /** An answer to `to`: its type, its parties the other way round, our body. */

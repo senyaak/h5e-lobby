@@ -17,7 +17,7 @@ import { KEY_BLOB_SIZE, decryptWith, encryptTo, generateKeyPair, parsePublicKey,
 import { GUEST, GUEST_LOBBY, RouterService, type RouterSession } from '../src/net/router-service.ts';
 import { Blowfish } from '../src/net/blowfish.ts';
 import { CdKeyRequest, CdKeyService } from '../src/net/cdkey-service.ts';
-import { LobbyMsg, Lsm, RoomUpdate, playerInfo } from '../src/net/lobby.ts';
+import { GAME_PORT, LobbyMsg, Lsm, RoomUpdate, playerInfo } from '../src/net/lobby.ts';
 import { readFields, writeFields } from '../src/net/structure.ts';
 import { LADDER_KEYS, Ladder, STARTING_RATING } from '../src/net/ladder.ts';
 import { Accounts } from '../src/net/accounts.ts';
@@ -1520,6 +1520,111 @@ console.log('\nTwo players in one channel, and what the other one is told');
   check('a dropped connection tells the channel', first.length === 1, String(first.length));
   check('and the log says how many heard it', String(left).includes('1 player(s) told'), String(left));
   check('with him off the list', !pushed(first[0]).names.includes('Player2'), JSON.stringify(pushed(first[0]).names));
+}
+
+console.log('\nStarting the game: the chain both players wait on');
+{
+  const service = new RouterService(
+    { address: '127.0.0.1', port: 40001 },
+    { address: '127.0.0.1', port: 40030 },
+    { address: '127.0.0.1', port: 40031 },
+    { address: '127.0.0.1', port: 40040 },
+    join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-start.db'),
+  );
+  const lobbyMsg = (body: GSValue[]): Buffer =>
+    build({ property: Property.GS, priority: 0, type: MessageType.LOBBY_MSG, sender: 4, receiver: 2, body });
+
+  const toHost: Buffer[] = [];
+  const toGuest: Buffer[] = [];
+  const host = service.session('lobby');
+  host.username = 'Senyaak';
+  host.send = (bytes) => toHost.push(bytes);
+  const guest = service.session('lobby');
+  guest.username = 'Player2';
+  guest.send = (bytes) => toGuest.push(bytes);
+
+  const made = host.receive(capturedCreateRoom());
+  const id = String(((parse(made[0]!.replies[0]!)?.body?.[1] as GSValue[])?.[1] as GSValue[])?.[0]);
+  guest.receive(lobbyMsg([String(LobbyMsg.JOIN_ROOM), [id, '', '448', '0', '']]));
+  toHost.length = 0;
+  toGuest.length = 0;
+
+  /** The envelope 0x420B60 insists on, checked as it checks it. */
+  const yes = (bytes: Buffer | undefined, subtype: number) => {
+    const body = parse(bytes ?? Buffer.alloc(0))?.body ?? [];
+    const inner = (body[1] as GSValue[]) ?? [];
+    const under = inner[1];
+    return {
+      success: body[0] === String(MessageType.GSSUCCESS),
+      names: inner[0] === String(subtype),
+      // A list, and a first field that reads as a number: either one wrong and the
+      // reply is dropped without a word, which looks exactly like never sending it.
+      list: Array.isArray(under),
+      number: Array.isArray(under) && typeof under[0] === 'string' && Number.isFinite(Number(under[0])),
+    };
+  };
+
+  // He pressed Start. This is the message the last run died on: unanswered, the host
+  // sat in CStateWaitStartGameReply and cut every socket 31 seconds later.
+  const started = host.receive(lobbyMsg([String(LobbyMsg.START_GAME), [id]]));
+  check('START_GAME is answered at all', started[0]!.replies.length === 1, started[0]?.note);
+  const startReply = yes(started[0]!.replies[0], LobbyMsg.START_GAME);
+  check('with a success', startReply.success);
+  check('naming the subtype back', startReply.names);
+  check('and a list under it, as the parser demands', startReply.list);
+  check('whose first field reads as a number', startReply.number);
+  // And NOBODY else hears anything yet: the announcement belongs one step later, and
+  // a guest told twice is a guest who answers twice.
+  check('nothing is announced to the room yet', toGuest.length === 0, String(toGuest.length));
+
+  // He answers that himself with GAME_READY, and then he waits — and so does the guest,
+  // who sends nothing during a start at all. Both leave the wait on GAME_STARTED.
+  const ready = host.receive(lobbyMsg([String(LobbyMsg.GAME_READY), [id]]));
+  check('GAME_READY is answered', ready[0]!.replies.length === 2, ready[0]?.note);
+  check('with a success naming its own subtype', yes(ready[0]!.replies[0], LobbyMsg.GAME_READY).names);
+  check('and the game is announced to the host himself', ready[0]!.replies.length === 2, String(ready[0]!.replies.length));
+  check('and pushed to the guest, who is waiting on exactly this', toGuest.length === 1, String(toGuest.length));
+  check('the log says who was told', ready[0]!.note.includes('1 other(s)'), ready[0]?.note);
+
+  // The five fields of it, by index AND by kind: 0x423910 returns false on the first
+  // one that reads wrong, and a message that fails there is never seen by anything.
+  for (const [who, bytes] of [['the host', ready[0]!.replies[1]] as const, ['the guest', toGuest[0]] as const]) {
+    const body = parse(bytes ?? Buffer.alloc(0))?.body ?? [];
+    const fields = (body[1] as GSValue[]) ?? [];
+    check(`${who} gets it inside the 38 envelope`, body[0] === String(MessageType.GSSUCCESS), String(body[0]));
+    check(`${who}: field 0 is the subtype, which is how it is matched`, fields[0] === String(LobbyMsg.GAME_STARTED), String(fields[0]));
+    check(`${who}: field 1 is a blob`, fields[1] instanceof Uint8Array, typeof fields[1]);
+    check(
+      `${who}: field 2 is a number that fits a short`,
+      typeof fields[2] === 'string' && Number(fields[2]) === GAME_PORT && Number(fields[2]) <= 0xffff,
+      String(fields[2]),
+    );
+    check(`${who}: field 3 is a string`, typeof fields[3] === 'string' && fields[3].length > 0, String(fields[3]));
+    check(`${who}: field 4 is a string`, typeof fields[4] === 'string' && fields[4].length > 0, String(fields[4]));
+  }
+
+  // Last of the four: the match itself.
+  toGuest.length = 0;
+  const match = host.receive(lobbyMsg([String(LobbyMsg.START_MATCH), [id]]));
+  check('START_MATCH is answered', match[0]!.replies.length === 2, match[0]?.note);
+  check('with a success naming its subtype', yes(match[0]!.replies[0], LobbyMsg.START_MATCH).names);
+  const running = (parse(match[0]!.replies[1]!)?.body?.[1] as GSValue[]) ?? [];
+  check('and the match is announced', running[0] === String(LobbyMsg.MATCH_STARTED), String(running[0]));
+  check('with the two numbers its parser reads', running.length === 2 && Number.isFinite(Number(running[1])), JSON.stringify(running));
+  check('the guest hears it too', toGuest.length === 1, String(toGuest.length));
+
+  // The room is found by MEMBERSHIP, not by trusting a field we have never read: the
+  // bodies of these four have only ever been seen encrypted. A start that names
+  // nothing still belongs to the one game he is in.
+  const nameless = host.receive(lobbyMsg([String(LobbyMsg.START_GAME), []]));
+  check('a start naming no room is still placed in his own', nameless[0]!.note.includes(id), nameless[0]?.note);
+  // And a stranger's room is not his: he is in none, so there is nothing to announce,
+  // but he is still answered rather than left to time out.
+  const outsider = service.session('lobby');
+  outsider.username = 'Nobody';
+  const alone = outsider.receive(lobbyMsg([String(LobbyMsg.START_GAME), [id]]));
+  check('a player in no room of ours is answered anyway', alone[0]!.replies.length === 1, alone[0]?.note);
+  check('and it is said plainly in the log', alone[0]!.note.includes('no room of his'), alone[0]?.note);
 }
 
 console.log('\nThe keep-alive, and the channel counts');

@@ -128,6 +128,16 @@ export const PlayerStatus = {
 /** Game modes, as the client counts them. */
 export const GameMode = { STANDARD: 0, RATED: 1, DUEL: 2 } as const;
 
+/**
+ * The port the game itself plays on, as opposed to the ports this server listens on.
+ *
+ * Not a setting of ours: it is where the client's own NAT pings come from, visible in
+ * every log as `UDP NATServer:40010 <- 127.0.0.1:8888`, and it is what a player's
+ * self-description carries. Named here because two places now say it — his blob and
+ * the announcement that the game has started.
+ */
+export const GAME_PORT = 8888;
+
 export interface Lobby {
   id: number;
   name: string;
@@ -263,6 +273,11 @@ export class Rooms {
     return master ? [...this.rooms.values()].filter((room) => room.master === master) : [];
   }
 
+  /** The rooms a player is inside — which is how a message that names none is placed. */
+  containing(name: string): Room[] {
+    return name ? [...this.rooms.values()].filter((room) => room.members.includes(name)) : [];
+  }
+
   remove(id: number): void {
     this.rooms.delete(id);
   }
@@ -332,6 +347,46 @@ export function roomEntry(room: Room, probe = false): GSValue[] {
 }
 
 /**
+ * "The game has begun" — the push both players are waiting on, in the five fields
+ * its parser insists on.
+ *
+ * 0x423910 reads them by index AND by kind, and a field of the wrong kind is not a
+ * field read wrong: the parser returns false and the whole message is dropped without
+ * a word, which is indistinguishable from never having sent it.
+ *
+ *   0 a number   1 a blob   2 a number read as a **short**   3, 4 strings
+ *
+ * With the ordinary 38 envelope around it, field 0 is the subtype itself — that is how
+ * the client's own matcher (0x4286F0) finds the message, and it is the shape every
+ * answer in this file already uses.
+ *
+ * What the last three MEAN is not established. Their shapes — two strings and a
+ * sixteen-bit number — fit "two addresses and a port", so the host's are what goes in
+ * them; neither handler in the chain reads them (`CStateWaitGameStarted::ProcessGameStarted`
+ * 0xE12C40 and `CStateWaitingForPlayers::ProcessGameStarted` 0xE1CCD0 both ignore the
+ * message entirely), so nothing here is load-bearing beyond being readable. The blob is
+ * the host's own description of the game, which is the only blob in this room that means
+ * anything.
+ */
+export function gameStartedEntry(room: Room, port = GAME_PORT): GSValue[] {
+  return [String(LobbyMsg.GAME_STARTED), room.info, String(port), room.address, room.altAddress];
+}
+
+/**
+ * "The match is running" — the same idea, two fields, and the second is a guess.
+ *
+ * 0x423150 reads two numbers and nothing else, and unlike GAME_STARTED **no handler
+ * for it was found in the states the start chain goes through**: it belongs to
+ * `CStatePlaying`. It is sent because the guest, having answered GAME_STARTED with
+ * GAME_CONNECTED, then waits for something, and this is the only message left in the
+ * chain that could be it. If the log of the next run shows the guest moving on without
+ * it, it can go.
+ */
+export function matchStartedEntry(room: Room): GSValue[] {
+  return [String(LobbyMsg.MATCH_STARTED), String(room.id)];
+}
+
+/**
  * One member of a group, in eight fields — the eight the client reads.
  *
  * The parser is generated code at 0x424b60 and it asks for the fields by index,
@@ -391,7 +446,7 @@ export function memberEntry(
  * players we invent, and for them the rating is the point: without tag 5 the panel
  * shows "…" beside the name.
  */
-export function playerInfo(name: string, rating: number, address = '127.0.0.1', gamePort = 8888): Uint8Array {
+export function playerInfo(name: string, rating: number, address = '127.0.0.1', gamePort = GAME_PORT): Uint8Array {
   const octets = address.split('.').map(Number);
   // The client writes the mirrored address in the order the NAT answer arrived in —
   // its own log calls 127.0.0.1 "1.0.0.127" — and the LAN one in the natural order.

@@ -37,7 +37,9 @@ import {
   Presence,
   RoomUpdate,
   Rooms,
+  gameStartedEntry,
   lobbyEntry,
+  matchStartedEntry,
   memberEntry,
   playerInfo,
   roomEntry,
@@ -98,6 +100,22 @@ const LADDER_QUERY = 1281;
 /** A one-byte body value, which is how GS names the message being answered. */
 function messageId(type: number): GSValue {
   return new Uint8Array([type & 0xff]);
+}
+
+/**
+ * A body as one line of log — what arrived, not merely which subtype it was.
+ *
+ * Every unanswered subtype is work that is left, and each one has to be read off a
+ * log before it can be written. START_GAME arrived as thirteen encrypted bytes and
+ * the note said only "subtype 15 is not implemented": the fields it carries — the
+ * room id among them — were on the wire, decrypted, in hand, and thrown away. A
+ * launch of the game is expensive; printing what we already parsed is free.
+ */
+function said(value: GSValue | undefined): string {
+  if (value === undefined) return '-';
+  if (value instanceof Uint8Array) return `<${value.length} bytes>`;
+  if (Array.isArray(value)) return `[${value.map(said).join(' ')}]`;
+  return JSON.stringify(value);
 }
 
 /**
@@ -401,8 +419,9 @@ export class RouterSession {
    * somebody actually joined or left, and GROUP_CONFIG_UPDATE_RES still answers with the
    * room and an empty list.
    */
-  private tellRoom(room: Room): number {
-    const others = [...this.peers].filter(
+  /** The other people sitting in a room, on the one connection each of them listens on. */
+  private othersInRoom(room: Room): RouterSession[] {
+    return [...this.peers].filter(
       (peer) =>
         peer !== this &&
         peer.role === 'lobby' &&
@@ -410,6 +429,23 @@ export class RouterSession {
         peer.username !== '' &&
         room.members.includes(peer.username),
     );
+  }
+
+  /**
+   * One message, as it is, to everybody else in a room. Returns how many were told.
+   *
+   * Unlike `tellRoom` the bytes do not depend on who receives them, so they are built
+   * once — and unlike it, this says whatever it is given rather than the room.
+   */
+  private tellRoomThat(room: Room, body: GSValue[]): number {
+    const others = this.othersInRoom(room);
+    const bytes = build(reply(UNASKED, body));
+    for (const peer of others) peer.send?.(bytes);
+    return others.length;
+  }
+
+  private tellRoom(room: Room): number {
+    const others = this.othersInRoom(room);
     for (const peer of others) {
       peer.send?.(
         build(
@@ -528,6 +564,29 @@ export class RouterSession {
     if (!onRouter) return { replies: [bytes], where: 'here, with no router connection open' };
     onRouter(bytes);
     return { replies: [], where: 'on the router connection' };
+  }
+
+  /**
+   * Which room a message about starting a game is about.
+   *
+   * The bodies of the start chain have never been read — the run that reached them
+   * logged the subtype and threw the fields away, which is what `said` is now for — so
+   * the id is not taken from a field by position. Any field that names a room HE IS IN
+   * is that room; failing that, the one room he is in, because a player is in one game
+   * at a time and a start he did not send from a room is not a start.
+   */
+  private roomInPlay(fields: readonly GSValue[]): Room | undefined {
+    for (const field of fields) {
+      if (typeof field !== 'string') continue;
+      const room = this.rooms.get(Number(field));
+      if (room && room.members.includes(this.username)) return room;
+    }
+    return this.rooms.containing(this.username)[0];
+  }
+
+  /** "Yes" in the shape 0x420B60 accepts: 38, the subtype, and a number under it. */
+  private lobbyYes(message: GSMessage, subtype: string, room: Room | undefined): Buffer {
+    return build(reply(message, [String(MessageType.GSSUCCESS), [subtype, [String(room?.id ?? 0)]]]));
   }
 
   /** Where to say a player is: what he told us, or this machine. */
@@ -1328,6 +1387,66 @@ export class RouterSession {
             ],
           };
         }
+        // STARTING THE GAME, which is a chain of four exchanges and not one message.
+        // Read out of the client's own handlers (0xE12620, 0xE12A70, 0xE12C40, 0xE1CCD0):
+        //
+        //   host  -> START_GAME 15    we say yes    -> he sends GAME_READY himself
+        //   host  -> GAME_READY 33    we say yes    -> and then he WAITS
+        //   both  <- GAME_STARTED 56  we push it    -> both answer GAME_CONNECTED,
+        //                                              and the host sends START_MATCH
+        //   host  -> START_MATCH 17   we say yes    -> "start match succeeded"
+        //
+        // **GAME_STARTED comes after GAME_READY, not between the first two.** The chain
+        // written down in NETWORK_STATE.md was the order the RTTI names are listed in;
+        // the handlers run in this one, and the handlers are what runs.
+        //
+        // It goes to EVERYBODY in the room, the sender included: the host waits for it in
+        // CStateWaitGameStarted, and the guest — who sends nothing at all during a start,
+        // as the last run shows — leaves his "please wait" on this message and on nothing
+        // else. `CStateWaitingForPlayers::ProcessGameStarted` (0xE1CCD0) does not read the
+        // message at all: its arrival IS the content.
+        //
+        // The three "yes"es are the ordinary envelope — 38, the subtype, a list under it —
+        // because START_GAME, CREATE_ROOM and JOIN_ROOM are all parsed by the same
+        // 0x420B60. What that parser drops in silence is worth naming: `body[1][1]` must
+        // BE a list and its first field must read as a number (0x4435C0), even though the
+        // handler that receives it then ignores it. A refusal would be 39 with the reason
+        // first and a second number after it — not written, because nothing here refuses.
+        if (subtype === String(LobbyMsg.START_GAME)) {
+          const room = this.roomInPlay(Array.isArray(inner) ? inner : []);
+          return {
+            note: `START_GAME — ${room ? `"${room.name}" (${room.id})` : 'no room of his'}, yes`,
+            replies: [this.lobbyYes(message, subtype, room)],
+          };
+        }
+        // He is ready, and this is the last thing he sends before he waits. So the answer
+        // is followed at once by the announcement everybody in the room is waiting for.
+        if (subtype === String(LobbyMsg.GAME_READY)) {
+          const room = this.roomInPlay(Array.isArray(inner) ? inner : []);
+          if (!room) {
+            return { note: 'GAME_READY — he is in no room of ours, yes anyway', replies: [this.lobbyYes(message, subtype, room)] };
+          }
+          const announcement: GSValue[] = [String(MessageType.GSSUCCESS), gameStartedEntry(room)];
+          const told = this.tellRoomThat(room, announcement);
+          return {
+            note: `GAME_READY — "${room.name}" (${room.id}) starts, announced to him and ${told} other(s)`,
+            replies: [this.lobbyYes(message, subtype, room), build(reply(message, announcement))],
+          };
+        }
+        // And the match itself. The reply is what he is waiting for; MATCH_STARTED after
+        // it is the guess named in `matchStartedEntry`.
+        if (subtype === String(LobbyMsg.START_MATCH)) {
+          const room = this.roomInPlay(Array.isArray(inner) ? inner : []);
+          if (!room) {
+            return { note: 'START_MATCH — he is in no room of ours, yes anyway', replies: [this.lobbyYes(message, subtype, room)] };
+          }
+          const running: GSValue[] = [String(MessageType.GSSUCCESS), matchStartedEntry(room)];
+          const told = this.tellRoomThat(room, running);
+          return {
+            note: `START_MATCH — "${room.name}" (${room.id}) is running, ${told} other(s) told`,
+            replies: [this.lobbyYes(message, subtype, room), build(reply(message, running))],
+          };
+        }
         // He tells us he is connected to his own game. Nothing to answer.
         if (subtype === String(LobbyMsg.GAME_CONNECTED)) {
           const groupId = Array.isArray(inner) && typeof inner[0] === 'string' ? inner[0] : '?';
@@ -1451,7 +1570,10 @@ export class RouterSession {
             ],
           };
         }
-        return { note: `lobby message subtype ${String(subtype)} is not implemented`, replies: [] };
+        return {
+          note: `lobby message subtype ${String(subtype)} is not implemented — it said ${said(inner)}`,
+          replies: [],
+        };
       }
       // The keep-alive, and it is ANSWERED since 13.08.2026 — with the same bare
       // header it arrived as, parties the other way round.
@@ -1485,7 +1607,10 @@ export class RouterSession {
           ],
         };
       default:
-        return { note: `no handler for message type ${message.type} — nothing sent`, replies: [] };
+        return {
+          note: `no handler for message type ${message.type} — nothing sent, it said ${said(message.body ?? undefined)}`,
+          replies: [],
+        };
     }
   }
 

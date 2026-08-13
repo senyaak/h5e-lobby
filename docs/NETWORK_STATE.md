@@ -920,30 +920,80 @@ expected: `own-profile` on in that copy, and `net_game_port = 8889` in its own
 client logs in as another name and nothing has to be prepared here.
 
 **Where this stands at the end of 13.08.2026.** Two clients, two players, one channel,
-one game — and one of them can walk into the other's game and talk to him in it. What has
-NEVER been exercised is starting the match: no `GameStart`, no `AttemptGameStart` in any
-log of any run, from either side. That is the next thing, and the chain below is what it
-will ask for. The probes are still in the extension (`--log net/ubi-room-probe`,
-`net/ubi-friends-probe`) and can go once nothing needs them.
+one game — and one of them can walk into the other's game and talk to him in it. Starting
+was reached and answered on the same day: the first attempt died on an unanswered
+`START_GAME`, and the four exchanges below are now implemented and covered by
+`tools/test-net.ts`. **What no run has shown yet is the game actually coming up** — the
+chain is answered in the shapes the client's parsers accept, and whether the two clients
+then find each other peer to peer is the next thing a launch will say. The probes are
+still in the extension (`--log net/ubi-room-probe`, `net/ubi-friends-probe`) and can go
+once nothing needs them.
 
-**Starting is a chain of five, not one message.** From the client's own RTTI:
+**Starting is a chain of four exchanges, not one message.** 13.08.2026, measured: the
+host pressed Start, sent `START_GAME` (subtype 15) — seventeen bytes, the only message
+either client sent about starting — and the server dropped it into "not implemented"
+and said nothing. Both screens read "please wait", and 31 seconds later the host closed
+every socket: `CStateWaitStartGameReply` and its 30-second stall, to the second.
+
+The chain, from the client's own handlers rather than from the order its RTTI names are
+listed in — `ProcessStartGameReply` 0xE12620, `ProcessGameReadyReply` 0xE12A70,
+`CStateWaitGameStarted::ProcessGameStarted` 0xE12C40, `CStateWaitingForPlayers::ProcessGameStarted`
+0xE1CCD0:
 
 ```
-CStateWaitingForPlayers      -- SFLB_AttemptGameStart, once the room is full enough
-  -> LobbySend_GameStart     CStateWaitStartGameReply    <- LobbyRcv_StartGameReply
-                             CStateWaitGameStarted       <- LobbyRcv_GameStarted
-  -> LobbySend_GameReady     CStateWaitGameReadyReply    <- LobbyRcv_GameReadyReply
-  -> LobbySend_StartMatch    CStateWaitStartMatchReply   <- LobbyRcv_StartMatchReply
+host  -> START_GAME 15    <- "yes"    then he sends GAME_READY himself
+host  -> GAME_READY 33    <- "yes"    then he WAITS
+both                      <- GAME_STARTED 56, pushed        both answer GAME_CONNECTED 34,
+                                                            and the host sends START_MATCH
+host  -> START_MATCH 17   <- "yes"    "start match succeeded"
       ... the game is played, peer to peer ...
-  -> LobbySend_SubmitMatchResult  CStateWaitSubmitMatchResultReply
-                             CStateWaitFinalMatchResults <- LobbyRcv_FinalMatchResults
+host  -> SUBMIT_MATCH 30  <- "yes"    then FINAL_MATCH_RESULTS 71 (LADDER.md)
 ```
 
-Every `CStateWait*` is its own 30-second stall if unanswered, and `GameStarted` is
-a push to the other players rather than a reply to the sender. The first sender is
-`NUbi::CStateWaitingForPlayers::ProcessGameStart` (0xE1C9C0), which hands off to the
-GS library at 0x4196F0 — that is where the subtype numbers live if the wire does not
-show them.
+**`GameStarted` comes after `GameReadyReply`, not between the first two** — the earlier
+version of this list had it in the RTTI's order, which is not the order anything runs in.
+It goes to EVERYBODY in the room, the host included: he waits for it in
+`CStateWaitGameStarted`, and the guest — who sends nothing at all during a start — leaves
+his "please wait" on this message and on nothing else. `0xE1CCD0` does not read the
+message: its arrival IS the content.
+
+Senders, `push <subtype>` right before `call 0x42D970`: 0x421C00 → 15, 0x421990 → 33,
+0x421B50 → 34, 0x421430 → 17, 0x420A20 → 30.
+
+**The three "yes"es are the ordinary envelope.** `START_GAME`, `CREATE_ROOM` and
+`JOIN_ROOM` are all parsed by the same 0x420B60, so a reply is `38` / the subtype / a list
+under it — nothing new to invent. What that parser drops in silence, which is
+indistinguishable from never sending it:
+
+| must be | or else |
+|---|---|
+| message type 209 | `cmp byte [msg+4], 0D1h` fails |
+| `body[0]` a **string** "38"/"39" | the short getter 0x443680 takes kind 1 only |
+| `body[1][0]` the subtype, as a string | the queue matcher 0x4286F0 never finds it |
+| `body[1][1]` a **list** (0x442F10) | false, and the message is eaten |
+| `body[1][1][0]` a string that reads as a number | 0x4435C0 says false — and the handler then ignores the value |
+
+A refusal is `39` with the reason first and a **second** number after it; nothing here
+refuses, so it is not written.
+
+**`GAME_STARTED` (56) has five fields and its parser (0x423910) checks their KINDS:**
+0 a number — the subtype itself, under the 38 envelope — 1 a blob, 2 a number read as a
+**short**, 3 and 4 strings. One kind wrong and the whole push is dropped without a word.
+We send the host's own description of the game as the blob, the game port (8888) as the
+short, and his address twice. **What the last three mean is not established**: the shapes
+fit "two addresses and a port", and neither handler in the chain reads any of them, so
+nothing depends on it being right — but nothing proves it either.
+
+**`MATCH_STARTED` (62) after `START_MATCH` is a guess.** Two numbers (0x423150), and its
+handler belongs to `CStatePlaying`, not to any state the start chain passes through. It is
+sent because the guest, having answered `GAME_STARTED` with `GAME_CONNECTED`, then waits
+for something and this is the only message left that could be it. The next run's log
+decides: if the guest moves on without it, it goes.
+
+The room these four are about is found by **membership**, not by a field: their bodies
+have only ever been seen encrypted, so nothing about their layout is assumed. Since this
+run every unanswered subtype prints its fields (`said`), so the next log says what they
+carry instead of only that they arrived.
 
 **The ladder is answered with a row whose layout is read, not guessed.** `PROXY_HANDLER`
 subtype 1281 (0x501) gets a table from `src/net/ladder.ts` — 46 columns, one row, a new

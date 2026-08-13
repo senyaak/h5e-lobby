@@ -581,12 +581,19 @@ showed, and only the first two were ours:
    guest had none, and a refusal is the screen not opening (`PS get data failed,reason=0`
    and straight back to `CStateOutOfRoom`). The guest now carries a profile the way he
    carries a ladder row.
-3. **A friend the server says is online is drawn as offline.** Not settled: the client
-   keeps only the name and `field 1 == 1` out of the six, and a row is built with a rating
-   of **-1 always** (0x910A00), so either the flag is lost on the way or the word on the
-   screen comes from that -1. Reading cannot tell those apart, so the editor repo has a
-   probe for it — `native/net/ubi-friends-probe.c`, `--log net/ubi-friends-probe` — which
-   prints the flag at the update, at the row, and the tab the panel was on.
+3. **A friend the server says is online is drawn as offline, without a rating — and it is
+   the game, not us.** Measured, not reasoned (the probe in the editor repo,
+   `native/net/ubi-friends-probe.c`): the flag arrives as 1 all the way into the row the
+   panel draws — `a row goes into the panel for Guest / rated -1 / online 1 / and a
+   friend? 1` — so the word on the screen does not come from it. It comes from that
+   **-1**, which 0x910A00 writes into every friend's row with no source and no condition;
+   the client keeps only the name and `field 1 == 1` out of the six fields, and the
+   friends tab never looks at the channel's member records, where the real rating is
+   (`a member row for Guest / rated 1560`, the same panel one tab over).
+
+   **Nothing the server sends can change this.** The one way out is on our side of the
+   exe — a detour on 0x910A00 taking the rating from the member record when there is one
+   — and that is a change to the game, so it waits to be asked for.
 
 The reading below is what the launch was built on, and it held.
 

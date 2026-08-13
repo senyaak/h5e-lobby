@@ -141,10 +141,58 @@ it. What it does not survive for free is the wait: an unanswered step is 30 seco
 about rankings yet.
 
 Match results, note, do **not** come through this handler — they go through the
-lobby (`LobbySend_InitMatchResults`, `LobbySend_SetMatchResult`,
-`LobbySend_SubmitMatchResult`, `LobbySend_ClearMatchResult`, answered by
-`LobbyRcv_SubmitMatchResultReply` and `LobbyRcv_FinalMatchResults`). The ladder
-handler is read; the lobby is where writing happens.
+lobby. That path is read below.
+
+## How the stats are filled in: what the client sends when a rated game ends
+
+Read 13.08.2026, all of it out of `NUbi::CStatePlaying::ProcessGameFinishRated`
+(**0xe1d4e0**) and down. Nothing here has been seen on the wire yet — no rated game has
+been played against this server — but the client's half is written down completely, and
+its own log narrates every step, so one rated game will confirm it rather than discover
+it.
+
+**Three of the four "sends" send nothing.** `Init`/`Set`/`Clear` build a table in
+memory; only `Submit` puts a message on the wire.
+
+| the client's log line | what it really is |
+|---|---|
+| `LobbySend_InitMatchResults(<matchId>)` | 0x41c2e0 — **allocates** the results table at `client+0x160` and writes the match id into it. No bytes sent. |
+| `LobbySend_SetMatchResult(<name>, <statId>, <value>)` | 0x419ec0 → 0x43ff10 — **one cell**: find-or-create the row for that player NAME, then store `statId → value` in it. No bytes sent. |
+| `LobbySend_ClearMatchResult()` | throws the table away — it is what every failure path does. |
+| `LobbySend_SubmitMatchResult(<a>, <b>)` | 0x41b430 — serialises the table and sends it, **once**, as lobby subtype **30** (`SUBMIT_MATCH`, confirmed against the sender table at 0x42d970: 23 is JOIN_LOBBY, 24 JOIN_ROOM, 12 CREATE_ROOM, 17 START_MATCH, …, 30 this). |
+
+So a rated game ends in **one message with the whole table in it**, and the log lists
+every cell that went into it beforehand. The serialisers (0x43fbc0 for the table,
+0x440410 for a row) say the shape:
+
+```
+table:  [ matchId, 0, <row>, <row>, … ]
+row:    [ name, highestStatId, howManyStats, mask, v1, v2, … ]
+```
+
+**The stat ids are not in the row — the mask is.** A row carries its values in id order
+and a 32-bit mask of which ids are present (0x4403a0 sets `1 << id`), so the reader is
+expected to walk the mask. That also caps the vocabulary at 32 — the ladder's own key
+table has 46 names, so these ids are **not** indices into it, and what they are is the
+one thing this reading does not say. The game's log names them all as numbers the moment
+a rated game is played.
+
+Then the client waits, in two states, and both are picky:
+
+- `CStateWaitSubmitMatchResultReply` — the reply is logged as
+  `ucType=…,iReason=…,iMatchID=…`, so it is the usual 38/39 plus a **match id**.
+- `CStateWaitFinalMatchResults` — waits for `FINAL_MATCH_RESULTS` (71), insists the type
+  byte at `+0x10` is 38 and that the id at `+0x0C` equals the match id it started with,
+  and says so when it does not: *"iMatchID in reply doesn't match with stored
+  context.matchId"* (0xe136b7). It reads nothing else — the new ratings are not in it;
+  the client goes and asks the ladder for those.
+
+Two things follow for whoever writes this end of the server. The client reports **raw
+per-player numbers, not a winner** — deciding the rating is the server's job, which is
+the same thing the ladder's key list already implied (streaks and disconnections are
+things only a server that watched can count). And an unrated game takes a different door
+entirely: `ProcessGameFinishUnrated` sends `LobbySend_GameFinish(…)`, subtype 45
+(`MATCH_FINISH`), with no table at all.
 
 ## The 46 keys, in the exe's own order
 

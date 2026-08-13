@@ -333,20 +333,68 @@ export function memberEntry(
 }
 
 /**
- * A player-info blob with a name in it, in the format the client actually reads.
+ * A player-info blob, in the client's own shape — copied from one it sent, not
+ * derived from what its reader seems to allow.
  *
- * The reader is at 0xdfea70 and it is a `CStructureSaver` document (structure.ts),
- * not a flat struct: tag 2 is the name, 3 and 4 are two nested objects sixteen
- * bytes wide, 5 is a four-byte value. Every one of those reads is guarded by "is
- * this tag here", so a document holding tag 2 alone is complete and legal — and
- * the name in it wins over the name in the member record.
+ * The reader (0xdfea70) fetches tag 2 as the name into the player object's +8, tags 3
+ * and 4 as nested objects into +0x14 and +0x24, and tag 5 as **four bytes into +0x38**.
+ * Both ends of that matter to the channel's player panel, because
+ * `CPlayersController::OnMemberJoined` (0x9108f0) copies +8 into the row's name and
+ * `[member+0x38]` into the row's RATING — the two things Сеня saw missing.
  *
- * Only synthetic players need this. A real player sends his own blob and that is
- * the one to pass on; the previous attempt to compose one from measured addresses
- * was not in this format at all and the client read it as an empty name.
+ * A document with tag 2 at the top LOOKED legal, since every read is guarded by "is
+ * this tag here", and the client drew a player with no name at all. Its own 73-byte
+ * blob says why: everything lives one level down, under tag 1.
+ *
+ * ```
+ * [4] 04 00 00 00                  a version, or a kind
+ * [1] {
+ *   [2] "Senyaak"                  the name
+ *   [3] { [2] 16 bytes }           a sockaddr_in: family 2, port 40010, the mirrored
+ *                                  address as the NAT service reported it
+ *   [4] { [2] port, [3] 16 bytes } the game port (8888) and the LAN address
+ *   [5] dc 05 00 00                1500 — the RATING, straight out of the ladder row
+ * }
+ * ```
+ *
+ * A real player still sends his own and that is the one to pass on. This is for the
+ * players we invent, and for them the rating is the point: without tag 5 the panel
+ * shows "…" beside the name.
  */
-export function namedPlayerInfo(name: string): Uint8Array {
-  return writeFields([{ tag: 2, value: Buffer.from(name, 'utf8') }]);
+export function playerInfo(name: string, rating: number, address = '127.0.0.1', gamePort = 8888): Uint8Array {
+  const octets = address.split('.').map(Number);
+  // The client writes the mirrored address in the order the NAT answer arrived in —
+  // its own log calls 127.0.0.1 "1.0.0.127" — and the LAN one in the natural order.
+  // Two orders in one document is not a mistake to fix; it is what it does.
+  const mirrored = Buffer.from([...octets].reverse());
+  const local = Buffer.from(octets);
+
+  const sockaddr = Buffer.alloc(16);
+  sockaddr.writeUInt16LE(2, 0); // AF_INET
+  sockaddr.writeUInt16BE(40010, 2); // the NAT mirror's own port, as he reports it
+  mirrored.copy(sockaddr, 4);
+
+  const lan = Buffer.alloc(16);
+  local.copy(lan, 0);
+
+  const port = Buffer.alloc(2);
+  port.writeUInt16LE(gamePort, 0);
+
+  const ratingBytes = Buffer.alloc(4);
+  ratingBytes.writeInt32LE(Math.trunc(rating), 0);
+
+  return writeFields([
+    { tag: 4, value: Buffer.from([4, 0, 0, 0]) },
+    {
+      tag: 1,
+      value: writeFields([
+        { tag: 2, value: Buffer.from(name, 'utf8') },
+        { tag: 3, value: writeFields([{ tag: 2, value: sockaddr }]) },
+        { tag: 4, value: writeFields([{ tag: 2, value: port }, { tag: 3, value: lan }]) },
+        { tag: 5, value: ratingBytes },
+      ]),
+    },
+  ]);
 }
 
 /**

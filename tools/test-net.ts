@@ -17,7 +17,7 @@ import { KEY_BLOB_SIZE, decryptWith, encryptTo, generateKeyPair, parsePublicKey,
 import { GUEST, RouterService } from '../src/net/router-service.ts';
 import { Blowfish } from '../src/net/blowfish.ts';
 import { CdKeyRequest, CdKeyService } from '../src/net/cdkey-service.ts';
-import { LobbyMsg, Lsm, RoomUpdate, namedPlayerInfo } from '../src/net/lobby.ts';
+import { LobbyMsg, Lsm, RoomUpdate, playerInfo } from '../src/net/lobby.ts';
 import { readFields, writeFields } from '../src/net/structure.ts';
 import { LADDER_KEYS, Ladder, STARTING_RATING } from '../src/net/ladder.ts';
 import { IrcService, frame, unframe } from '../src/net/irc.ts';
@@ -555,6 +555,45 @@ console.log('\nThe lobby server, from the words the client really said');
   // anything but 0, silently, after the game log has already said he arrived.
   check('and with a status the player panel accepts', (listed?.[0] as GSValue[])?.[7] === '0', String((listed?.[0] as GSValue[])?.[7]));
   check('and the channel says how many are in it', ((inside?.[2] as GSValue[]) ?? [])[13] === '2', String(((inside?.[2] as GSValue[]) ?? [])[13]));
+
+  // He sends his own player-info blob a second AFTER this list went out — the client
+  // composes it only once its ladder row has arrived — and the rating the panel draws
+  // lives inside that blob. So the refresh he asks for on every return to
+  // CStateOutOfRoom has to carry the members again, or his rating stays "…" for the
+  // whole session. The body of that request is [group, mask], measured off the wire.
+  const own = Buffer.from('0408040000000176020e53656e7961616b0508dc050000', 'hex');
+  lobby.receive(
+    build({
+      property: Property.GS,
+      priority: 0,
+      type: MessageType.LOBBY_MSG,
+      sender: 4,
+      receiver: 2,
+      body: [String(LobbyMsg.SET_PLAYER_INFO), ['0', new Uint8Array(own)]],
+    }),
+  );
+  const asked = lobby.receive(
+    build({
+      property: Property.GS,
+      priority: 0,
+      type: MessageType.LOBBY_MSG,
+      sender: 4,
+      receiver: 2,
+      body: [String(LobbyMsg.GROUP_INFO_GET), ['2', '384']],
+    }),
+  );
+  check('a group-info refresh is more than an acknowledgement', asked[0]!.replies.length === 2, asked[0]?.note);
+  const refreshed = parse(asked[0]!.replies[1]!);
+  check('what follows it is a GROUP_INFO', refreshed?.body?.[0] === String(LobbyMsg.GROUP_INFO), String(refreshed?.body?.[0]));
+  const refreshedInside = refreshed?.body?.[1] as GSValue[];
+  check('for the channel he asked about, with the mask he asked with', refreshedInside?.[0] === '2' && refreshedInside?.[1] === '384', JSON.stringify([refreshedInside?.[0], refreshedInside?.[1]]));
+  const again = refreshedInside?.[4] as GSValue[];
+  check('and both players in it again', again?.length === 2, String(again?.length));
+  check(
+    'his record now carrying the blob he sent, which is where the rating is',
+    Buffer.from((again?.[0] as GSValue[])?.[4] as Uint8Array).equals(own),
+    JSON.stringify((again?.[0] as GSValue[])?.[4]),
+  );
 }
 
 console.log("\nThe game's own serialisation, the format inside a blob");
@@ -595,10 +634,24 @@ console.log("\nThe game's own serialisation, the format inside a blob");
     }
   })());
 
-  // The name a synthetic player is given has to be in that format too — the client
-  // reads the blob's name in preference to the record's, so a blob it cannot read
-  // is worse than no blob at all.
-  check('a made-up player info holds his name under tag 2', readFields(Buffer.from(namedPlayerInfo('GhostList')))[0]?.value.toString() === 'GhostList');
+  // The blob we compose for an invented player is checked against the one the client
+  // composed for itself, because "the reader would accept this" is exactly the reasoning
+  // that put a nameless player in the channel: every read is guarded by "is this tag
+  // here", so a document with the name at the TOP level is legal and empty.
+  const invented = readFields(Buffer.from(playerInfo('GhostList', 1234)));
+  check('an invented player info opens with the kind, as his own does', invented[0]?.tag === 4 && invented[0]?.value.length === 4, JSON.stringify(invented[0]?.tag));
+  const inside = readFields(invented[1]!.value);
+  check('and puts everything one level down, under tag 1', invented[1]?.tag === 1, String(invented[1]?.tag));
+  check('with the name under tag 2 in there', inside.find((f) => f.tag === 2)?.value.toString() === 'GhostList', JSON.stringify(inside.map((f) => f.tag)));
+  // Tag 5 is what the panel shows as the rating: OnMemberJoined copies [member+0x38]
+  // into the row, and +0x38 is where 0xdfea70 puts these four bytes.
+  check('and the rating under tag 5, which is the column that said "…"', inside.find((f) => f.tag === 5)?.value.readInt32LE(0) === 1234, JSON.stringify(inside.find((f) => f.tag === 5)?.value));
+  // The shape is the client's own, so its own blob has to parse the same way.
+  const his = readFields(Buffer.from('0408040000000176020e53656e7961616b0324022002009c4a0100007f0000000000000000042c0204b8220320c0a8b21b0000000000000000000000000508dc050000', 'hex'));
+  const hisInside = readFields(his[1]!.value);
+  check('the blob the client really sent has the same skeleton', his[0]?.tag === 4 && his[1]?.tag === 1, JSON.stringify(his.map((f) => f.tag)));
+  check('his name in the same place', hisInside.find((f) => f.tag === 2)?.value.toString() === 'Senyaak');
+  check('and his rating where ours goes — 1500, the row we had just sent him', hisInside.find((f) => f.tag === 5)?.value.readInt32LE(0) === 1500);
 }
 
 console.log('\nHosting a game, from the CREATE_ROOM the player really sent');

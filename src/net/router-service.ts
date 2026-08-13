@@ -37,7 +37,7 @@ import {
   Rooms,
   lobbyEntry,
   memberEntry,
-  namedPlayerInfo,
+  playerInfo,
   roomEntry,
   stampRoomIds,
   type Room,
@@ -86,7 +86,7 @@ const LADDER_QUERY = 1281;
  *
  * Not from us: the blob inside a member record is the player's own, sent in
  * SET_PLAYER_INFO, and we pass it along untouched. Its format is known now
- * (`namedPlayerInfo`, and the reader at 0xdfea70), but his own words are still the
+ * (`playerInfo`, and the reader at 0xdfea70), but his own words are still the
  * ones to forward. What we know unaided is the port his NAT pings come from —
  * 8888, visible in the log as `UDP NATServer:40010 <- 127.0.0.1:8888` — and that
  * is the fallback to reach for when two peers first fail to find each other.
@@ -133,7 +133,7 @@ function seatGuest(ladder: Ladder, presence: Presence): void {
     L_ORCS: 2,
     AVERAGE_HERO_LEVEL: 12,
   });
-  presence.remember(GUEST, namedPlayerInfo(GUEST));
+  presence.remember(GUEST, playerInfo(GUEST, ladder.row(GUEST)['RATING'] ?? 0));
 }
 
 /**
@@ -662,7 +662,7 @@ export class RouterSession {
           const ghosts = this.ghosts
             ? [
                 { name: 'GhostList', info: undefined },
-                { name: 'GhostBlob', info: namedPlayerInfo('GhostBlob') },
+                { name: 'GhostBlob', info: playerInfo('GhostBlob', 1234) },
               ]
             : [];
           for (const ghost of ghosts) {
@@ -674,7 +674,7 @@ export class RouterSession {
                   reply(message, [
                     String(LobbyMsg.MEMBER_JOIN),
                     [
-                      memberEntry('GhostJoin', lobby.id, '127.0.0.1', PlayerStatus.NONE, namedPlayerInfo('GhostJoin')),
+                      memberEntry('GhostJoin', lobby.id, '127.0.0.1', PlayerStatus.NONE, playerInfo('GhostJoin', 1234)),
                     ],
                   ]),
                 ),
@@ -930,12 +930,62 @@ export class RouterSession {
             ],
           };
         }
+        // "Tell me about this group again" — and it is asked EVERY time the client
+        // returns to CStateOutOfRoom, which is the refresh this server had been
+        // answering with a bare "yes".
+        //
+        // That is why the player's own rating stayed "…". The channel's member list
+        // goes out at JOIN_LOBBY, a second before the ladder resolves; only then does
+        // he compose his player-info blob and send it, and the rating the panel shows
+        // is inside that blob — `OnMemberJoined` (0x9108f0) copies `[member+0x38]` into
+        // the row, and 0xdfea70 puts tag 5 of the blob there. So the panel's first and
+        // only picture of him was made before he had said what his rating was.
+        //
+        // Answering with the group in full is safe against the duplicate rows one would
+        // expect from re-announcing everybody: the panel keeps its rows in a map keyed
+        // by the NAME (0x90fc80 looks the name up at 0x911b90 and REPLACES what it
+        // finds), so the same list arriving twice refreshes rather than doubles.
+        //
+        // The body is [group, mask] — mask at index 1, not 2 as JOIN_LOBBY has it,
+        // read off the wire: `"9" ["2","384"]`.
         if (subtype === String(LobbyMsg.GROUP_INFO_GET)) {
-          const groupId = Array.isArray(inner) && typeof inner[0] === 'string' ? inner[0] : '1';
-          return {
-            note: `GROUP_INFO_GET for ${groupId}`,
-            replies: [build(reply(message, [String(MessageType.GSSUCCESS), [subtype, [groupId, '0']]]))],
-          };
+          const fields = Array.isArray(inner) ? inner : [];
+          const groupId = typeof fields[0] === 'string' ? fields[0] : '1';
+          const asked = Number(typeof fields[1] === 'string' ? fields[1] : '') || Lsm.GROUPMEMBERS | Lsm.CHILDGROUPINFO;
+          const lobby = DEFAULT_LOBBIES.find((l) => String(l.id) === groupId);
+          const room = this.rooms.get(Number(groupId));
+          const ack = build(reply(message, [String(MessageType.GSSUCCESS), [subtype, [groupId, '0']]]));
+          if (lobby) {
+            const members = this.presence
+              .inLobby(lobby.id)
+              .map((name) => memberEntry(name, lobby.id, this.addressOf(name), PlayerStatus.NONE, this.presence.info(name)));
+            const rooms = this.rooms.inLobby(lobby.id).map(roomEntry);
+            return {
+              note: `GROUP_INFO_GET for ${groupId} ("${lobby.name}") — ${members.length} player(s), ${rooms.length} game(s), mask ${asked}`,
+              replies: [
+                ack,
+                build(
+                  reply(message, [
+                    String(LobbyMsg.GROUP_INFO),
+                    [groupId, String(asked), lobbyEntry(lobby, this.gameId, members.length), rooms, members],
+                  ]),
+                ),
+              ],
+            };
+          }
+          if (room) {
+            const members = this.membersOf(room);
+            return {
+              note: `GROUP_INFO_GET for ${groupId} ("${room.name}") — ${members.length} player(s), mask ${asked}`,
+              replies: [
+                ack,
+                build(
+                  reply(message, [String(LobbyMsg.GROUP_INFO), [groupId, String(asked), roomEntry(room), [], members]]),
+                ),
+              ],
+            };
+          }
+          return { note: `GROUP_INFO_GET for ${groupId} — no such group here`, replies: [ack] };
         }
         if (subtype === String(LobbyMsg.JOIN_SERVER)) {
           const serverId = Array.isArray(inner) && typeof inner[0] === 'string' ? inner[0] : '1';

@@ -79,15 +79,15 @@ lobby login        -> accepted, three channels pushed
 IRC                -> "IRC welcome", "IRC join channel succeeded"
 join channel       -> "join lobby succeeded(GroupID=1,LobbySrvID=1)"
 NAT address        -> "address request succeeded,address=1.0.0.127:40010"
-ladder             -> answered and READ: "LadderQueryRcv_RequestReply: (39,0,1)", and
-                      the client then does what waited on it — sends its OWN player info
-                      (13.08.2026: a real ROW is sent now, not a refusal — unlaunched)
+ladder             -> WORKS (13.08.2026): "(38,0,1)", then
+                      "StartResultEntryEnumeration(1,0) succeeded" and all 46 fields,
+                      the game printing "RATING=1500" — our number, out of our store
 profile            -> answered and READ: "PSRcv_GetDataReply: ubType=39,iReason=0,iID=2",
                       "PS get data failed,reason=0", and back to CStateOutOfRoom at once
 player info        -> arrives on its own now, 73 bytes, his and not our invention
 player list        -> WORKS (12.08.2026): the panel draws him
-friends (add)      -> answered, matched, and refused in the getter until 13.08.2026:
-                      field 1 is a STRING, not a list (unlaunched)
+friends (add)      -> WORKS (13.08.2026): "FriendsRcv_AddFriend: (38,…,Senyaak)", and a
+                      nameless one is refused with our reason: "(39,1,)"
 create game        -> CREATE_ROOM answered, room 100 in the channel
 join own room      -> "LobbyRcv_RoomInfo", then CStateInRoom / CStateWaitingForPlayers
 settings changes   -> GROUP_CONFIG_UPDATE_RES answered, the room echoed back
@@ -102,9 +102,20 @@ and acted on, and the client now sends its own player-info blob unprompted, whic
 one thing the room's member records were missing.
 
 Since then the three things that were left of that family have been READ rather than
-guessed, and all three are written but **not yet seen in a launch**: the friends reply's
-one wrong field, the ladder's real row, and the shape of a profile write. What each turned
-out to be is in "Reading the client's dispatch" below.
+guessed, and the launch of 13.08.2026 confirmed two: **the ladder row and the friends
+reply both work**, on the first try, exactly as the parsers said they had to look. What
+each turned out to be is in "Reading the client's dispatch" below.
+
+That launch also found the next two, and they share one lesson — *a thing the client
+draws comes from where the client puts it, not from where we would have put it*:
+
+- **the rating in the player panel is inside the player-info blob**, tag 5, and nowhere
+  else. `OnMemberJoined` copies `[member+0x38]` into the row and 0xdfea70 puts tag 5
+  there. The player's own rating stayed "…" because his member record went out at
+  JOIN_LOBBY, a second before his ladder row arrived and he composed that blob.
+- **an invented blob has to be the client's own document, one level down.** Tag 2 at the
+  top level is legal — every read is guarded by "is this tag here" — and it reads as a
+  player with no name at all, which is what the guest was. Everything lives under tag 1.
 
 The second client is the thing nothing has exercised — and the **guest** now stands in for
 half of what it was needed for.
@@ -546,6 +557,39 @@ The reply is thinner than the read's: 0x42b2e0 takes body[1] as a list, its [1] 
 never looks inside, and its [2] as the request id. So a write is answered with an **empty**
 payload; handing the record back passed by accident and said something nobody asked.
 
+### What a player panel row is made of, and how it is refreshed
+
+Measured after the first run that had a guest in it, because he was drawn with no name
+and no rating and the player himself had no rating either.
+
+A row is built in `CPlayersController::OnMemberJoined` (0x9108f0) out of exactly two
+things: `[member+8]`, the name, and `[member+0x38]`, the rating. Both come from the
+player-info blob when there is one (0xdfea70 reads tag 2 into +8 and tag 5 into +0x38),
+and the name falls back to the member record's own field when there is not. **There is no
+third source for the rating**: without a blob the column is empty, whatever the ladder
+said a moment earlier.
+
+The blob is the client's own document and it nests — the 73 bytes it sends of itself:
+
+```
+[4] 04 00 00 00
+[1] { [2] "Senyaak"
+      [3] { [2] 16 bytes: family 2, port 40010, the mirrored address }
+      [4] { [2] port 8888, [3] 16 bytes: 192.168.178.27 }
+      [5] dc 05 00 00 }          <- 1500, the RATING, from the row we had just sent him
+```
+
+`playerInfo` in `src/net/lobby.ts` writes that shape now. A document with tag 2 at the
+top is what the guest had, and the client drew him nameless.
+
+**And the refresh is `GROUP_INFO_GET`.** The client sends it on every return to
+`CStateOutOfRoom` (`LobbySend_GetGroupInfo(2,1,384)`, body `[group, mask]` — the mask is
+index **1** here, not 2 as in JOIN_LOBBY), and this server used to answer it with a bare
+"yes". So the panel's only picture of the player was the one made before he had a rating
+to report. Answering it in full is safe: the panel keeps its rows in a map keyed by the
+NAME (0x90fc80 looks the name up at 0x911b90 and replaces what it finds), so the same
+list arriving again refreshes rather than doubles.
+
 ### The guest, and what he is not
 
 A player the server seats itself: a name, a player-info blob, a ladder row with games in it,
@@ -558,24 +602,24 @@ not one's own, a name to right-click, a profile that is not yours. He is not a g
 
 ## What to pick up next
 
-All three of the previous three are written; **one launch would say whether the reading was
-right**, and it is the same launch for all of them. What to watch for in the game's log,
-each line being the verdict on one of them:
+Two of the three were confirmed by the run of 13.08.2026 and are in the table at the top
+of this file. What that run left:
 
-1. `LadderQuery_StartResultEntryEnumeration(…) succeeded` — the row parsed. Against it:
-   "ladder query request failed,reason=63" (the leading tag was not 1) and "…reason=64"
-   (0x432c80 gave up inside the table — a row whose cell count differs from the column
-   count is error 3 and lands here).
-2. `FriendsRcv_AddFriend` with the name in it, after right-clicking the guest. Silence
-   means the string field is still not what 0x4426c0 wants.
-3. **The write we have never seen.** With the profile refused, the client should offer to
-   create one and then send 0x402. The store keeps it, the reply is now the empty one its
-   reader wants, and the log line to look for is `PSRcv_SetDataReply`. If it never comes,
-   the question is what the client asks BEFORE writing, not what we answer.
+1. **The two ratings and the guest's name.** Both fixes are written and neither has been
+   launched: the guest's blob is the client's own shape now, and `GROUP_INFO_GET` answers
+   with the channel in full. The verdict is on screen rather than in the log — a guest with
+   a name and 1560 beside it, and the player's own 1500 appearing instead of "…" once he
+   returns to the channel screen.
+2. **The write we have never seen.** With the profile refused, nothing in that run went on
+   to write one. What sends it is `NUbi::CStateOutOfRoom::ProcessSaveProfile` (0xe1bec0),
+   driven from the multiplayer profile screen (`CMPProfileSaver`, and the widgets
+   `AcquireProfile` / `UpdateProfile` / `AcquireProfileFailed`), and it logs **"PS set data
+   sent, N bytes"** on its way out. So the question is what makes that screen offer to save
+   — not what we answer, which is already the shape its reader wants.
 
-And two things that only a launch can decide, both about the guest: whether the client
-draws him in the player list beside the player himself, and whether his ladder row is what
-"Profile" shows when he is the one selected.
+   Worth knowing before designing anything: **we cannot invent a profile.** The record is
+   the client's own composition and the only way to learn its bytes is to catch one; until
+   then a refusal is the honest answer and it costs the player nothing but that dialog.
 
 And then the wall proper:
 

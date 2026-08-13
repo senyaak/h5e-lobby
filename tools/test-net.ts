@@ -1476,6 +1476,14 @@ console.log('\nTwo players in one channel, and what the other one is told');
     check('changing the settings tells the channel', first.length === 1, updated[0]?.note);
     check('and says so in the log', updated[0]!.note.includes('player(s) told'), updated[0]?.note);
     check('nothing goes back to the host himself, which is what used to loop', second.length === 0, String(second.length));
+    // And the same settings again tell nobody: the host repeats himself several times a
+    // second, and forwarding each one rebuilt the other player's screen continuously.
+    first.length = 0;
+    const again = two.receive(
+      lobbyMsg([String(LobbyMsg.GROUP_CONFIG_UPDATE_RES), [id, String(RoomUpdate.GROUP_INFO), settings]]),
+    );
+    check('the same settings a second time tell nobody', first.length === 0, again[0]?.note);
+    check('and the log says why', again[0]!.note.includes('the same settings as before'), again[0]?.note);
     two.receive(lobbyMsg([String(LobbyMsg.GROUP_LEAVE), ['1']]));
     first.length = 0;
     second.length = 0;

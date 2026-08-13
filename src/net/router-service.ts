@@ -1252,6 +1252,14 @@ export class RouterSession {
           const flags = Number(typeof fields[1] === 'string' ? fields[1] : '0');
           const room = this.rooms.get(roomId);
           if (!room) return { note: `GROUP_CONFIG_UPDATE_RES ${roomId} — no such room`, replies: [] };
+          // What the room looked like before he touched it, so that the people watching
+          // are told when it CHANGES and not merely when he says something. The host
+          // sends these three to five times a second and most of them carry the same
+          // bytes back; forwarding every one rebuilt the other player's screen
+          // continuously — his log filled with "new room" and "member joined … ignoring"
+          // several times a second, and joining a game that is being redrawn under you
+          // is what "еле подключилось" was.
+          const before = Buffer.from(room.info);
           const changed: string[] = [];
           let at = 2;
           const next = (): GSValue | undefined => fields[at++];
@@ -1287,21 +1295,23 @@ export class RouterSession {
             const value = next();
             if (value instanceof Uint8Array) room.altInfo = value;
           }
-          // AND EVERYBODY ELSE IN THE CHANNEL GETS THE NEW ONE. The host makes his room
-          // with one description and replaces it a fraction of a second later with a
-          // bigger one — 522 bytes at CREATE_ROOM, 590 the moment he is inside it — and
-          // until now we kept the second and forwarded the first. That description is
-          // what the other client builds its own game record out of, so his copy of the
-          // game was the half-finished one, which is what "Join" is greyed out over.
+          // AND EVERYBODY ELSE IN THE CHANNEL GETS THE NEW ONE, when it is new. The host
+          // makes his room with one description and replaces it a fraction of a second
+          // later with a bigger one — 522 bytes at CREATE_ROOM, 590 the moment he is
+          // inside it, 660 once somebody joins — and until now we kept the second and
+          // forwarded the first. That description is what the other client builds its own
+          // record of the game out of, so his copy was the half-finished one, and that is
+          // what Join was greyed out over.
           //
           // Only to the OTHERS: the host is the one sending these, and answering him with
           // a room he did not ask about is what made him send another update, which we
           // answered with another room — several a second until the game was closed.
-          const told = this.tellChannel(room.parentId);
+          const different = !before.equals(Buffer.from(room.info));
+          const told = different ? this.tellChannel(room.parentId) : 0;
           return {
             note:
               `GROUP_CONFIG_UPDATE_RES ${roomId} — ${changed.length ? changed.join(', ') : `nothing we read (flags ${flags})`}` +
-              (told ? `, ${told} player(s) told` : ''),
+              (told ? `, ${told} player(s) told` : different ? '' : ', the same settings as before — nobody told'),
             replies: [
               build(reply(message, [String(MessageType.GSSUCCESS), [subtype, [String(roomId)]]])),
               // The room back out, **without its members**. The settings changed, the

@@ -1462,6 +1462,25 @@ console.log('\nTwo players in one channel, and what the other one is told');
   check('the game is gone from his channel', after.games.length === 0, JSON.stringify(after.games));
   check('and so is the player', !after.names.includes('Player2'), JSON.stringify(after.names));
 
+  // A room whose settings change is a room everybody else has to be handed again: the
+  // host makes it with one description and replaces it a moment later with a bigger one,
+  // and the other client builds its own record of the game out of that description.
+  {
+    const made = two.receive(capturedCreateRoom());
+    const id = String(((parse(made[0]!.replies[0]!)?.body?.[1] as GSValue[])?.[1] as GSValue[])?.[0]);
+    first.length = 0;
+    const settings = new Uint8Array(590).fill(7);
+    const updated = two.receive(
+      lobbyMsg([String(LobbyMsg.GROUP_CONFIG_UPDATE_RES), [id, String(RoomUpdate.GROUP_INFO), settings]]),
+    );
+    check('changing the settings tells the channel', first.length === 1, updated[0]?.note);
+    check('and says so in the log', updated[0]!.note.includes('player(s) told'), updated[0]?.note);
+    check('nothing goes back to the host himself, which is what used to loop', second.length === 0, String(second.length));
+    two.receive(lobbyMsg([String(LobbyMsg.GROUP_LEAVE), ['1']]));
+    first.length = 0;
+    second.length = 0;
+  }
+
   // Inside a game, the host has to hear about his guest — nothing else tells him, and a
   // host who thinks he is alone starts nothing.
   {

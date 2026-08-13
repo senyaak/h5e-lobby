@@ -339,14 +339,45 @@ mostly Haven with a wood elf, a druid and a giant along the way, the evil one mo
 Inferno and Dungeon with two undead at the end. Twenty-two portraits in all, and a player
 "unlocks" one by reaching the band, which is the whole of that mechanism.
 
-**There is no avatar to choose.** The screen has `AvatarBack` and `AvatarForward` buttons
-and their tooltips say "pick the previous/next badge", but they are the stump of a cut
-feature: their `.xdb` says `<Enabled>false</Enabled>` with no commands, and in the exe each
-name appears exactly once — where the screen finds the button and sets its visibility. No
-handler, no list, no index (the field that looks like it held one is zeroed and never
-read). The picture is `<Icon>` of the rank record and nothing else, so **the only things
-that change a player's portrait are his rating and which factions he has played**. Giving
-players a real choice would mean patching the exe and the two `.xdb` files.
+**There is no avatar to choose — and what was cut is worth knowing.** The screen has
+`AvatarBack` and `AvatarForward` buttons whose tooltips read "pick the previous/next
+BADGE", so they were meant to leaf through a player's own icon rather than his rank. What
+is left of that:
+
+- both `.xdb` say `<Enabled>false</Enabled>` with every command list empty, though the
+  buttons are placed and drawn (x=86 and x=275, either side of the portrait);
+- in the exe each name appears exactly once — the screen finds the control and sets its
+  visibility, nothing more;
+- `CMPProfileScreen+0x210` sits between the two button pointers and the request pointer,
+  is zeroed in the constructor and **read nowhere**: the index that is missing;
+- there is no badge anywhere to be chosen FROM. The rank icons point at the duel arena's
+  creature faces, and of the 94 such portraits only 22 are used by ranks — the other 72
+  are exactly the pool such a feature would have leafed through;
+- and there is nowhere to keep the choice: the ladder schema (built in 0xDF8460) has no
+  AVATAR or BADGE column, and neither does the profile record.
+
+So the feature was cut before it was wired, not broken. Giving players a real choice means
+patching the exe for a handler, the two `.xdb` for `Enabled`, and inventing somewhere to
+store the index — the profile blob would do, since it is ours and already round-trips.
+
+**And there is no "you have been promoted" anywhere.** `0x5C3190`, which turns a level into
+a rank, has exactly one caller: the profile screen's own drawing. The rank is recomputed
+every time the screen opens and is not an event; the exe has no `RankUp`/`NewRank`/
+`Promotion` strings at all (every `LevelUp*` class is a hero levelling in a game). A
+notification about a new rank would be a new feature, not a restored one.
+
+**Nor is the rank shown anywhere else.** Every multiplayer screen in the data — lobby,
+waiting room, create-game, channel list, chat — mentions neither rank nor avatar nor the
+arena faces. The number beside a name in the channel comes from the player-info blob, and
+that is all any other screen ever sees of a player's standing.
+
+**Two more things Ubisoft compiled and never connected:** a whole ladder API
+(`LadderQueryInit`, `AUILadderListener`, `CLadderRowImpl`, …) with no `UI/Ladder*` screen
+in the data — so there is no leaderboard in the game, only the one-row query the profile
+makes — and `CMPProfileAndLadderInfoLoader`, registered with the object factory under an id
+nothing ever asks for. Also: the rank table was never extended for Tribes of the East. Its
+icons come from the arena faces, and there are none for Fortress or Stronghold — while the
+ladder schema does carry `W_DWARVES` and `W_ORCS`.
 
 **And the profile blob holds only the comment.** Three captures of a real save differ in
 one field: a UTF-16 string of what the player typed into "Additional information", under a

@@ -25,7 +25,7 @@ import { mkdirSync, createWriteStream } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { NatService } from '../src/net/nat-service.ts';
-import { GUEST, RouterService } from '../src/net/router-service.ts';
+import { GUEST, GUEST_LOBBY, RouterService } from '../src/net/router-service.ts';
 import { CdKeyService } from '../src/net/cdkey-service.ts';
 import { IrcConnection, IrcService } from '../src/net/irc.ts';
 
@@ -136,7 +136,8 @@ if (router.ghosts) log('ghosts on — GhostList, GhostBlob and GhostJoin will be
 // The guest is not a ghost: he is a player with a name, a blob and a ladder row, and
 // he is here so that the things needing SOMEBODY ELSE — a profile read about another
 // player, a friend to add, a rating that is not one's own — can be tried with one
-// copy of the game. He follows whoever enters a channel.
+// copy of the game. He sits in the Ranked channel — one channel, because a player is
+// in one channel at a time and so is he.
 router.seedProfile = process.argv.includes('--seed-profile');
 if (router.seedProfile) log('seed-profile on — a player with no profile is handed a minimal one, to see what his profile screen does with it');
 
@@ -144,7 +145,7 @@ if (router.seedProfile) log('seed-profile on — a player with no profile is han
 if (router.imported.length) log(`brought across from the old JSON files: ${router.imported.join(', ')}`);
 log(`accounts: ${router.accounts.size} — a name is created by its first login, and the password is checked from then on`);
 
-log(`${GUEST} is seated in whichever channel a player enters — rating ${router.ladder.row(GUEST)['RATING']}`);
+log(`${GUEST} is seated in channel ${GUEST_LOBBY} — rating ${router.ladder.row(GUEST)['RATING']}`);
 
 // Every key the player types is accepted; see src/net/cdkey-service.ts for why
 // that is the honest answer rather than a shortcut.
@@ -174,13 +175,21 @@ const BOT_SAYS = "I'M THE BEST!";
 const BOT_EVERY = 2 * 60 * 1000;
 if (!process.argv.includes('--quiet-bot')) {
   setInterval(() => {
-    for (const channel of irc.channels) {
+    // Only where he actually is. A player is in one channel at a time and so is the
+    // guest — a voice from a channel nobody is sitting in would be a bug pretending
+    // to be a feature. The chat's channel is `#LobbyGrp<lobby>.<server>`, and the
+    // client sends the name with a colon in front of it, so it is matched by the
+    // lobby number rather than rebuilt from one.
+    for (const channel of irc.channels.filter((name) => new RegExp(`#LobbyGrp${GUEST_LOBBY}\\.`).test(name))) {
       const { line, to } = irc.say(GUEST, channel, BOT_SAYS);
       for (const listener of to) chatSockets.get(listener)?.write(line);
       if (to.length) log(`IRC  ${GUEST} -> ${channel}: ${BOT_SAYS} (to ${to.length} listener(s))`);
     }
   }, BOT_EVERY).unref();
-  log(`${GUEST} will say "${BOT_SAYS}" in every occupied channel every ${BOT_EVERY / 1000}s — --quiet-bot stops him`);
+  log(
+    `${GUEST} sits in channel ${GUEST_LOBBY} and will say "${BOT_SAYS}" there every ${BOT_EVERY / 1000}s` +
+      ' — --quiet-bot stops him',
+  );
 }
 
 /** Which socket carries which chat connection, so a line can be relayed on. */

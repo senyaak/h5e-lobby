@@ -109,12 +109,22 @@ function messageId(type: number): GSValue {
  * to the friends list, a ladder row that is not one's own. So one player is seated by
  * the server itself. He is not a ghost (`--ghosts` seats three of those to see what
  * the panel draws of a player with no data): he has a name, a player-info blob, a
- * ladder row with games in it, and he follows whoever enters a channel into it.
+ * ladder row with games in it, and he sits in the Ranked channel.
  *
  * What he cannot do is answer. He never joins a room and nothing starts a game against
  * him — that still needs the second client, and nothing here pretends otherwise.
  */
 export const GUEST = 'Guest';
+
+/**
+ * And he sits in ONE channel: Ranked.
+ *
+ * He used to follow whoever entered a channel into it, which reads well until two
+ * players are in two channels — `Presence` keeps one channel per name, so "follow"
+ * means "leave the other one", and a guest who teleports is worse than a guest who
+ * is somewhere. Ranked is where a rating means anything, which is what he is for.
+ */
+export const GUEST_LOBBY = 2;
 
 /**
  * His ladder row, once, with numbers that could not be a default.
@@ -137,6 +147,7 @@ function seatGuest(ladder: Ladder, presence: Presence): void {
     AVERAGE_HERO_LEVEL: 12,
   });
   presence.remember(GUEST, playerInfo(GUEST, ladder.row(GUEST)['RATING'] ?? 0));
+  presence.enter(GUEST, GUEST_LOBBY);
 }
 
 /**
@@ -756,11 +767,6 @@ export class RouterSession {
           const asked = Number(typeof fields[2] === 'string' ? fields[2] : '') || Lsm.GROUPMEMBERS | Lsm.CHILDGROUPINFO;
           const lobby = DEFAULT_LOBBIES.find((l) => String(l.id) === groupId) ?? DEFAULT_LOBBIES[0]!;
           this.presence.enter(this.username, lobby.id);
-          // The guest follows whoever comes in, rather than sitting in one channel and
-          // being absent from the other two. Presence keeps one channel per name, so
-          // this moves him; with two real clients in different channels he is in the
-          // last one entered, which is a thing to notice rather than to fix now.
-          this.presence.enter(GUEST, lobby.id);
           const rooms = this.rooms.inLobby(lobby.id).map(roomEntry);
           // The people in the channel, himself among them. Left empty, the client's
           // player list is empty too, and "Profile" — "look at the results of the

@@ -19,7 +19,7 @@ list section). **Turn it off before a two-client test** — otherwise the channe
 strangers who cannot answer.
 
 The **guest** is always there and is not part of that: one player, with a name, a blob and
-a ladder row of his own, seated in whichever channel somebody enters. He is what makes a
+a ladder row of his own, seated in the Ranked channel. He is what makes a
 profile read, a friend to add and a foreign rating testable with one copy of the game.
 
 Then start the game from the copy: `C:\Projects\homm5-game-net\run-net.bat`. That
@@ -657,7 +657,8 @@ insert side had each been self-consistent and each wrong about where to look.
 ### The guest, and what he is not
 
 A player the server seats itself: a name, a player-info blob, a ladder row with games in it,
-and he follows whoever enters a channel (`GUEST` in `src/net/router-service.ts`). He exists
+and he sits in **Ranked** (`GUEST` and `GUEST_LOBBY` in `src/net/router-service.ts`) — one
+channel, because a player is in one channel at a time and so is he. He exists
 because half of what needed a second client only needs somebody ELSE — a row to read that is
 not one's own, a name to right-click, a profile that is not yours. He is not a ghost:
 `--ghosts` seats players with nothing behind them to see what the panel draws.

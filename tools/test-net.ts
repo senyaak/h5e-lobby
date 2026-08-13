@@ -542,24 +542,29 @@ console.log('\nThe lobby server, from the words the client really said');
   // player a lone tester needs — somebody to select, to read a ladder row about, and
   // to add as a friend — and he follows whoever enters a channel into it.
   const listed = inside?.[4] as GSValue[];
+  // Looked up BY NAME rather than by position: the panel keys its rows by name too
+  // (0x911b90), and who comes first in the list is an accident of who entered when —
+  // the guest is seated before anyone connects, so he is first here.
+  const memberNamed = (who: string): GSValue[] =>
+    (listed ?? []).map((entry) => entry as GSValue[]).find((entry) => entry[0] === who) ?? [];
   check('and with him in its player list', listed?.length === 2, String(listed?.length));
-  check('under his own name', (listed?.[0] as GSValue[])?.[0] === 'Senyaak', String((listed?.[0] as GSValue[])?.[0]));
-  check('with the guest beside him, to have somebody to select', (listed?.[1] as GSValue[])?.[0] === GUEST, String((listed?.[1] as GSValue[])?.[0]));
+  check('under his own name', memberNamed('Senyaak')[0] === 'Senyaak', JSON.stringify((listed ?? []).map((e) => (e as GSValue[])[0])));
+  check('with the guest beside him, to have somebody to select', memberNamed(GUEST)[0] === GUEST, JSON.stringify(memberNamed(GUEST)[0]));
   check(
     'and the guest carries a blob, so his record is not an empty name',
-    (listed?.[1] as GSValue[])?.[4] instanceof Uint8Array,
-    JSON.stringify((listed?.[1] as GSValue[])?.[4]),
+    memberNamed(GUEST)[4] instanceof Uint8Array,
+    JSON.stringify(memberNamed(GUEST)[4]),
   );
   check(
     'at the address he reported for himself',
-    (listed?.[0] as GSValue[])?.[2] === '192.168.178.27',
-    String((listed?.[0] as GSValue[])?.[2]),
+    memberNamed('Senyaak')[2] === '192.168.178.27',
+    String(memberNamed('Senyaak')[2]),
   );
   // And with the status the panel insists on. This is the field that kept the list
   // empty while every other part of the message was right: the client's own
   // CPlayersController::OnMemberJoined (0x9108f0) drops a member whose status is
   // anything but 0, silently, after the game log has already said he arrived.
-  check('and with a status the player panel accepts', (listed?.[0] as GSValue[])?.[7] === '0', String((listed?.[0] as GSValue[])?.[7]));
+  check('and with a status the player panel accepts', memberNamed('Senyaak')[7] === '0', String(memberNamed('Senyaak')[7]));
   check('and the channel says how many are in it', ((inside?.[2] as GSValue[]) ?? [])[13] === '2', String(((inside?.[2] as GSValue[]) ?? [])[13]));
 
   // He sends his own player-info blob a second AFTER this list went out — the client
@@ -595,10 +600,12 @@ console.log('\nThe lobby server, from the words the client really said');
   check('for the channel he asked about, with the mask he asked with', refreshedInside?.[0] === '2' && refreshedInside?.[1] === '384', JSON.stringify([refreshedInside?.[0], refreshedInside?.[1]]));
   const again = refreshedInside?.[4] as GSValue[];
   check('and both players in it again', again?.length === 2, String(again?.length));
+  const refreshedNamed = (who: string): GSValue[] =>
+    (again ?? []).map((entry) => entry as GSValue[]).find((entry) => entry[0] === who) ?? [];
   check(
     'his record now carrying the blob he sent, which is where the rating is',
-    Buffer.from((again?.[0] as GSValue[])?.[4] as Uint8Array).equals(own),
-    JSON.stringify((again?.[0] as GSValue[])?.[4]),
+    Buffer.from(refreshedNamed('Senyaak')[4] as Uint8Array).equals(own),
+    JSON.stringify(refreshedNamed('Senyaak')[4]),
   );
 }
 

@@ -754,10 +754,43 @@ to him is possible — the client draws whatever arrives, and it packs colour an
 into the message text itself — but it is our invention, and replayed lines will look
 like they were just said, because the wire carries no timestamps.
 
-Accounts are still "any name, any password". The client has no registration
-screen (`UI/MPRegister` is the progress window), but the wire has
-`NEWUSERREQUEST` and the client knows how to say "name taken" and "wrong
-password", so creating an account on first login needs no client change —
-Сеня chose that over a website or a new screen. Removing the CD-key prompt is still
-open too: the key sits in the client's `ubi_cdkey` setting, used by the screens at
+## Accounts, and one database under everything
+
+13.08.2026. Three JSON files rewritten whole were fine while nothing depended on them
+and one player existed. A password is not that: it must not be lost to a half-written
+file, and two clients will write at once. So everything a player leaves behind — his
+account, his profile, his rating, his friendships — is in one SQLite database,
+`data/lobby.db`, opened with **`node:sqlite`**, which is part of Node itself and needs
+no build step and no `node_modules` (this project takes no native dependencies).
+
+The schema is in [src/net/database.ts](../src/net/database.ts) and is applied on open,
+so there is no migration to run. The three old files are **imported once**, into empty
+tables, and then left alone rather than deleted — a rating that took a session to earn
+should not vanish because the storage changed underneath it.
+
+**The first login of a name creates the account**, with the password that came with it;
+every login after that has to match. That is the whole of registration, and it needs no
+client change: the client has no registration screen, but it does know how to be
+refused ("router login failed,reason="). A password is stored as `scrypt` over sixteen
+random bytes of salt, compared with `timingSafeEqual`, and it is never written to the
+log — the login body goes into the log whole, but every string after the name goes in
+as its LENGTH, which is enough to identify the field and useless to anyone reading the
+file.
+
+Two things to know before the next launch:
+
+- **which field the password is has not been seen yet.** It is taken from field 1, the
+  string after the name, and the log now prints the shape of the whole body — so the
+  next login says whether that is right. If the client sends no password at all,
+  everybody's account is created with an empty one and a name is claimed by whoever
+  logs in first; the log will show that too.
+- **only the ROUTER checks credentials.** The same LOGIN arrives on the proxy with the
+  same name and no password, and treating that as a second authentication would lock a
+  player out of his own session.
+
+Accounts were, until then, "any name, any password" — and the reasoning that got here is
+worth keeping: the wire has `NEWUSERREQUEST` and the client knows how to say "name
+taken" and "wrong password", so creating an account on first login needs no client
+change, which Сеня chose over a website or a new screen. Removing the CD-key prompt is
+still open: the key sits in the client's `ubi_cdkey` setting, used by the screens at
 0x87B790, 0x87C840, 0x87CF50, 0x87D2B0.

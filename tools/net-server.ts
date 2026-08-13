@@ -140,6 +140,10 @@ if (router.ghosts) log('ghosts on — GhostList, GhostBlob and GhostJoin will be
 router.seedProfile = process.argv.includes('--seed-profile');
 if (router.seedProfile) log('seed-profile on — a player with no profile is handed a minimal one, to see what his profile screen does with it');
 
+// One database now holds accounts, profiles, ratings and friendships (src/net/database.ts).
+if (router.imported.length) log(`brought across from the old JSON files: ${router.imported.join(', ')}`);
+log(`accounts: ${router.accounts.size} — a name is created by its first login, and the password is checked from then on`);
+
 log(`${GUEST} is seated in whichever channel a player enters — rating ${router.ladder.row(GUEST)['RATING']}`);
 
 // Every key the player types is accepted; see src/net/cdkey-service.ts for why

@@ -14,12 +14,15 @@ import { HEADER_SIZE, Flags, buildSegment, checksum, parseSegment, verify } from
 import { MessageType, Property, build, parse } from '../src/net/gs-message.ts';
 import { NatService, inetU32 } from '../src/net/nat-service.ts';
 import { KEY_BLOB_SIZE, decryptWith, encryptTo, generateKeyPair, parsePublicKey, publicKeyBlob } from '../src/net/pkc.ts';
-import { GUEST, RouterService } from '../src/net/router-service.ts';
+import { GUEST, RouterService, type RouterSession } from '../src/net/router-service.ts';
 import { Blowfish } from '../src/net/blowfish.ts';
 import { CdKeyRequest, CdKeyService } from '../src/net/cdkey-service.ts';
 import { LobbyMsg, Lsm, RoomUpdate, playerInfo } from '../src/net/lobby.ts';
 import { readFields, writeFields } from '../src/net/structure.ts';
 import { LADDER_KEYS, Ladder, STARTING_RATING } from '../src/net/ladder.ts';
+import { Accounts } from '../src/net/accounts.ts';
+import { Friends } from '../src/net/friends.ts';
+import { openDatabase } from '../src/net/database.ts';
 import { IrcService, frame, unframe } from '../src/net/irc.ts';
 import { readFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -248,7 +251,7 @@ console.log('\nRSA key blobs, against the key a real client sent');
 
 console.log('\nRouter, driven by the recorded packet');
 {
-  const session = new RouterService({ address: '127.0.0.1', port: 40001 }, { address: '127.0.0.1', port: 40030 }, { address: '127.0.0.1', port: 40031 }, { address: '127.0.0.1', port: 40040 }).session();
+  const session = new RouterService({ address: '127.0.0.1', port: 40001 }, { address: '127.0.0.1', port: 40030 }, { address: '127.0.0.1', port: 40031 }, { address: '127.0.0.1', port: 40040 }, join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-net.db')).session();
   const events = session.receive(ROUTER_KEY_EXCHANGE);
   check('the key exchange gets exactly one answer', events.length === 1 && events[0]!.replies.length === 1, events[0]?.note);
 
@@ -289,7 +292,7 @@ console.log('\nRouter, driven by the recorded packet');
 
 console.log('\nRouter, once the session keys are up');
 {
-  const session = new RouterService({ address: '127.0.0.1', port: 40001 }, { address: '127.0.0.1', port: 40030 }, { address: '127.0.0.1', port: 40031 }, { address: '127.0.0.1', port: 40040 }).session();
+  const session = new RouterService({ address: '127.0.0.1', port: 40001 }, { address: '127.0.0.1', port: 40030 }, { address: '127.0.0.1', port: 40031 }, { address: '127.0.0.1', port: 40040 }, join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-net.db')).session();
   // Step one gives us the key the client should seal its session key to.
   const opened = session.receive(ROUTER_KEY_EXCHANGE);
   const ourBlob = (parse(opened[0]!.replies[0]!)!.body![1] as GSValue[])[2] as Uint8Array;
@@ -419,6 +422,7 @@ console.log('\nThe proxy desk answers differently, because the client asked it t
     { address: '127.0.0.1', port: 40030 },
     { address: '127.0.0.1', port: 40031 },
     { address: '127.0.0.1', port: 40040 },
+    join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-net.db'),
   ).session('proxy');
 
   const login = build({ property: Property.GS, priority: 0, type: MessageType.LOGIN, sender: 4, receiver: 1, body: ['Senyaak', 'secret'] });
@@ -446,6 +450,7 @@ console.log('\nThe lobby, as far as the wait module goes');
     { address: '127.0.0.1', port: 40030 },
     { address: '127.0.0.1', port: 40031 },
     { address: '127.0.0.1', port: 40040 },
+    join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-net.db'),
   ).session('router');
 
   const lobbyMessage = (subtype: number, inner: GSValue[]): Buffer =>
@@ -488,6 +493,7 @@ console.log('\nThe lobby server, from the words the client really said');
     { address: '127.0.0.1', port: 40030 },
     { address: '127.0.0.1', port: 40031 },
     { address: '127.0.0.1', port: 40040 },
+    join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-net.db'),
   ).session('lobby');
 
   // Verbatim: name, server id, its own address, its netmask, and a zero.
@@ -661,6 +667,7 @@ console.log('\nHosting a game, from the CREATE_ROOM the player really sent');
     { address: '127.0.0.1', port: 40030 },
     { address: '127.0.0.1', port: 40031 },
     { address: '127.0.0.1', port: 40040 },
+    join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-net.db'),
   ).session('lobby');
   lobby.username = 'Senyaak';
 
@@ -779,6 +786,7 @@ console.log('\nInside the room: his own info, and changing the settings');
     { address: '127.0.0.1', port: 40030 },
     { address: '127.0.0.1', port: 40031 },
     { address: '127.0.0.1', port: 40040 },
+    join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-net.db'),
   ).session('lobby');
   lobby.username = 'Senyaak';
   const lobbyMsg = (body: GSValue[]): Buffer =>
@@ -854,7 +862,7 @@ console.log('\nThe ladder, from the query the client really sent');
     { address: '127.0.0.1', port: 40030 },
     { address: '127.0.0.1', port: 40031 },
     { address: '127.0.0.1', port: 40040 },
-    join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-ladder.json'),
+    join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-net.db'),
   ).session('proxy');
 
   // The body verbatim, as it arrived twice on the proxy wait module: the request
@@ -946,7 +954,7 @@ console.log('\nThe ladder, from the query the client really sent');
   const secondTable = (secondCarried?.[1] as GSValue[])?.[1] as GSValue[];
   check("and judged by the LADDER's id, which is 2 here and not the row count", secondTable?.[0] === '2', JSON.stringify(secondTable?.[0]));
   check('the log names both, so a mismatch is visible without a launch', second[0]!.note.includes('query 3 (the ladder\'s own id 2)'), second[0]?.note);
-  const stats = new Ladder(join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-ladder.json')).row('Senyaak');
+  const stats = new Ladder(openDatabase(join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-net.db')).db).row('Senyaak');
   check('with all 46 named fields in the store', Object.keys(stats).length === 46, String(Object.keys(stats).length));
   check('starting rated, not at zero', stats['RATING'] === STARTING_RATING, String(stats['RATING']));
   check('and with nothing played', stats['GAMES_PLAYED'] === 0, String(stats['GAMES_PLAYED']));
@@ -957,16 +965,14 @@ console.log('\nAdding a friend, from the right-click the client really sent');
 {
   // Its own file, emptied first: a store that outlives the process would otherwise
   // answer "already there" to the first check and pass for last week's reasons.
-  const friendsFile = join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-friends.json');
-  rmSync(friendsFile, { force: true });
+  const friendsDb = join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-friends.db');
+  rmSync(friendsDb, { force: true });
   const router = new RouterService(
     { address: '127.0.0.1', port: 40001 },
     { address: '127.0.0.1', port: 40030 },
     { address: '127.0.0.1', port: 40031 },
     { address: '127.0.0.1', port: 40040 },
-    join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-ladder.json'),
-    join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-profiles.json'),
-    friendsFile,
+    friendsDb,
   ).session('router');
   router.username = 'Senyaak';
 
@@ -1005,16 +1011,15 @@ console.log('\nThe profile, from the read the client really asked for');
   // A store that survives its process is the point of this one, so the file has to go
   // before the checks run — otherwise the first assertion reads what the LAST run
   // wrote and passes or fails for reasons that have nothing to do with the code.
-  const profileFile = join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-profiles.json');
-  rmSync(profileFile, { force: true });
+  const profileDb = join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-profiles.db');
+  rmSync(profileDb, { force: true });
 
   const proxy = new RouterService(
     { address: '127.0.0.1', port: 40001 },
     { address: '127.0.0.1', port: 40030 },
     { address: '127.0.0.1', port: 40031 },
     { address: '127.0.0.1', port: 40040 },
-    join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-ladder.json'),
-    profileFile,
+    profileDb,
   );
   const session = proxy.session('proxy');
   session.username = 'Senyaak';
@@ -1061,10 +1066,9 @@ console.log('\nThe profile, from the read the client really asked for');
       { address: '127.0.0.1', port: 40030 },
       { address: '127.0.0.1', port: 40031 },
       { address: '127.0.0.1', port: 40040 },
-      join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-ladder.json'),
-      join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-seed-profiles.json'),
+      join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-seed.db'),
     );
-    rmSync(join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-seed-profiles.json'), { force: true });
+
     seeding.seedProfile = true;
     const asked = seeding.session('proxy').receive(
       build({
@@ -1161,8 +1165,7 @@ console.log('\nThe profile, from the read the client really asked for');
     { address: '127.0.0.1', port: 40030 },
     { address: '127.0.0.1', port: 40031 },
     { address: '127.0.0.1', port: 40040 },
-    join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-ladder.json'),
-    profileFile,
+    profileDb,
   );
   check(
     'and a new server still has it, because it is on disk',
@@ -1213,6 +1216,108 @@ console.log('\nChat, unwrapped from what the client actually sent');
   check('the echo is the join itself', lines[0] === ':Senyaak JOIN :#LobbyGrp1.1', String(lines[0]));
   check('the names list ends properly', lines[2]?.includes('366') === true, String(lines[2]));
   check('and the channel is remembered', chat.channels.has(':#LobbyGrp1.1'));
+}
+
+console.log('\nAccounts: a name belongs to whoever said it first');
+{
+  // In memory, because an account test that shares a file with the last run is a test
+  // that passes for last week's reasons — and because the schema is applied on open,
+  // so there is nothing to set up.
+  const accounts = new Accounts(openDatabase(':memory:').db);
+  check('a name nobody has used is not an account yet', !accounts.has('Senyaak'));
+  check('the first login CREATES it', accounts.login('Senyaak', 'swordsman') === 'created');
+  check('and the same name and password is welcomed back', accounts.login('Senyaak', 'swordsman') === 'welcome-back');
+  check('a different password is refused', accounts.login('Senyaak', 'archer') === 'wrong-password');
+  check('and the refusal did not change anything', accounts.login('Senyaak', 'swordsman') === 'welcome-back');
+  // Names come from a screen where a player types them, so "senyaak" and "Senyaak"
+  // are the same account — the alternative is two accounts and one very confused player.
+  check('the name is matched without regard to case', accounts.login('senyaak', 'swordsman') === 'welcome-back');
+  check('another name is another account', accounts.login('Guest', '') === 'created' && accounts.size === 2);
+  check('an empty password is a password like any other', accounts.login('Guest', '') === 'welcome-back');
+  check('and it is not the same as some other empty-ish one', accounts.login('Guest', ' ') === 'wrong-password');
+
+  // What is kept, and what is NOT: the password itself must not be recoverable from
+  // the database, which is the whole reason for the salt and the hash.
+  const stored = openDatabase(':memory:').db;
+  const one = new Accounts(stored);
+  one.login('Senyaak', 'swordsman');
+  const row = stored.prepare('SELECT salt, hash FROM users WHERE name = ?').get('Senyaak') as {
+    salt: Uint8Array;
+    hash: Uint8Array;
+  };
+  check('the salt is sixteen random bytes', row.salt.length === 16, String(row.salt.length));
+  check('the hash is sixty-four', row.hash.length === 64, String(row.hash.length));
+  check(
+    'and the password is nowhere in the row',
+    !Buffer.from(row.hash).includes('swordsman') && !Buffer.from(row.salt).includes('swordsman'),
+  );
+  // Two accounts with the SAME password must not look alike, which is what a per-user
+  // salt is for: a table of identical hashes tells an attacker who to try first.
+  one.login('Twin', 'swordsman');
+  const twin = stored.prepare('SELECT hash FROM users WHERE name = ?').get('Twin') as { hash: Uint8Array };
+  check('the same password hashes differently for another user', !Buffer.from(row.hash).equals(Buffer.from(twin.hash)));
+
+  // Deleting is never refused — and it says what it takes with it.
+  const full = openDatabase(':memory:').db;
+  const its = new Accounts(full);
+  its.login('Senyaak', 'x');
+  new Ladder(full).record('Senyaak', { RATING: 1600 });
+  new Friends(full).add('Senyaak', 'Guest');
+  its.forget('Senyaak');
+  check('forgetting an account takes the ladder row with it', new Ladder(full).size === 0);
+  check('and the friendships', new Friends(full).of('Senyaak').length === 0);
+  check('and the account', !its.has('Senyaak'));
+}
+
+console.log('\nThe login on the wire, which is where an account is made');
+{
+  const dbFile = join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-login.db');
+  rmSync(dbFile, { force: true });
+  const service = new RouterService(
+    { address: '127.0.0.1', port: 40001 },
+    { address: '127.0.0.1', port: 40030 },
+    { address: '127.0.0.1', port: 40031 },
+    { address: '127.0.0.1', port: 40040 },
+    dbFile,
+  );
+  const login = (name: string, password: string): ReturnType<RouterSession['receive']> =>
+    service.session('router').receive(
+      build({
+        property: Property.GS,
+        priority: 0,
+        type: MessageType.LOGIN,
+        sender: 4,
+        receiver: 1,
+        body: [name, password],
+      }),
+    );
+
+  const first = login('Senyaak', 'swordsman');
+  check('a first login is accepted', parse(first[0]!.replies[0]!)?.type === MessageType.GSSUCCESS, first[0]?.note);
+  check('and the log says an account was made', first[0]!.note.includes('NEW ACCOUNT created'), first[0]?.note);
+  check('the account is there afterwards', service.accounts.has('Senyaak'));
+
+  const again = login('Senyaak', 'swordsman');
+  check('logging in again is accepted', parse(again[0]!.replies[0]!)?.type === MessageType.GSSUCCESS, again[0]?.note);
+  check('and named as a returning player', again[0]!.note.includes('password matched'), again[0]?.note);
+
+  const wrong = login('Senyaak', 'archer');
+  check('a wrong password is REFUSED', parse(wrong[0]!.replies[0]!)?.type === MessageType.GSFAIL, wrong[0]?.note);
+  check('and the log says why', wrong[0]!.note.includes('wrong password'), wrong[0]?.note);
+
+  // The password must not be in the log, and the log is the one place it could leak:
+  // everything else about a body goes in whole, and this is the exception that makes
+  // that safe.
+  check('no log line carries the password itself', !first[0]!.note.includes('swordsman') && !wrong[0]!.note.includes('archer'), first[0]?.note);
+  check('though it says how long it was, which is what identifies the field', first[0]!.note.includes('a string of 9'), first[0]?.note);
+
+  // The proxy's login carries the same name and no credentials. Checking it as a
+  // second authentication would lock the player out of his own session.
+  const onProxy = service.session('proxy').receive(
+    build({ property: Property.GS, priority: 0, type: MessageType.LOGIN, sender: 8, receiver: 1, body: ['Senyaak'] }),
+  );
+  check('the proxy login is not a second password check', parse(onProxy[0]!.replies[0]!)?.type === MessageType.GSSUCCESS, onProxy[0]?.note);
+  check('and it says so', onProxy[0]!.note.includes('not the credential desk'), onProxy[0]?.note);
 }
 
 console.log(failures === 0 ? '\nall good\n' : `\n${failures} failed\n`);

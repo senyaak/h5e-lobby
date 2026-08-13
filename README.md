@@ -17,7 +17,7 @@ service at this machine.
 ```bash
 npm install
 npm start                             # every service, one process, logs to _tmp/net/
-npm test                              # 225+ checks against bytes a real client sent
+npm test                              # 260+ checks against bytes a real client sent
 npm run typecheck
 node tools/net-decode.ts --file dump.txt   # a hex dump from the log, back into a message
 ```
@@ -39,6 +39,11 @@ else.
   doing, `tools/net-probe.ts` for the disassembly. That is the split — the editor
   does things *to* the game, this repo only listens. Comments in `src/net/` that
   point at `docs/NETWORK.md` mean that one.
+
+A player logs in with any name and the first login CREATES his account, with the
+password he typed; everything he leaves behind — that account, his profile, his
+rating, his friends — lives in one SQLite database (`data/lobby.db`) through
+`node:sqlite`, which is part of Node and keeps this repo free of native dependencies.
 
 Gameplay itself is peer to peer, so this server never carries game traffic: the
 lobby only introduces the players to each other.

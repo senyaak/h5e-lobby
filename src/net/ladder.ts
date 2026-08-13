@@ -18,8 +18,7 @@
 //   Ladder              the store: row(name), record(name, patch), top(n)
 //   ladderPayload(...)  the whole result table, as the reply carries it
 
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import type { DatabaseSync } from 'node:sqlite';
 import { type GSValue } from './gs-data.ts';
 
 /** The eight factions, in the order the exe lists them. */
@@ -73,67 +72,70 @@ export const STARTING_RATING = 1500;
 
 export type LadderStats = Record<string, number>;
 
-export class Ladder {
-  private readonly file: string;
-  private readonly players = new Map<string, LadderStats>();
+/** A row of zeroes, rated. What a player has before anything has happened. */
+function freshRow(): LadderStats {
+  const stats: LadderStats = {};
+  for (const key of LADDER_KEYS) stats[key] = 0;
+  stats['RATING'] = STARTING_RATING;
+  return stats;
+}
 
-  constructor(file: string) {
-    this.file = file;
-    try {
-      const stored = JSON.parse(readFileSync(file, 'utf8')) as Record<string, LadderStats>;
-      for (const [name, stats] of Object.entries(stored)) this.players.set(name, stats);
-    } catch {
-      // No ladder yet is the normal state of a new server, not an error.
-    }
+export class Ladder {
+  private readonly db: DatabaseSync;
+  /**
+   * Rows the SERVER invents, which are code rather than history and never go to disk.
+   *
+   * The guest is the only one so far. Writing him out would put a player nobody
+   * created into the database of every test that builds a service, and he would then
+   * outlive the flag that seats him.
+   */
+  private readonly seeded = new Map<string, LadderStats>();
+
+  constructor(db: DatabaseSync) {
+    this.db = db;
   }
 
   /** A player's row, created at the starting rating the first time he is asked for. */
   row(name: string): LadderStats {
-    const known = this.players.get(name);
-    if (known) return known;
-    const fresh: LadderStats = {};
-    for (const key of LADDER_KEYS) fresh[key] = 0;
-    fresh['RATING'] = STARTING_RATING;
-    this.players.set(name, fresh);
-    return fresh;
+    const stored = this.db.prepare('SELECT stats FROM ladder WHERE user = ?').get(name) as
+      | { stats: string }
+      | undefined;
+    if (stored) return { ...freshRow(), ...(JSON.parse(stored.stats) as LadderStats) };
+    const seeded = this.seeded.get(name);
+    if (seeded) return seeded;
+    return freshRow();
   }
 
-  /**
-   * A row for a player the SERVER invents, put in without touching the file.
-   *
-   * The guest's numbers are code, not history: writing them out would mean every test
-   * that builds a service leaves a row behind in whatever ladder file it defaulted to.
-   * A player who really exists gets his row through `record`.
-   */
+  /** A row for a player the server invents — in memory, and only if he has none. */
   seed(name: string, stats: LadderStats): void {
-    if (this.players.has(name)) return;
-    this.players.set(name, { ...this.row(name), ...stats });
+    if (this.seeded.has(name)) return;
+    this.seeded.set(name, { ...freshRow(), ...stats });
   }
 
-  /** Change some of a player's numbers and write the file. */
+  /** Change some of a player's numbers and keep them. */
   record(name: string, patch: LadderStats): LadderStats {
     const row = { ...this.row(name), ...patch };
-    this.players.set(name, row);
-    this.save();
+    this.db
+      .prepare(
+        'INSERT INTO ladder (user, rating, stats) VALUES (?, ?, ?)' +
+          ' ON CONFLICT (user) DO UPDATE SET rating = excluded.rating, stats = excluded.stats',
+      )
+      .run(name, row['RATING'] ?? 0, JSON.stringify(row));
+    this.seeded.delete(name);
     return row;
   }
 
   /** The best `count` players by rating, best first — for a ladder screen later. */
   top(count: number): { name: string; stats: LadderStats }[] {
-    return [...this.players.entries()]
-      .map(([name, stats]) => ({ name, stats }))
-      .sort((a, b) => (b.stats['RATING'] ?? 0) - (a.stats['RATING'] ?? 0))
-      .slice(0, count);
+    const rows = this.db
+      .prepare('SELECT user, stats FROM ladder ORDER BY rating DESC LIMIT ?')
+      .all(count) as { user: string; stats: string }[];
+    return rows.map((row) => ({ name: row.user, stats: JSON.parse(row.stats) as LadderStats }));
   }
 
   /** How many players are on the ladder at all. */
   get size(): number {
-    return this.players.size;
-  }
-
-  save(): void {
-    mkdirSync(dirname(this.file), { recursive: true });
-    writeFileSync(this.file, `${JSON.stringify(Object.fromEntries(this.players), null, 2)}\n`);
+    return (this.db.prepare('SELECT COUNT(*) AS n FROM ladder').get() as { n: number }).n;
   }
 }
 

@@ -23,6 +23,8 @@
 //   RouterService     new(waitModule) -> session(); session.receive(buf) -> Buffer[]
 
 import { hostU32String } from './address.ts';
+import { Accounts, type LoginVerdict } from './accounts.ts';
+import { openDatabase } from './database.ts';
 import { Friends } from './friends.ts';
 import { Ladder, ladderPayload } from './ladder.ts';
 import { GET_DATA, PersistentStore, SET_DATA, recordKeyOf } from './persistent-store.ts';
@@ -161,6 +163,22 @@ function reasonCode(code: number): GSValue {
   return new Uint8Array(out);
 }
 
+/**
+ * How a message body goes into the log: whole, with blobs as hex.
+ *
+ * A login is the one message whose fields nobody has ever listed — the name is field 0
+ * and the rest have never been printed. Printing the lot costs a line and settles which
+ * field the password is, instead of another launch. **A password is not written down**:
+ * it is the field this exists to identify, so every string after the name goes in as
+ * its length. Nobody can read a secret out of "8 characters"; and the day the field is
+ * known, this can print the name of it and nothing else.
+ */
+function bodyForLog(key: string, value: unknown): unknown {
+  if (value instanceof Uint8Array) return `<${value.length} bytes: ${Buffer.from(value).toString('hex')}>`;
+  if (key === '0' || typeof value !== 'string') return value;
+  return `<a string of ${value.length}>`;
+}
+
 /** A little-endian u32 body value — how a port travels. */
 function u32(value: number): GSValue {
   const out = Buffer.alloc(4);
@@ -212,6 +230,8 @@ export class RouterSession {
   private readonly profiles: PersistentStore;
   /** And who has whom on his friends list. */
   private readonly friends: Friends;
+  /** And the accounts, which is what a login is checked against. */
+  private readonly accounts: Accounts;
   /** The other open connections, by desk — see `RouterService.desks`. */
   private readonly desks: Map<string, (bytes: Buffer) => void>;
   /** Seat synthetic players in every channel — a diagnostic, off unless asked for. */
@@ -229,6 +249,7 @@ export class RouterSession {
     presence: Presence,
     profiles: PersistentStore,
     friends: Friends,
+    accounts: Accounts,
     desks: Map<string, (bytes: Buffer) => void>,
     ghosts = false,
     seedProfile = false,
@@ -236,6 +257,7 @@ export class RouterSession {
     this.desks = desks;
     this.profiles = profiles;
     this.friends = friends;
+    this.accounts = accounts;
     this.ghosts = ghosts;
     this.seedProfile = seedProfile;
     this.role = role;
@@ -373,12 +395,48 @@ export class RouterSession {
     switch (message.type) {
       case MessageType.KEY_EXCHANGE:
         return this.keyExchange(message);
+      // The login, and since 13.08.2026 it means something: the first time a name is
+      // seen the account is created with the password that came with it, and every
+      // login after that has to match. That is the whole of "registration" — the
+      // client has no screen for it, and needs none.
+      //
+      // WHICH FIELD IS THE PASSWORD is read off the wire rather than assumed: the body
+      // is logged whole below, and every string after the name is a candidate. Until a
+      // capture says otherwise the credential is field 1, and a name arriving with no
+      // second string logs in with an empty password — which is what a client that
+      // sends none would do, and what the first sessions of this server did.
+      //
+      // Only the ROUTER carries the credentials. The proxy's login is the same message
+      // with the same name and it is not a second authentication; treating it as one
+      // would lock out a player whose second connection carries no password.
       case MessageType.LOGIN: {
         const name = message.body?.[0];
         this.username = typeof name === 'string' ? name : '';
+        const password = typeof message.body?.[1] === 'string' ? message.body[1] : '';
         const body: GSValue[] = this.role === 'proxy' ? [messageId(MessageType.LOGIN), []] : [messageId(MessageType.LOGIN)];
+        const said = `the body was ${JSON.stringify(message.body, bodyForLog)}`;
+        if (this.role !== 'router' || !this.username) {
+          return {
+            note: `LOGIN as "${this.username}" on the ${this.role} — not the credential desk, ${said}`,
+            replies: [build(reply(message, body, MessageType.GSSUCCESS))],
+          };
+        }
+        const verdict: LoginVerdict = this.accounts.login(this.username, password);
+        if (verdict === 'wrong-password') {
+          // The client knows this path — "router login failed,reason=" — and it is the
+          // only thing this server can say about it, so it says it rather than letting
+          // a stranger in under somebody's name.
+          return {
+            note: `LOGIN as "${this.username}" REFUSED — wrong password, ${said}`,
+            replies: [
+              build(reply(message, [messageId(MessageType.LOGIN), ['1']], MessageType.GSFAIL)),
+            ],
+          };
+        }
         return {
-          note: `LOGIN as "${this.username}" on the ${this.role}${this.encryptedWith ? `, body opened with ${this.encryptedWith}` : ''}`,
+          note:
+            `LOGIN as "${this.username}" — ${verdict === 'created' ? 'NEW ACCOUNT created' : 'password matched'}` +
+            `${this.encryptedWith ? `, body opened with ${this.encryptedWith}` : ''}, ${said}`,
           replies: [build(reply(message, body, MessageType.GSSUCCESS))],
         };
       }
@@ -1117,6 +1175,12 @@ export class RouterService {
   readonly profiles: PersistentStore;
   /** Friendships, likewise: added once, still there next launch. */
   readonly friends: Friends;
+  /** Who a name belongs to. Every desk shares one set of accounts. */
+  readonly accounts: Accounts;
+  /** The database under all of them, for anything that wants to look for itself. */
+  readonly database: import('node:sqlite').DatabaseSync;
+  /** What the old JSON files brought with them, once, for the log to say. */
+  readonly imported: string[];
   /** Passed to every session: seat synthetic players, to see what the client draws. */
   ghosts = false;
   /** Likewise: answer a first profile read with a seed instead of the truthful refusal. */
@@ -1137,17 +1201,19 @@ export class RouterService {
     proxy: Endpoint,
     proxyWaitModule: Endpoint,
     lobbyServer: Endpoint,
-    ladderFile = 'data/ladder.json',
-    profileFile = 'data/profiles.json',
-    friendsFile = 'data/friends.json',
+    databaseFile = 'data/lobby.db',
   ) {
     this.waitModule = waitModule;
     this.proxy = proxy;
     this.proxyWaitModule = proxyWaitModule;
     this.lobbyServer = lobbyServer;
-    this.ladder = new Ladder(ladderFile);
-    this.profiles = new PersistentStore(profileFile);
-    this.friends = new Friends(friendsFile);
+    const opened = openDatabase(databaseFile);
+    this.database = opened.db;
+    this.imported = opened.imported;
+    this.accounts = new Accounts(this.database);
+    this.ladder = new Ladder(this.database);
+    this.profiles = new PersistentStore(this.database);
+    this.friends = new Friends(this.database);
     seatGuest(this.ladder, this.presence);
   }
 
@@ -1164,6 +1230,7 @@ export class RouterService {
       this.presence,
       this.profiles,
       this.friends,
+      this.accounts,
       this.desks,
       this.ghosts,
       this.seedProfile,

@@ -1750,9 +1750,15 @@ console.log('\nRating a rated game: the ladder, written once');
   check('the result is settled, and the log says how', first[0]!.note.includes('beat'), first[0]?.note.split('\n')[0]);
   const winner = service.ladder.row('Player2');
   const loser = service.ladder.row('Senyaak');
-  // Even ratings, so the winner takes half of K and the loser gives it up.
-  check('the winner gains sixteen from an even start', winner['RATING'] === 1516, String(winner['RATING']));
-  check('and the loser gives up the same', loser['RATING'] === 1484, String(loser['RATING']));
+  // RATING is EXPERIENCE — it is what the client turns into a rank, on a scale of points
+  // per game — so it goes up for both of them, and further for winning.
+  check('the winner earns a win’s worth of experience', winner['RATING'] === 1600, String(winner['RATING']));
+  check('and the loser earns something for turning up', loser['RATING'] === 1525, String(loser['RATING']));
+  check('nobody’s experience goes down', winner['RATING']! > 1500 && loser['RATING']! > 1500);
+  // The competitive number is separate, and even ratings make it half of K each way.
+  check('strength is rated separately, sixteen each way', winner['ELO'] === 1516 && loser['ELO'] === 1484, JSON.stringify({ w: winner['ELO'], l: loser['ELO'] }));
+  // And it never leaves this server: the client is sent LADDER_KEYS and nothing else.
+  check('and it is not one of the keys the client is sent', !LADDER_KEYS.includes('ELO'));
   check('a game is counted for both', winner['GAMES_PLAYED'] === 1 && loser['GAMES_PLAYED'] === 1);
   check('as a win and a loss', winner['WINS'] === 1 && loser['LOSSES'] === 1);
   check('with the streaks each player is on', winner['CUR_WINS_STREAK'] === 1 && loser['CUR_LOSSES_STREAK'] === 1 && winner['MAX_WINS_STREAK'] === 1);
@@ -1767,7 +1773,7 @@ console.log('\nRating a rated game: the ladder, written once');
   const second = guest.receive(lobbyMsg([String(LobbyMsg.SUBMIT_MATCH), resultsFor(rated)]));
   check('the other player’s copy of the same table is answered too', second[0]!.replies.length === 2, second[0]?.note.split('\n')[0]);
   check('but it does not count the game again', service.ladder.row('Player2')['GAMES_PLAYED'] === 1, String(service.ladder.row('Player2')['GAMES_PLAYED']));
-  check('nor move the rating a second time', service.ladder.row('Player2')['RATING'] === 1516, String(service.ladder.row('Player2')['RATING']));
+  check('nor move the numbers a second time', service.ladder.row('Player2')['RATING'] === 1600 && service.ladder.row('Player2')['ELO'] === 1516, JSON.stringify(service.ladder.row('Player2')));
 
   // THE PANEL'S NUMBER COMES FROM HIS OWN BLOB, and he composes it once, on entering —
   // so after a rated game it showed what he was worth before it, until he left the channel

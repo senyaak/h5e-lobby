@@ -98,6 +98,26 @@ export const Stat = {
 export const ELO_K = 32;
 
 /**
+ * Experience and rating are two different things, and the client has one field for them.
+ *
+ * `RATING` is what the profile turns into a rank, by dividing by 100 and looking the level
+ * up in eleven bands whose top begins at 40000 (docs/LADDER.md). That is a scale for
+ * POINTS PER GAME, not for a competitive rating: Elo's ±16 a game would leave everybody a
+ * peasant for life. So `RATING` carries experience — more for winning, something for
+ * turning up — and it is what the player sees, as his rank and beside his name.
+ *
+ * The competitive number is kept too, under a key of our own that is **not** one of the 46
+ * the client asks for, so it never leaves this server. Nothing reads it yet; it is what a
+ * future "play someone your own strength" would be built on, and it costs one column in a
+ * row we already write.
+ */
+export const XP_FOR_A_WIN = 100;
+export const XP_FOR_A_LOSS = 25;
+
+/** Our own column, invisible to the client: `ladderPayload` only sends `LADDER_KEYS`. */
+export const ELO = 'ELO';
+
+/**
  * The two new ratings after a game, rounded.
  *
  * Plain Elo, which is a choice rather than a reading: the client displays whatever number
@@ -168,18 +188,24 @@ export function settleMatch(ladder: Ladder, results: readonly MatchResult[]): st
   const loser = results.find((result) => !result.won);
   if (!winner || !loser || results.length !== 2) return 'not a two-player result — the ladder is left alone';
 
-  const before = { winner: ladder.row(winner.name)['RATING'] ?? STARTING_RATING, loser: ladder.row(loser.name)['RATING'] ?? STARTING_RATING };
-  const after = elo(before.winner, before.loser);
+  // Two numbers, kept apart. The hidden one is a rating in the competitive sense; the
+  // visible one is experience, and it only ever goes up.
+  const strength = {
+    winner: ladder.row(winner.name)[ELO] ?? STARTING_RATING,
+    loser: ladder.row(loser.name)[ELO] ?? STARTING_RATING,
+  };
+  const rated = elo(strength.winner, strength.loser);
 
-  for (const [result, rating, won] of [
-    [winner, after.winner, true],
-    [loser, after.loser, false],
+  for (const [result, gained, elo_, won] of [
+    [winner, XP_FOR_A_WIN, rated.winner, true],
+    [loser, XP_FOR_A_LOSS, rated.loser, false],
   ] as const) {
     const row = ladder.row(result.name);
     const faction = FACTIONS[result.faction] ?? FACTIONS[0]!;
     const streak = (won ? row['CUR_WINS_STREAK'] : row['CUR_LOSSES_STREAK']) ?? 0;
     ladder.record(result.name, {
-      RATING: rating,
+      RATING: (row['RATING'] ?? STARTING_RATING) + gained,
+      [ELO]: elo_,
       GAMES_PLAYED: (row['GAMES_PLAYED'] ?? 0) + 1,
       WINS: (row['WINS'] ?? 0) + (won ? 1 : 0),
       LOSSES: (row['LOSSES'] ?? 0) + (won ? 0 : 1),
@@ -198,7 +224,8 @@ export function settleMatch(ladder: Ladder, results: readonly MatchResult[]): st
 
   return (
     `${winner.name} beat ${loser.name} in ${winner.seconds}s — ` +
-    `${before.winner} -> ${after.winner} and ${before.loser} -> ${after.loser}`
+    `+${XP_FOR_A_WIN} and +${XP_FOR_A_LOSS} experience, ` +
+    `strength ${strength.winner} -> ${rated.winner} and ${strength.loser} -> ${rated.loser}`
   );
 }
 

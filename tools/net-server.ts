@@ -229,11 +229,19 @@ for (const service of [...SERVICES, PROXY, LOBBY]) {
       // the one that asked. Only the newest socket per desk is kept: with one player
               // there is only ever one of each.
       if (session) {
+        // How to write on THIS connection — which is what a second player needs and the
+        // desks map cannot give: it holds one socket per desk name, so two players'
+        // Lobby sockets are the same name and the second replaced the first.
+        session.send = (bytes: Buffer) => {
+          socket.write(bytes);
+          log(`TCP  #${id} ${label}:${port} -> ${bytes.length} bytes, sent unasked\n${hexDump(bytes)}`);
+        };
         router.desks.set(label, (bytes: Buffer) => {
           socket.write(bytes);
           log(`TCP  #${id} ${label}:${port} -> ${bytes.length} bytes, asked for by another desk\n${hexDump(bytes)}`);
         });
         socket.on('close', () => {
+          session.send = null;
           if (router.desks.get(label)) router.desks.delete(label);
         });
       }

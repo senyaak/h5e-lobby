@@ -101,6 +101,25 @@ function messageId(type: number): GSValue {
 }
 
 /**
+ * A message to send somebody who did not ask for one.
+ *
+ * Everything here is built with `reply`, which takes its parties and its priority from
+ * the request being answered — and a push has no request. The nibbles are not a choice:
+ * every lobby message the client sends carries sender 4, receiver 1, and every answer
+ * goes back 1 to 4, so this is what its own traffic looks like with the request taken
+ * out of it. `reply` swaps them, hence 4 and 1 here.
+ */
+const UNASKED: GSMessage = {
+  size: 0,
+  property: Property.GS,
+  priority: 0,
+  type: MessageType.LOBBY_MSG,
+  sender: 4,
+  receiver: 1,
+  body: null,
+};
+
+/**
  * The guest: a second player who is always there, and the only way to exercise half
  * of this server without a second copy of the game.
  *
@@ -253,6 +272,24 @@ export class RouterSession {
   private readonly accounts: Accounts;
   /** The other open connections, by desk — see `RouterService.desks`. */
   private readonly desks: Map<string, (bytes: Buffer) => void>;
+  /**
+   * Every session this server has open, this one among them.
+   *
+   * The desks map holds one connection per DESK NAME, which was enough while there was
+   * one player: with two, his Lobby socket and the other player's are the same name and
+   * the second one replaced the first. What a second player needs is not a better map
+   * but the sessions themselves — who is on the other end of each, and which channel he
+   * is looking at.
+   */
+  private readonly peers: Set<RouterSession>;
+  /**
+   * How to write on THIS connection, filled in by whatever owns the socket.
+   *
+   * Null in a test that only feeds `receive` and reads what comes back, which is most of
+   * them — so a push to a session with no writer is simply not sent, rather than an
+   * error nobody could have prevented.
+   */
+  send: ((bytes: Buffer) => void) | null = null;
   /** Seat synthetic players in every channel — a diagnostic, off unless asked for. */
   readonly ghosts: boolean;
   /** Hand a player with no profile a minimal one, to see what his screen then does. */
@@ -270,10 +307,12 @@ export class RouterSession {
     friends: Friends,
     accounts: Accounts,
     desks: Map<string, (bytes: Buffer) => void>,
+    peers: Set<RouterSession>,
     ghosts = false,
     seedProfile = false,
   ) {
     this.desks = desks;
+    this.peers = peers;
     this.profiles = profiles;
     this.friends = friends;
     this.accounts = accounts;
@@ -297,11 +336,56 @@ export class RouterSession {
    * about a host who had closed the game minutes before.
    */
   close(): string | null {
+    // Where he was, before he stops being anywhere: the people still standing there
+    // have to be told, and after `leave` there is nothing left to say who they are.
+    const wasIn = this.presence.lobbyOf(this.username);
     this.presence.leave(this.username);
     const gone = this.rooms.hostedBy(this.username);
-    if (!gone.length) return null;
     for (const room of gone) this.rooms.remove(room.id);
-    return `${this.username} left — dropped ${gone.map((room) => `"${room.name}"`).join(', ')}`;
+    this.peers.delete(this);
+    const told = wasIn === null ? 0 : this.tellChannel(wasIn);
+    if (!gone.length) return told ? `${this.username} left — ${told} player(s) told` : null;
+    return (
+      `${this.username} left — dropped ${gone.map((room) => `"${room.name}"`).join(', ')}` +
+      (told ? `, ${told} player(s) told` : '')
+    );
+  }
+
+  /**
+   * Everybody else looking at this channel — the connections that draw it.
+   *
+   * The lobby desk and no other: a player has four connections open and only one of
+   * them is the one his channel screen listens on.
+   */
+  private othersIn(lobbyId: number): RouterSession[] {
+    return [...this.peers].filter(
+      (peer) =>
+        peer !== this &&
+        peer.role === 'lobby' &&
+        peer.send !== null &&
+        peer.username !== '' &&
+        this.presence.lobbyOf(peer.username) === lobbyId,
+    );
+  }
+
+  /**
+   * Tell everybody else in a channel what it looks like now. Returns how many were told.
+   *
+   * ONE message for every kind of change — somebody arrived, somebody left, a game was
+   * opened or closed — because GROUP_INFO is the message that already fills both halves
+   * of that screen: it carries the member list AND the child groups, and the client has
+   * been drawing channels from it since the first day. `MEMBER_JOIN` (50) and
+   * `NEW_GROUP` (54) are the narrower announcements and one of them, sent our way, drew
+   * no reaction at all — so the shape that is known to work is the one that gets used
+   * for all four, and nothing here is a new guess.
+   *
+   * Each peer's own message is built from ITS session, so the channel entry carries the
+   * game id that peer logged in with rather than ours.
+   */
+  private tellChannel(lobbyId: number): number {
+    const others = this.othersIn(lobbyId);
+    for (const peer of others) peer.send?.(peer.channelInfo(UNASKED, lobbyId));
+    return others.length;
   }
 
   /** Feed bytes from the socket; get back what to send, and a line for the log. */
@@ -394,6 +478,17 @@ export class RouterSession {
    * the protocol's, not ours.
    */
   private answerModule(bytes: Buffer): { replies: Buffer[]; where: string } {
+    // HIS router connection, not whichever one happens to be open. The desks map holds
+    // one socket per desk name, so with two players the second one's RouterLauncher
+    // replaced the first's — and this answer, which is a profile or a rating, would have
+    // gone to the wrong player's screen. The sessions know whose they are; ask them.
+    const his = [...this.peers].find(
+      (peer) => peer.role === 'router' && peer.send !== null && peer.username === this.username && peer !== this,
+    );
+    if (his) {
+      his.send?.(bytes);
+      return { replies: [], where: `on ${this.username}'s router connection` };
+    }
     const onRouter = this.desks.get('RouterLauncher');
     if (!onRouter) return { replies: [bytes], where: 'here, with no router connection open' };
     onRouter(bytes);
@@ -914,6 +1009,12 @@ export class RouterSession {
           const asked = Number(typeof fields[2] === 'string' ? fields[2] : '') || Lsm.GROUPMEMBERS | Lsm.CHILDGROUPINFO;
           const lobby = DEFAULT_LOBBIES.find((l) => String(l.id) === groupId) ?? DEFAULT_LOBBIES[0]!;
           this.presence.enter(this.username, lobby.id);
+          // And the people already standing there hear about it. Nothing else would
+          // tell them: every other message in this file answers whoever asked, and the
+          // client asks for the channel again only when it re-enters CStateOutOfRoom —
+          // so a player who arrived after them stayed invisible until they went into a
+          // game and came back out.
+          const heard = this.tellChannel(lobby.id);
           // The people in the channel, himself among them, come from `channelInfo`.
           // Left empty, the client's player list is empty too, and "Profile" — "look at
           // the results of the selected players" — has nothing to act on and stays grey.
@@ -945,6 +1046,7 @@ export class RouterSession {
             note:
               `JOIN_LOBBY ${groupId} ("${lobby.name}") — in, ${this.rooms.inLobby(lobby.id).length} game(s) and ` +
               `${this.presence.inLobby(lobby.id).length + ghosts.length} player(s) listed, mask ${asked}` +
+              (heard ? `, ${heard} already there told` : '') +
               (this.ghosts ? ' + GhostJoin pushed as MEMBER_JOIN' : ''),
             replies: [
               build(reply(message, [String(MessageType.GSSUCCESS), [subtype, [groupId]]])),
@@ -991,8 +1093,14 @@ export class RouterSession {
           // both id fields inside it say -1. Writing them is the server's job, and
           // the client reads them back to recognise the room it just made.
           room.info = stampRoomIds(blob, room.id);
+          // And it appears on the screens of everybody standing in that channel. The
+          // host gets his NEW_GROUP below; for the others the channel comes back whole,
+          // because that message carries the games as well as the players.
+          const saw = this.tellChannel(room.parentId);
           return {
-            note: `CREATE_ROOM "${room.name}" in channel ${room.parentId} — id ${room.id}, up to ${room.maxPlayers} players`,
+            note:
+              `CREATE_ROOM "${room.name}" in channel ${room.parentId} — id ${room.id}, ` +
+              `up to ${room.maxPlayers} players` + (saw ? `, ${saw} player(s) shown it` : ''),
             replies: [
               build(reply(message, [String(MessageType.GSSUCCESS), [subtype, [String(room.id), room.name, '1']]])),
               // And the room itself, so the channel it lives in shows it.
@@ -1195,6 +1303,11 @@ export class RouterSession {
             // And he is out of that channel's player list.
             this.presence.leave(this.username);
           }
+          // The same news for everybody else standing there: a player fewer, or a game
+          // fewer. Without it his name and his game sit on their screens until they
+          // leave the channel themselves.
+          const left = this.tellChannel(room ? room.parentId : groupId);
+          if (left) note += `, ${left} player(s) told`;
           return {
             note: removed.length ? `${note} (told it is gone)` : note,
             replies: [
@@ -1371,6 +1484,15 @@ export class RouterService {
    * this in as sockets open; `null` means that desk has nobody on it.
    */
   readonly desks = new Map<string, (bytes: Buffer) => void>();
+  /**
+   * Every open session, which is what a second player made necessary.
+   *
+   * One entry per CONNECTION, four to a player, and each knows whose it is and how to
+   * write on itself — so "everybody else in this channel" and "this player's own router
+   * connection" are both questions that can be answered. A session takes itself out on
+   * `close`.
+   */
+  readonly sessions = new Set<RouterSession>();
 
   constructor(
     waitModule: Endpoint,
@@ -1396,7 +1518,7 @@ export class RouterService {
   /** A connection on one of the four desks. */
   session(role: Role = 'router'): RouterSession {
     const waitModule = role === 'proxy' ? this.proxyWaitModule : this.waitModule;
-    return new RouterSession(
+    const session = new RouterSession(
       role,
       waitModule,
       this.proxy,
@@ -1408,8 +1530,11 @@ export class RouterService {
       this.friends,
       this.accounts,
       this.desks,
+      this.sessions,
       this.ghosts,
       this.seedProfile,
     );
+    this.sessions.add(session);
+    return session;
   }
 }

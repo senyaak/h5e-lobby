@@ -807,11 +807,21 @@ To prepare:
 - **The player-info blob.** Done on our side: `Presence` keeps it per player rather than
   per connection, so a real blob reaches everybody's member records; and the format is
   known, so one can be composed for a player who has not sent his own.
-- **Arrivals must be announced to the people already there.** Our replies only ever go
-  back to whoever asked. `MEMBER_JOIN` (50) is the message for it, and `NEW_GROUP` (54)
-  for a game appearing in a channel somebody else is looking at — but MEMBER_JOIN as we
-  sent it drew no reaction at all, so its shape is unknown, and a second client is what
-  will show whether the room's own list refreshes without it.
+- **Arrivals must be announced to the people already there — DONE, 13.08.2026.** Our
+  replies only ever went back to whoever asked, which is why the first player saw
+  neither the second one arriving nor the game he opened. The message is **GROUP_INFO,
+  the same one that draws that screen already**: it carries the member list AND the
+  child groups, so one shape covers all four changes — somebody joined, somebody left, a
+  game opened, a game closed. `MEMBER_JOIN` (50) and `NEW_GROUP` (54) are the narrower
+  announcements and one of them, sent our way, drew no reaction at all, so they stay
+  unused rather than guessed at again.
+
+  What made it possible is not the message but the bookkeeping: `desks` holds one socket
+  per DESK NAME, so with two players the second one's Lobby socket replaced the first's
+  and nothing could reach him. There is a `sessions` set now, one entry per connection,
+  each knowing whose it is and how to write on itself. **The same bug had a second
+  head**: a module answer (a profile, a rating) goes out on the router's connection, and
+  that was "whichever RouterLauncher is open" — with two players, the wrong screen.
 - **The peers' addresses.** The lobby knows each player's own (`LOBBYSERVERLOGIN`
   reports his LAN address and netmask) and the NAT mirror knows how he looks from
   outside; the port his pings come from is 8888. That is the material for introducing

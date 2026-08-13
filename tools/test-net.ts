@@ -1408,6 +1408,82 @@ console.log('\nChat, unwrapped from what the client actually sent');
   check('nobody hears it in a channel they are not in', service.say(GUEST, '#LobbyGrp9.1', 'hello').to.length === 0);
 }
 
+console.log('\nTwo players in one channel, and what the other one is told');
+{
+  const service = new RouterService(
+    { address: '127.0.0.1', port: 40001 },
+    { address: '127.0.0.1', port: 40030 },
+    { address: '127.0.0.1', port: 40031 },
+    { address: '127.0.0.1', port: 40040 },
+    join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-two.db'),
+  );
+  const lobbyMsg = (body: GSValue[]): Buffer =>
+    build({ property: Property.GS, priority: 0, type: MessageType.LOBBY_MSG, sender: 4, receiver: 2, body });
+
+  // Two lobby connections, each with somewhere to write — which is the whole of what
+  // the desks map could not do: it holds ONE socket per desk name, so the second
+  // player's Lobby socket replaced the first's and nothing could reach him.
+  const first: Buffer[] = [];
+  const second: Buffer[] = [];
+  const one = service.session('lobby');
+  one.username = 'Senyaak';
+  one.send = (bytes) => first.push(bytes);
+  const two = service.session('lobby');
+  two.username = 'Player2';
+  two.send = (bytes) => second.push(bytes);
+
+  /** The channel a pushed GROUP_INFO describes, and the names and games in it. */
+  const pushed = (bytes: Buffer | undefined) => {
+    const body = parse(bytes ?? Buffer.alloc(0))?.body ?? [];
+    const inner = (body[1] as GSValue[]) ?? [];
+    const rooms = (inner[3] as GSValue[][]) ?? [];
+    const members = (inner[4] as GSValue[][]) ?? [];
+    return {
+      subtype: body[0],
+      group: inner[0],
+      names: members.map((m) => String(m[0])),
+      games: rooms.map((r) => String(r[1])),
+    };
+  };
+
+  one.receive(lobbyMsg([String(LobbyMsg.JOIN_LOBBY), ['1', '', '384']]));
+  check('the first player in a channel has nobody to tell', first.length === 0, String(first.length));
+
+  const arrived = two.receive(lobbyMsg([String(LobbyMsg.JOIN_LOBBY), ['1', '', '384']]));
+  check('the second joining tells the first', first.length === 1, arrived[0]?.note);
+  check('and the log line says whom it told', arrived[0]!.note.includes('1 already there told'), arrived[0]?.note);
+  const news = pushed(first[0]);
+  // GROUP_INFO and not MEMBER_JOIN: it is the message that already draws this screen,
+  // both halves of it, and the narrower announcement drew no reaction when it was tried.
+  check('what he gets is a GROUP_INFO', news.subtype === String(LobbyMsg.GROUP_INFO), String(news.subtype));
+  check('for the channel he is standing in', news.group === '1', String(news.group));
+  check('and it lists them both', news.names.includes('Senyaak') && news.names.includes('Player2'), JSON.stringify(news.names));
+  check('nothing was sent to the one who joined', second.length === 0, String(second.length));
+
+  // A game opened by one appears on the other's screen. The channel carries its games
+  // as well as its players, so it is the same message again rather than a second shape.
+  const hosted = two.receive(capturedCreateRoom());
+  check('hosting tells the other player', first.length === 2, hosted[0]?.note);
+  check('and says so in the log', hosted[0]!.note.includes('1 player(s) shown it'), hosted[0]?.note);
+  const withGame = pushed(first[1]);
+  check('his channel now has a game in it', withGame.games.length === 1, JSON.stringify(withGame.games));
+
+  // And leaving takes both away again.
+  const gone = two.receive(lobbyMsg([String(LobbyMsg.GROUP_LEAVE), ['1']]));
+  check('leaving tells him too', first.length === 3, gone[0]?.note);
+  const after = pushed(first[2]);
+  check('the game is gone from his channel', after.games.length === 0, JSON.stringify(after.games));
+  check('and so is the player', !after.names.includes('Player2'), JSON.stringify(after.names));
+
+  // A connection dropping is the same news: the client that is still there has no other
+  // way of hearing it, and a name that stays is a name nobody can host under again.
+  two.receive(lobbyMsg([String(LobbyMsg.JOIN_LOBBY), ['1', '', '384']]));
+  const left = two.close();
+  check('a dropped connection tells the channel', first.length === 5, String(first.length));
+  check('and the log says how many heard it', String(left).includes('1 player(s) told'), String(left));
+  check('with him off the list', !pushed(first[4]).names.includes('Player2'), JSON.stringify(pushed(first[4]).names));
+}
+
 console.log('\nThe keep-alive, and the channel counts');
 {
   const service = new RouterService(

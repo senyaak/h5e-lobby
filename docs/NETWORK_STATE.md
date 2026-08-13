@@ -123,6 +123,21 @@ half of what it was needed for.
 
 ## Facts worth not re-learning
 
+- **The keep-alive has to be answered, and it takes two idle minutes to find that out.**
+  STILLALIVE is six bytes with no body (`00 00 06 00 3a 41`), every 31 seconds, on every
+  connection. Unanswered, the client leaves at about 120 seconds —
+  "ProcessLoginDisconnection: disconnected from router", every socket closed from its
+  side, measured twice in one run at 122 and 121 seconds. Nobody had ever sat still that
+  long (the longest session before the guest started talking was 118 seconds), so it
+  looked like the chat had done it. The answer is the same six bytes with the parties
+  swapped. **Answer everything** was already the rule in this file; this is the message
+  that had been quietly exempt.
+- **The login body is `[name, password, game, 1]`.** Field 1 is the password — three
+  characters in the capture, and Сеня's password is "123", which is what settled it
+  rather than another reading. Field 2 is the game id (`HEROES_…`, 23 characters) and
+  field 3 is one byte, 01. The proxy's login is `[name, game]` and carries no password
+  at all, which is why only the router checks one.
+
 - **The checksum's lone odd byte is SIGNED.** The routine is at 0x4796E0: the seed is
   written into the checksum field, an odd-length segment counts its first byte alone
   and `movsx`-extended, the rest as 16-bit words. During verification that byte IS

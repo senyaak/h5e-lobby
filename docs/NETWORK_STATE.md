@@ -132,6 +132,16 @@ half of what it was needed for.
   looked like the chat had done it. The answer is the same six bytes with the parties
   swapped. **Answer everything** was already the rule in this file; this is the message
   that had been quietly exempt.
+- **A chat channel is `#LobbyGrp<server>.<group>`** — server FIRST, so channel 2 on lobby
+  server 1 is `#LobbyGrp1.2`. And **a chat line carries its own presentation**:
+  `nick%colour%size%0%0%font%text`, verbatim `Senyaak%16777215%9%0%0%Arial%123`. A bare
+  sentence is not a chat line to this client. Both are `lobbyChannel()` and `chatLine()`
+  in `src/net/irc.ts`, and between them they are why the guest's first two minutes of
+  talking were silent.
+- **The leading colon is not part of a channel's name.** The client JOINs
+  `:#LobbyGrp1.2` and then talks to `#LobbyGrp1.2` — in IRC the colon means "the rest of
+  the line is one argument". Stored as it arrives, those are two channels, and one
+  player's message would reach nobody sitting in "the other one".
 - **The login body is `[name, password, game, 1]`.** Field 1 is the password — three
   characters in the capture, and Сеня's password is "123", which is what settled it
   rather than another reading. Field 2 is the game id (`HEROES_…`, 23 characters) and

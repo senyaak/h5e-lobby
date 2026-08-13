@@ -566,7 +566,10 @@ export class RouterSession {
         .map((name) => memberEntry(name, lobby.id, this.addressOf(name), PlayerStatus.NONE, this.presence.info(name))),
       ...extra,
     ];
-    const rooms = this.rooms.inLobby(lobby.id).map(roomEntry);
+    // The games in the channel — and the ONE place the room-field diagnostic numbers
+    // anything, because this is what other players are shown and the host's own copy of
+    // his room must stay honest or he cannot enter it himself.
+    const rooms = this.rooms.inLobby(lobby.id).map((room) => roomEntry(room, true));
     return build(
       reply(message, [
         String(LobbyMsg.GROUP_INFO),

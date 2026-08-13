@@ -293,16 +293,20 @@ export class Rooms {
  * One field at a time is one launch at a time. With this on, every number we are not
  * sure of goes out as its own recognisable value (8003 for field 3, 8004 for field 4,
  * and so on), and the probe's dump of the record then says where each of them landed —
- * the whole map in a single run. The game will not be joinable during it; that is what
- * a diagnostic is.
+ * the whole map in a single run.
+ *
+ * **Only in what OTHER players are shown.** The first run of this went out on every
+ * copy of the room, the host's own included, and his client then could not enter the
+ * game it had just made: "Игра не существует, возможно сервер прекратил игру. Код
+ * ошибки 0.5.0" — 5 being the client's own number for "no such game". So the numbering
+ * is passed in by the CHANNEL push and nowhere else: the host's room stays honest, he
+ * creates and enters as usual, and the map is measured on the other screen.
  */
 export const probeRoomFields = { on: false };
 
-function numbered(field: number, real: string): string {
-  return probeRoomFields.on ? String(8000 + field) : real;
-}
-
-export function roomEntry(room: Room): GSValue[] {
+export function roomEntry(room: Room, probe = false): GSValue[] {
+  const numbered = (field: number, real: string): string =>
+    probe && probeRoomFields.on ? String(8000 + field) : real;
   return [
     String(room.type),
     room.name,

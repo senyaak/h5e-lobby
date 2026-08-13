@@ -100,6 +100,12 @@ join own room      -> "LobbyRcv_RoomInfo", then CStateInRoom / CStateWaitingForP
 settings changes   -> GROUP_CONFIG_UPDATE_RES answered, the room echoed back
 leaving a game     -> destroyed here, announced with GROUP_REMOVE, gone from his list
 joining a dead one -> refused with GSFAIL and a reason, instead of silence
+TWO CLIENTS (13.08.2026, the second install):
+  the other player  -> appears in the channel as he arrives, and his game in the list
+  ANOTHER'S GAME    -> **JOINED**: "join room succeeded", CStateInRoom /
+                       CStateWaitingForPlayers, chat inside the room both ways — three
+                       times in one run
+  starting it       -> NEVER TRIED YET: no GameStart, no AttemptGameStart in any log
 ```
 
 So a player logs in, enters a channel with his name in its player list, hosts a game and
@@ -879,9 +885,23 @@ expected: `own-profile` on in that copy, and `net_game_port = 8889` in its own
   field-mapping diagnostic went out on EVERY copy of a room and the host could no longer
   enter the game he had just made. The diagnostic now numbers fields only in the channel
   push — what other players are shown — and a host's own room stays honest.
-- *the game appears but Join stays grey* — OPEN, and now read rather than guessed.
-  Neither the padlock (`[record+0x34]`) nor STARTED (`[record+0x90]`) is set: measured.
-  What decides is **0x8768B0**, and it wants three things of the selected game:
+- *the game appears but Join stays grey* — **SOLVED, and it was not a field of ours at
+  all.** The host creates his room with one settings blob and replaces it within a second
+  with a bigger one — **522 bytes at CREATE_ROOM, 590 once he is inside, 660 once somebody
+  joins** — and we kept every new one and forwarded none of them. The other player's copy
+  of the game was therefore built out of the half-finished first description, and the byte
+  the button insists on lives in that description (its class is the game's own, copy ctor
+  0x61C550, not the twenty lobby fields — which is why numbering those fields never made
+  it appear). Forwarding the room to the channel whenever its settings CHANGE turned the
+  button on, and joining then worked three times in a row.
+
+  **Only when they change.** The first version of this forwarded every update, and the
+  host sends three to five a second carrying the same bytes: the joiner's screen was
+  rebuilt continuously ("new room" and "member joined … ignoring", several a second) and
+  that is what "еле подключилось" was. The handler keeps the previous blob and pushes only
+  on a difference.
+
+  What was read along the way, and is worth keeping (0x8768B0 decides the button):
 
   ```
   a game is selected            else grey
@@ -889,14 +909,22 @@ expected: `own-profile` on in that copy, and `net_game_port = 8889` in its own
   game[+0x18] != 0              else grey
   ```
 
-  0xDE2660 reads `[+0x8C]` as a VERSION: `0x10000…0x10032` or `0x20000/0x20001` send it
-  on to `[+0x18] == 0`; anything else — ours reads 0x30001 — to `[+0x17C]`. The record the
-  UI holds is a copy of the room's description (0x8DCE7B builds a 0x1A0-byte `CGameData`
-  and copies from `+0x0C`), so those offsets are its offsets. `[+0x04]` is our field 3,
-  measured; where the other nineteen land is what the numbering answers.
+  0xDE2660 reads `[+0x8C]` as a version — `0x10000…0x10032` or `0x20000/0x20001` go on to
+  `[+0x18]`, anything else (ours reads 0x30001, which is the client's own 3.1 and is not
+  ours to set) falls back to `[+0x17C]`. The row is drawn by 0x8DD160 out of `[+0x34]`
+  (padlock) and `[+0x90]` (STARTED), neither of which was ever set. `CGamesView2::AddGame`
+  (0x8DCE50) is the door: it takes the description, checks the same `[+0x18]`, and copies
+  it into a 0x1A0-byte `CGameData`.
 
 **Two clients want two accounts.** The first login of a name creates it, so the second
 client logs in as another name and nothing has to be prepared here.
+
+**Where this stands at the end of 13.08.2026.** Two clients, two players, one channel,
+one game — and one of them can walk into the other's game and talk to him in it. What has
+NEVER been exercised is starting the match: no `GameStart`, no `AttemptGameStart` in any
+log of any run, from either side. That is the next thing, and the chain below is what it
+will ask for. The probes are still in the extension (`--log net/ubi-room-probe`,
+`net/ubi-friends-probe`) and can go once nothing needs them.
 
 **Starting is a chain of five, not one message.** From the client's own RTTI:
 

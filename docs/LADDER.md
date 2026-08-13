@@ -309,7 +309,10 @@ come in a good and an evil flavour (peasant/slave, knight/pack leader, regent/ov
 ## Rank is the rating divided by a hundred
 
 `0x93CD4B` divides `RATING` by 100 to get a LEVEL; the bar's labels are that level and the
-next, and the bar itself is the remainder over 100. The level is then looked up in a table
+next, and the bar itself is the remainder over 100. **Confirmed on the live client**,
+13.08.2026: a rating of 41234 drew "412" and "413" under a bar filled a third of the way,
+and 40000 drew "400 … 401" with an empty one. The top band has no upper bound (`MaxExp` is
+-1), so the level goes as high as the number does. The level is then looked up in a table
 of eleven ranks that lives in the game's data, not the exe —
 `UI/UIGameRoot.(UIGameRoot).xdb`, node `<ranks>` — matched as `min ≤ level < max`:
 

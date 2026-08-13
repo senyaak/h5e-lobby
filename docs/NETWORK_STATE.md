@@ -919,15 +919,25 @@ expected: `own-profile` on in that copy, and `net_game_port = 8889` in its own
 **Two clients want two accounts.** The first login of a name creates it, so the second
 client logs in as another name and nothing has to be prepared here.
 
-**Where this stands at the end of 13.08.2026.** Two clients, two players, one channel,
-one game — and one of them can walk into the other's game and talk to him in it. Starting
-was reached and answered on the same day: the first attempt died on an unanswered
-`START_GAME`, and the four exchanges below are now implemented and covered by
-`tools/test-net.ts`. **What no run has shown yet is the game actually coming up** — the
-chain is answered in the shapes the client's parsers accept, and whether the two clients
-then find each other peer to peer is the next thing a launch will say. The probes are
-still in the extension (`--log net/ubi-room-probe`, `net/ubi-friends-probe`) and can go
-once nothing needs them.
+**A GAME WAS PLAYED, 13.08.2026.** Two clients, a room, and a duel from the lobby to the
+end — 18:56:36 to 19:00:14 on our own server, no Ubi.com anywhere. The first attempt that
+day died on an unanswered `START_GAME`; the four exchanges below were written the same
+evening and the next launch went through in 0.44 seconds:
+
+```
+18:56:35.972  START_GAME — "Senyaak2" (100), yes
+18:56:36.190  GAME_READY — "Senyaak2" (100) starts, announced to him and 1 other(s)
+18:56:36.314  GAME_CONNECTED for 100 — noted      the guest
+18:56:36.409  GAME_CONNECTED for 100 — noted      the host
+19:00:14.328  GAME_FINISH — the duel is over, from both
+```
+
+The peers found each other unaided: nothing in this server ever told either client where
+the other one was, beyond the addresses that were already in the room and in each player's
+own blob. What is NOT done is anything about the result — see `GAME_FINISH` below and
+LADDER.md: the ladder still reads 1500 and 0 games for both of them. The probes are still
+in the extension (`--log net/ubi-room-probe`, `net/ubi-friends-probe`) and can go once
+nothing needs them.
 
 **Starting is a chain of four exchanges, not one message.** 13.08.2026, measured: the
 host pressed Start, sent `START_GAME` (subtype 15) — seventeen bytes, the only message
@@ -958,7 +968,9 @@ his "please wait" on this message and on nothing else. `0xE1CCD0` does not read 
 message: its arrival IS the content.
 
 Senders, `push <subtype>` right before `call 0x42D970`: 0x421C00 → 15, 0x421990 → 33,
-0x421B50 → 34, 0x421430 → 17, 0x420A20 → 30.
+0x421B50 → 34, 0x421480 → 17, 0x421AA0 → 35, 0x421550 → 45, 0x421600 → 44, 0x4216B0 → 70,
+0x420A20 → 30. (0x421430 stood here for 17 and is wrong: it is the tail of CREATE_ROOM's
+sender and nothing calls it.)
 
 **The three "yes"es are the ordinary envelope.** `START_GAME`, `CREATE_ROOM` and
 `JOIN_ROOM` are all parsed by the same 0x420B60, so a reply is `38` / the subtype / a list
@@ -984,11 +996,26 @@ short, and his address twice. **What the last three mean is not established**: t
 fit "two addresses and a port", and neither handler in the chain reads any of them, so
 nothing depends on it being right — but nothing proves it either.
 
-**`MATCH_STARTED` (62) after `START_MATCH` is a guess.** Two numbers (0x423150), and its
-handler belongs to `CStatePlaying`, not to any state the start chain passes through. It is
-sent because the guest, having answered `GAME_STARTED` with `GAME_CONNECTED`, then waits
-for something and this is the only message left that could be it. The next run's log
-decides: if the guest moves on without it, it goes.
+**`START_MATCH` (17) cannot be sent by this build, and everything behind it is dead.**
+The gate is `[ctx+0xE8]` (0xE12DC3), and the byte is written in exactly one place —
+`ProcessStartMatchReply` at 0xE130E9 — which runs only in `CStateWaitStartMatchReply`,
+constructed only at 0xE12EC9, one line after START_MATCH goes out. Nothing else in NUbi
+writes it. So a game goes from `GAME_CONNECTED` straight into `CStatePlaying`, and
+MATCH_STARTED 62, PlayerMatchStarted 44, SUBMIT_MATCH 30, MATCH_FINISH 45 and
+FINAL_MATCH_RESULTS 71 never happen. We answer 17 anyway, because it costs a line; we
+push nothing on it, because a push no client can ask for is a guess nothing can check.
+The first version of this pushed `MATCH_STARTED` on a hunch — removed once the duel showed
+17 never arrives.
+
+**`GAME_FINISH` (35) is how a game ends, and it is not answered.** `ProcessGameFinish`
+(0xE1CFE0) branches on the same dead flag, so every game takes the unrated door:
+`ProcessGameFinishUnrated` (0xE1DEB0) sends 35 with one field, the room id, from BOTH
+players. There is no `LobbyRcv_GameFinish`, no `CStateWait` for it, and the sender moves
+to `CStateWaitingForPlayers` before any answer could arrive — in the duel each client's
+`GROUP_LEAVE` came in the same millisecond as its 35. It is the only word this server gets
+that a game was played, which makes it the hook for anything the lobby ever wants to know
+about played games. **The client will never report a result** (see LADDER.md): a rating
+here is ours to compute or not to have.
 
 The room these four are about is found by **membership**, not by a field: their bodies
 have only ever been seen encrypted, so nothing about their layout is assumed. Since this

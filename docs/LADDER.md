@@ -191,8 +191,23 @@ Two things follow for whoever writes this end of the server. The client reports 
 per-player numbers, not a winner** — deciding the rating is the server's job, which is
 the same thing the ladder's key list already implied (streaks and disconnections are
 things only a server that watched can count). And an unrated game takes a different door
-entirely: `ProcessGameFinishUnrated` sends `LobbySend_GameFinish(…)`, subtype 45
-(`MATCH_FINISH`), with no table at all.
+entirely: `ProcessGameFinishUnrated` (0xE1DEB0) sends `LobbySend_GameFinish(…)`, subtype
+**35**, one field — the room id — and no table at all. *(It said 45 here until 13.08.2026;
+45 is `LobbySend_MatchFinish`, sent from `CStateWaitAllPlayersFinishedMatch::ProcessStep`
+at 0xE13945, which is inside the rated chain and after the results have gone.)*
+
+**And none of this page can happen in this build.** Which door `ProcessGameFinish`
+(0xE1CFE0) takes is decided by `[ctx+0xE8]` at 0xE1D073, and that byte is written in
+exactly one place — `ProcessStartMatchReply`, 0xE130E9 — which is reachable only after
+START_MATCH has been sent, which happens only when the byte is already set. A closed
+loop with no way in: every path here (SUBMIT_MATCH 30, FINAL_MATCH_RESULTS 71,
+MATCH_FINISH 45, MATCH_STARTED 62, PlayerMatchStarted 44) is dead code in the shipped
+game, and every game is unrated. Measured as well as read: the duel of 13.08.2026 was
+played end to end and the only thing either client sent afterwards was 35.
+
+So a rating in this lobby, if it is ever wanted, is **ours to compute**, from what the
+server saw: who was in the room, when GAME_STARTED went out, and the GAME_FINISH each
+player sends when he is done. The protocol will not bring a result.
 
 ## The 46 keys, in the exe's own order
 

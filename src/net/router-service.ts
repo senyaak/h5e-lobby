@@ -39,7 +39,6 @@ import {
   Rooms,
   gameStartedEntry,
   lobbyEntry,
-  matchStartedEntry,
   memberEntry,
   playerInfo,
   roomEntry,
@@ -1433,18 +1432,42 @@ export class RouterSession {
             replies: [this.lobbyYes(message, subtype, room), build(reply(message, announcement))],
           };
         }
-        // And the match itself. The reply is what he is waiting for; MATCH_STARTED after
-        // it is the guess named in `matchStartedEntry`.
+        // START_MATCH, which this build cannot send. Kept because answering costs one
+        // line and the shape is the same as the other three; NOT built out further,
+        // because everything past it would be a guess nothing can ever exercise.
+        //
+        // The gate is `[ctx+0xE8]`, and it is a closed loop: START_MATCH goes out only
+        // when the flag is set (0xE12DC3), the flag is set only in ProcessStartMatchReply
+        // (0xE130E9), that runs only in CStateWaitStartMatchReply, which is constructed
+        // only at 0xE12EC9 — one line after START_MATCH is sent. Nothing else in NUbi
+        // writes the byte. So a game here goes straight from GAME_CONNECTED into
+        // CStatePlaying, and the whole rated branch — START_MATCH 17, MATCH_STARTED 62,
+        // SUBMIT_MATCH 30, MATCH_FINISH 45, FINAL_MATCH_RESULTS 71 — is unreachable.
+        // Measured, not deduced: the duel of 13.08.2026 was played end to end and not
+        // one of those appeared on the wire.
         if (subtype === String(LobbyMsg.START_MATCH)) {
           const room = this.roomInPlay(Array.isArray(inner) ? inner : []);
-          if (!room) {
-            return { note: 'START_MATCH — he is in no room of ours, yes anyway', replies: [this.lobbyYes(message, subtype, room)] };
-          }
-          const running: GSValue[] = [String(MessageType.GSSUCCESS), matchStartedEntry(room)];
-          const told = this.tellRoomThat(room, running);
           return {
-            note: `START_MATCH — "${room.name}" (${room.id}) is running, ${told} other(s) told`,
-            replies: [this.lobbyYes(message, subtype, room), build(reply(message, running))],
+            note: `START_MATCH — ${room ? `"${room.name}" (${room.id})` : 'no room of his'}, yes`,
+            replies: [this.lobbyYes(message, subtype, room)],
+          };
+        }
+        // The game is over. Both players say so — `CStatePlaying::ProcessGameFinish`
+        // (0xE1CFE0) takes the unrated branch for everybody, since the rated one hangs
+        // off the same unreachable flag — and **neither waits for an answer**: there is
+        // no `LobbyRcv_GameFinish` and no CStateWait for it, and the sender goes straight
+        // into CStateWaitingForPlayers. In the duel both GROUP_LEAVEs arrived in the same
+        // millisecond as this, which is what that looks like from here.
+        //
+        // So this is not a message to answer, it is the one place the server is told a
+        // game ended — and the only one it will ever get, because in this build the
+        // client never reports a result. Whatever this lobby ever does with played games
+        // starts here.
+        if (subtype === String(LobbyMsg.GAME_FINISH)) {
+          const room = this.roomInPlay(Array.isArray(inner) ? inner : []);
+          return {
+            note: `GAME_FINISH — ${room ? `"${room.name}" (${room.id})` : 'a room we do not have'} is over for ${this.username}, nothing to answer`,
+            replies: [],
           };
         }
         // He tells us he is connected to his own game. Nothing to answer.

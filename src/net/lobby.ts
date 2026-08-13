@@ -47,6 +47,8 @@ export const LobbyMsg = {
   UPDATE_PING: 32,
   GAME_READY: 33,
   GAME_CONNECTED: 34,
+  /** The end of a game nobody was rated for — which, in this build, is every game. */
+  GAME_FINISH: 35,
   UPDATE_GAME_INFO: 41,
   SET_PLAYER_INFO: 42,
   MATCH_FINISH: 45,
@@ -370,20 +372,6 @@ export function roomEntry(room: Room, probe = false): GSValue[] {
  */
 export function gameStartedEntry(room: Room, port = GAME_PORT): GSValue[] {
   return [String(LobbyMsg.GAME_STARTED), room.info, String(port), room.address, room.altAddress];
-}
-
-/**
- * "The match is running" — the same idea, two fields, and the second is a guess.
- *
- * 0x423150 reads two numbers and nothing else, and unlike GAME_STARTED **no handler
- * for it was found in the states the start chain goes through**: it belongs to
- * `CStatePlaying`. It is sent because the guest, having answered GAME_STARTED with
- * GAME_CONNECTED, then waits for something, and this is the only message left in the
- * chain that could be it. If the log of the next run shows the guest moving on without
- * it, it can go.
- */
-export function matchStartedEntry(room: Room): GSValue[] {
-  return [String(LobbyMsg.MATCH_STARTED), String(room.id)];
 }
 
 /**

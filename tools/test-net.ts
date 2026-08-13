@@ -1603,15 +1603,24 @@ console.log('\nStarting the game: the chain both players wait on');
     check(`${who}: field 4 is a string`, typeof fields[4] === 'string' && fields[4].length > 0, String(fields[4]));
   }
 
-  // Last of the four: the match itself.
+  // START_MATCH, which this build cannot send: the flag that gates it is only ever set
+  // one line after it goes out. Answered anyway, and nothing is announced on it — a push
+  // no client can ask for is a guess that can never be checked.
   toGuest.length = 0;
   const match = host.receive(lobbyMsg([String(LobbyMsg.START_MATCH), [id]]));
-  check('START_MATCH is answered', match[0]!.replies.length === 2, match[0]?.note);
+  check('START_MATCH is answered', match[0]!.replies.length === 1, match[0]?.note);
   check('with a success naming its subtype', yes(match[0]!.replies[0], LobbyMsg.START_MATCH).names);
-  const running = (parse(match[0]!.replies[1]!)?.body?.[1] as GSValue[]) ?? [];
-  check('and the match is announced', running[0] === String(LobbyMsg.MATCH_STARTED), String(running[0]));
-  check('with the two numbers its parser reads', running.length === 2 && Number.isFinite(Number(running[1])), JSON.stringify(running));
-  check('the guest hears it too', toGuest.length === 1, String(toGuest.length));
+  check('and nothing is announced on it', toGuest.length === 0, String(toGuest.length));
+
+  // The end of the game, which both players report and neither waits on. It is the only
+  // word this server gets that a game was played at all.
+  toGuest.length = 0;
+  const over = host.receive(lobbyMsg([String(LobbyMsg.GAME_FINISH), [id]]));
+  check('GAME_FINISH is not answered — nothing in the client reads a reply', over[0]!.replies.length === 0, over[0]?.note);
+  check('but it is named, and names the game', over[0]!.note.includes('GAME_FINISH') && over[0]!.note.includes(id), over[0]?.note);
+  check('and it is not announced to anybody either', toGuest.length === 0, String(toGuest.length));
+  const guestOver = guest.receive(lobbyMsg([String(LobbyMsg.GAME_FINISH), [id]]));
+  check('the guest reports it too, and is named as himself', guestOver[0]!.note.includes('Player2'), guestOver[0]?.note);
 
   // The room is found by MEMBERSHIP, not by trusting a field we have never read: the
   // bodies of these four have only ever been seen encrypted. A start that names

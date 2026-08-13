@@ -68,6 +68,8 @@ export const LobbyMsg = {
   MATCH_READY: 65,
   PLAYER_INFO_UPDATE: 66,
   PLAYER_UPDATE_STATUS: 69,
+  /** "I have finished the match" — said once, right after the results go out. */
+  PLAYER_MATCH_FINISHED: 70,
   FINAL_MATCH_RESULTS: 71,
   PLAYER_GROUP_GET: 106,
   CHANGE_REQUESTED_LOBBIES: 109,

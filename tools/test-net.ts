@@ -1663,6 +1663,11 @@ console.log('\nStarting the game: the chain both players wait on');
   // the lobby library, so this log line is the only record of what a played game looks like.
   check('the whole table goes into the log', submitted[0]!.note.includes('4194303') && submitted[0]!.note.includes('980'), submitted[0]!.note.split('\n')[1]);
 
+  // And its twin, sent the moment the results are away.
+  const done = guest.receive(lobbyMsg([String(LobbyMsg.PLAYER_MATCH_FINISHED), [id]]));
+  check('PLAYER_MATCH_FINISHED needs no answer either', done[0]!.replies.length === 0, done[0]?.note);
+  check('and is named with whose it is', done[0]!.note.includes('Player2'), done[0]?.note);
+
   // The last word of a rated game, which the client sends once everybody has stopped.
   const finished = host.receive(lobbyMsg([String(LobbyMsg.MATCH_FINISH), [id]]));
   check('MATCH_FINISH is answered', finished[0]!.replies.length === 1, finished[0]?.note);

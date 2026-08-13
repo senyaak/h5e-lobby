@@ -230,12 +230,45 @@ though, makes the client fail itself with reason 65.
 (`ctx+0x258`, 0xE1D2B0) and quotes it at the head of its table; we send the room's id and
 take it back out of the request rather than the room, which by then may be gone.
 
-**What the numbers mean is still unknown.** The stat ids are built by the GAME, not by the
-lobby library, and are named nowhere in it. One rated match with a KNOWN winner would
-settle the column that says who won — the same table arrives, and the client also prints
-every `LobbySend_SetMatchResult(name, statId, value)` into its own log. Until then the
-table is logged whole and the ladder is left alone: a rating computed from a column nobody
-has identified would be worse than none.
+## What the numbers are, as far as two matches say
+
+The stat ids are built by the GAME, not by the lobby library, and are named nowhere in it.
+The client does print every cell into its own log — `LobbySend_SetMatchResult(name, statId,
+value)`, and they come out in id order 0…21 — which confirms that the position in the list
+IS the stat id, and nothing more. **They are not ladder keys**: id 0 would be RATING, and
+it arrives as 0 or 1.
+
+Two rated matches, both on the same map, both between the same two accounts:
+
+```
+             id: 0  1  3    9  14 15 16     17   19   21
+game A (18:56)  the host was Senyaak2
+  Senyaak       0  1  980  1  2  0  65536  474  0    0
+  Senyaak2      1  7  0    0  0  1  65536  474  250  1
+game B (20:38)  the host was Senyaak, and RED won
+  Senyaak       1  7  0    0  0  1  65536  111  250  1
+  Senyaak2      0  1  0    1  1  0  65536  111  0    0
+```
+
+(Every id not listed was 0 for both players in both games.)
+
+What can be said:
+
+- **id 17 is the length of the match in seconds**, near enough: 474 against 495 seconds of
+  wall clock, 111 against 93 — the difference being the load before play starts.
+- **id 16 is 65536 for everybody, always** — a version or a fixed-point 1.0, not a
+  measurement.
+- **ids 0, 15, 21 and 19 travel together**, one player getting 1/1/1/250 and the other
+  0/0/0/0, and **id 9 travels the other way**. One of them is the win. But in BOTH games
+  that set belonged to **the player who hosted the room** — and in game B the host also
+  won. So "who won" and "which seat" are still the same column as far as the data goes.
+- **id 1 is 7 for that player and 1 for the other, in both games.** If it is the faction,
+  the two of them kept their seats; it moved with the seat, not with the account.
+
+**The experiment that separates them is one match in which the host LOSES.** If the set
+follows the winner, it is the result; if it stays with the host, it is the seat and the
+result is elsewhere. Until then the table is logged whole and **the ladder is left
+alone** — a rating computed from a column nobody has identified would be worse than none.
 
 ## The 46 keys, in the exe's own order
 

@@ -1464,6 +1464,15 @@ export class RouterSession {
             replies: [this.lobbyYes(message, subtype, room), build(reply(message, running))],
           };
         }
+        // "I have finished the match" — the other half of the pair, sent right after the
+        // results and immediately followed by GROUP_LEAVE, so nothing waits on it either.
+        if (subtype === String(LobbyMsg.PLAYER_MATCH_FINISHED)) {
+          const room = this.roomInPlay(Array.isArray(inner) ? inner : []);
+          return {
+            note: `PLAYER_MATCH_FINISHED — ${this.username} is out of ${room ? `"${room.name}" (${room.id})` : 'a room we do not have'}, nothing to answer`,
+            replies: [],
+          };
+        }
         // "I have started the match" — both players say it as soon as MATCH_STARTED
         // reaches them, and then they play for eight minutes without another word, so
         // nothing is waiting on an answer here. Named rather than answered.

@@ -14,7 +14,7 @@ import { HEADER_SIZE, Flags, buildSegment, checksum, parseSegment, verify } from
 import { MessageType, Property, build, parse } from '../src/net/gs-message.ts';
 import { NatService, inetU32 } from '../src/net/nat-service.ts';
 import { KEY_BLOB_SIZE, decryptWith, encryptTo, generateKeyPair, parsePublicKey, publicKeyBlob } from '../src/net/pkc.ts';
-import { GUEST, RouterService, type RouterSession } from '../src/net/router-service.ts';
+import { GUEST, GUEST_LOBBY, RouterService, type RouterSession } from '../src/net/router-service.ts';
 import { Blowfish } from '../src/net/blowfish.ts';
 import { CdKeyRequest, CdKeyService } from '../src/net/cdkey-service.ts';
 import { LobbyMsg, Lsm, RoomUpdate, playerInfo } from '../src/net/lobby.ts';
@@ -1007,7 +1007,7 @@ console.log('\nAdding a friend, from the right-click the client really sent');
   // Verbatim off the wire (12.08.2026): he right-clicked his own name in the channel.
   const clicked = router.receive(Buffer.from('00001a004b41faeeefe197d9f491969be2fb959aeef699939c9c', 'hex'));
   check('the right-click is an ADDFRIEND', clicked[0]?.note.startsWith('ADDFRIEND'), clicked[0]?.note);
-  check('and it is answered rather than ignored', clicked[0]!.replies.length === 1, clicked[0]?.note);
+  check('and it is answered rather than ignored', clicked[0]!.replies.length === 2, clicked[0]?.note);
 
   const answer = parse(clicked[0]!.replies[0]!);
   check('the answer is a plain success', answer?.type === MessageType.GSSUCCESS, String(answer?.type));
@@ -1032,6 +1032,83 @@ console.log('\nAdding a friend, from the right-click the client really sent');
   check('an ADDFRIEND with no name is refused', refused?.type === MessageType.GSFAIL, String(refused?.type));
   const reason = (refused?.body?.[1] as GSValue[])?.[0];
   check('and its reason is a four-byte blob under the key', reason instanceof Uint8Array && reason.length === 4, JSON.stringify(reason));
+}
+
+console.log('\nThe friends list, which the client can only be told and never asks for');
+{
+  const friendsDb = join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-friend-list.db');
+  rmSync(friendsDb, { force: true });
+  const service = new RouterService(
+    { address: '127.0.0.1', port: 40001 },
+    { address: '127.0.0.1', port: 40030 },
+    { address: '127.0.0.1', port: 40031 },
+    { address: '127.0.0.1', port: 40040 },
+    friendsDb,
+  );
+  const router = service.session('router');
+  router.username = 'Senyaak';
+
+  const number = (value: GSValue | undefined): number =>
+    value instanceof Uint8Array && value.length === 4 ? Buffer.from(value).readUInt32LE(0) : NaN;
+  const friendsLogin = () =>
+    router.receive(
+      build({ property: Property.GS, priority: 0, type: MessageType.LOGINFRIENDS, sender: 4, receiver: 1, body: ['Senyaak'] }),
+    )[0]!;
+
+  // Nobody on the list is not a reason to say nothing: the login is still answered,
+  // and what follows it is just empty.
+  const alone = friendsLogin();
+  check('a friends login with no friends is one reply', alone.replies.length === 1, alone.note);
+
+  const added = router.receive(
+    build({ property: Property.GS, priority: 0, type: MessageType.ADDFRIEND, sender: 4, receiver: 2, body: ['Guest', '', new Uint8Array(4)] }),
+  )[0]!;
+  // The yes names the friend; the push beside it is the row itself, and it is the push
+  // that carries everything a list draws.
+  const row = parse(added.replies[1]!);
+  check('adding a friend also pushes him as an UPDATEFRIEND', row?.type === MessageType.UPDATEFRIEND, String(row?.type));
+  // 74 is a push, and its parser proves it: 0x428d90 insists the message's own TYPE
+  // byte is 0x4A, where a reply would carry 38 or 39 with the key repeated inside.
+  check('which is a message of its own type, not a 38 with a key inside it', row?.body?.[0] === 'Guest', JSON.stringify(row?.body?.[0]));
+
+  const list = friendsLogin();
+  check('and logging in again pushes the list after the yes', list.replies.length === 2, list.note);
+  check('with the count in the log line', list.note.includes('1 friend(s) pushed'), list.note);
+
+  const entry = parse(list.replies[1]!);
+  const body = entry?.body ?? [];
+  // Six fields, and the kinds are not ours to choose: 0x428d90 reads 0 and 2 with the
+  // string getter, 1, 3 and 4 as four-byte blobs, and refuses the whole message —
+  // silently — if any of them is something else.
+  check('the pushed friend has six fields', body.length === 6, String(body.length));
+  check('his name is a string', body[0] === 'Guest', JSON.stringify(body[0]));
+  check('field 1 is four bytes and says he is online', number(body[1]) === 1, JSON.stringify(body[1]));
+  check('field 2 is the channel he sits in, as a string', body[2] === 'Ranked', JSON.stringify(body[2]));
+  check('field 3 is that channel as a number', number(body[3]) === GUEST_LOBBY, JSON.stringify(body[3]));
+  check('field 4 is his rating, and the guest is not a default 1500', number(body[4]) === 1560, JSON.stringify(body[4]));
+  check('field 5 is a string, the one field the client will default for us', body[5] === '', JSON.stringify(body[5]));
+
+  // The other half of the right-click. Its reply is the add's with the key changed —
+  // 0x429370 is 0x4292d0 to the instruction.
+  const dropped = router.receive(
+    build({ property: Property.GS, priority: 0, type: MessageType.DELFRIEND, sender: 4, receiver: 2, body: ['Guest', '', new Uint8Array(4)] }),
+  )[0]!;
+  const goodbye = parse(dropped.replies[0]!);
+  const delKey = goodbye?.body?.[0] as Uint8Array;
+  check('a DELFRIEND is answered with a success', goodbye?.type === MessageType.GSSUCCESS, String(goodbye?.type));
+  check('naming message 76 in one byte', delKey instanceof Uint8Array && delKey.length === 1 && delKey[0] === MessageType.DELFRIEND, JSON.stringify(delKey));
+  check('and the friend as a plain string', goodbye?.body?.[1] === 'Guest', JSON.stringify(goodbye?.body?.[1]));
+  check('and he is gone from the store, not just from the screen', friendsLogin().replies.length === 1, dropped.note);
+
+  // A friend who is not logged in is still a row — a friends list that only showed the
+  // people already visible in the channel would be a second copy of the players panel.
+  router.receive(
+    build({ property: Property.GS, priority: 0, type: MessageType.ADDFRIEND, sender: 4, receiver: 2, body: ['Nobody', '', new Uint8Array(4)] }),
+  );
+  const offline = parse(friendsLogin().replies[1]!)?.body ?? [];
+  check('an offline friend is still pushed', offline[0] === 'Nobody', JSON.stringify(offline[0]));
+  check('with field 1 saying so', number(offline[1]) === 0, JSON.stringify(offline[1]));
+  check('and nowhere for a place', offline[2] === '' && number(offline[3]) === 0, JSON.stringify(offline.slice(2, 4)));
 }
 
 console.log('\nThe profile, from the read the client really asked for');

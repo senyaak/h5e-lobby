@@ -25,7 +25,7 @@
 import { hostU32String } from './address.ts';
 import { Accounts, type LoginVerdict } from './accounts.ts';
 import { openDatabase } from './database.ts';
-import { Friends } from './friends.ts';
+import { Friends, friendUpdate, type FriendState } from './friends.ts';
 import { Ladder, ladderPayload } from './ladder.ts';
 import { GET_DATA, PersistentStore, SET_DATA, recordKeyOf } from './persistent-store.ts';
 import {
@@ -452,6 +452,31 @@ export class RouterSession {
     return build(reply(message, [String(LobbyMsg.GROUP_INFO), ['1', String(Lsm.CHILDGROUPINFO), ['0'], lobbies]]));
   }
 
+  /**
+   * What we can say about a friend besides his name.
+   *
+   * All of it is known already — `Presence` says where he is and the ladder says what
+   * he is rated — and none of it is asked for: a friends list is exactly the fact that
+   * somebody else is here, and this is where that fact comes from.
+   */
+  private stateOf(friend: string): FriendState {
+    const lobbyId = this.presence.lobbyOf(friend);
+    const lobby = DEFAULT_LOBBIES.find((l) => l.id === lobbyId);
+    return {
+      online: lobbyId !== null,
+      place: lobby?.name ?? '',
+      groupId: lobbyId ?? 0,
+      rating: this.ladder.row(friend)['RATING'] ?? 0,
+    };
+  }
+
+  /** His whole list, one message each, in the order he added them. */
+  private friendList(message: GSMessage): Buffer[] {
+    return this.friends
+      .of(this.username)
+      .map((friend) => build(reply(message, friendUpdate(friend, this.stateOf(friend)), MessageType.UPDATEFRIEND)));
+  }
+
   private handle(message: GSMessage): RouterEvent {
     switch (message.type) {
       case MessageType.KEY_EXCHANGE:
@@ -548,11 +573,17 @@ export class RouterSession {
           replies: [build(reply(message, body, MessageType.GSSUCCESS))],
         };
       }
-      case MessageType.LOGINFRIENDS:
+      // Logging in to the friends service is also the moment his list arrives: the
+      // client has no message for "send me my friends" — `FriendsSend_Login`,
+      // `_AddFriend` and `_DelFriend` are the whole of what it can say — so a list
+      // that is never pushed is a list that is never shown.
+      case MessageType.LOGINFRIENDS: {
+        const list = this.friendList(message);
         return {
-          note: 'LOGINFRIENDS — accepted',
-          replies: [build(reply(message, [messageId(MessageType.LOGINFRIENDS)], MessageType.GSSUCCESS))],
+          note: `LOGINFRIENDS as "${this.username}" — accepted, ${list.length} friend(s) pushed`,
+          replies: [build(reply(message, [messageId(MessageType.LOGINFRIENDS)], MessageType.GSSUCCESS)), ...list],
         };
+      }
       // Right-clicking a name in the channel is "add to friend", and the game sends it
       // here: `FriendsSend_AddFriend(Senyaak,,0)` in its log, `[name, "", <4 zero
       // bytes>]` on the wire. Unanswered it does nothing at all, which is what Сеня saw
@@ -589,7 +620,38 @@ export class RouterSession {
           note:
             `ADDFRIEND "${friend}" for "${this.username}" — ${added ? 'added' : 'already there'}, ` +
             `${this.friends.of(this.username).length} friend(s) now`,
-          replies: [build(reply(message, [messageId(MessageType.ADDFRIEND), friend], MessageType.GSSUCCESS))],
+          // The yes, and then the friend himself. The reply carries a name and nothing
+          // else, so a list that only ever gets these is a list of names with nothing
+          // beside them; 74 is where "he is online, in Ranked, rated 1560" can go, and
+          // sending it now is what makes the new row look like the ones from login.
+          replies: [
+            build(reply(message, [messageId(MessageType.ADDFRIEND), friend], MessageType.GSSUCCESS)),
+            build(reply(message, friendUpdate(friend, this.stateOf(friend)), MessageType.UPDATEFRIEND)),
+          ],
+        };
+      }
+      // And the other half of the right-click. The message is 76 and its reply is 75's
+      // exactly — 0x429370 is 0x4292d0 with the key changed: the 38/39 envelope, the
+      // key repeated in field 0, and the name as a STRING in field 1. Whether the ask
+      // itself carries the name where the add does has not been seen on the wire, so
+      // the body goes into the log whole the first time one arrives.
+      case MessageType.DELFRIEND: {
+        const friend = typeof message.body?.[0] === 'string' ? message.body[0] : '';
+        if (!friend) {
+          return {
+            note: `DELFRIEND with no name from "${this.username}" — refused, the body was ${JSON.stringify(message.body, bodyForLog)}`,
+            replies: [build(reply(message, [messageId(MessageType.DELFRIEND), [reasonCode(1)]], MessageType.GSFAIL))],
+          };
+        }
+        // A name that is not on the list is answered with a yes as well: the client
+        // offers "remove" for the rows it is already showing, so the two can only
+        // disagree if our list is behind — and the honest end of that is to agree.
+        const removed = this.friends.remove(this.username, friend);
+        return {
+          note:
+            `DELFRIEND "${friend}" for "${this.username}" — ${removed ? 'removed' : 'was not there'}, ` +
+            `${this.friends.of(this.username).length} friend(s) now`,
+          replies: [build(reply(message, [messageId(MessageType.DELFRIEND), friend], MessageType.GSSUCCESS))],
         };
       }
       case MessageType.PLAYERINFO: {

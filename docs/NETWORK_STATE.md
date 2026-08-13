@@ -1,7 +1,8 @@
 # Our own Ubi.com: where this stands, and what is known
 
-A companion to [NETWORK.md](NETWORK.md), which explains how the game finds its
-servers. This one is the state of play: what runs, what the client accepted, what
+A companion to `docs/NETWORK.md`, which explains how the game finds its servers and
+which lives in the editor repo (`homm5-editor`, branch `net/multiplayer`) together with
+everything else that touches the game. This one is the state of play: what runs, what the client accepted, what
 it refused, and where the next wall is. Written 12.08.2026 so that none of it has
 to be recovered from memory.
 
@@ -34,18 +35,18 @@ Two logs matter, and they answer different questions:
 | `logs/latest.log` (and `logs/session-*.log`) | every byte in and out of our services, decoded — `latest.log` is always the run happening now |
 | `<game copy>/bin/homm5-editor-*.log` | **the game's own narration**, mirrored by our DLL |
 
-The second one is the important one and it exists because of
-[native/net/ubi-log.c](../native/net/ubi-log.c): one detour on the engine's log
-append (0xDFB270), lines stamped with a tick count. Build it with
-`node tools/build-native.ts --log net/ubi-log` and install with
+The second one is the important one and it exists because of `native/net/ubi-log.c`
+**in the editor repo**: one detour on the engine's log append (0xDFB270), lines
+stamped with a tick count. Built and installed from there, not from here:
+`node tools/build-native.ts --log net/ubi-log`, then
 `node tools/install-native.ts --game C:\Projects\homm5-game-net`. Without it we are
 blind — five walls in a row were found by reading it, and the two before it cost a
 launch each to guess at.
 
 `node tools/net-decode.ts --file <dump>` turns a hex dump from either log back
-into a message; `--srp` for a datagram, `--irc` for chat.
-`node tools/net-probe.ts <exe> …` is the disassembly side: strings, references,
-imports, callers, `--func`, `--dword`, `--bytes`.
+into a message; `--srp` for a datagram, `--irc` for chat — that one is ours.
+`node tools/net-probe.ts <exe> …` is the disassembly side and lives in the editor repo
+as well: strings, references, imports, callers, `--func`, `--dword`, `--bytes`.
 
 ## The ports, and who answers
 
@@ -89,6 +90,8 @@ player info        -> arrives on its own now, 73 bytes, his and not our inventio
 player list        -> WORKS (12.08.2026): the panel draws him
 friends (add)      -> WORKS (13.08.2026): "FriendsRcv_AddFriend: (38,…,Senyaak)", and a
                       nameless one is refused with our reason: "(39,1,)"
+friends (the list) -> WRITTEN, NOT LAUNCHED (14.08.2026): the list is pushed as 74s at
+                      friends login and on every add; removal (76) answered — see below
 create game        -> CREATE_ROOM answered, room 100 in the channel
 join own room      -> "LobbyRcv_RoomInfo", then CStateInRoom / CStateWaitingForPlayers
 settings changes   -> GROUP_CONFIG_UPDATE_RES answered, the room echoed back
@@ -556,6 +559,54 @@ had been sending a list, so the message was matched, consumed and dropped in the
 38 or 39, and field 0 says 75 again as a one-byte blob. A refusal's reason is read with
 0x442620 asking for **exactly four bytes**, and that getter refuses a length that differs.
 
+### The friends list is pushed, and 74 is what carries it
+
+14.08.2026, read and written, **not yet launched**. The client can say exactly three
+things about friends — `FriendsSend_Login`, `_AddFriend`, `_DelFriend` (0xe0f5c1,
+0xe1905a, 0xe19263) — and none of them is "send me my list". So the list is ours to
+push, and there is a panel waiting for it: `FriendListView` (0x910367), the other half
+of the players panel, with `UI/Lobby/Main/Players/FriendListHeader` and
+`FriendListSelect` in the game's own UI data.
+
+What it can *receive* is four messages, and the four are the whole family. The friends
+queue's drainer (0x41b840) hands each key to a parser, and each parser calls one slot of
+the listener vtable at **0xfe4c30** — whose first three slots and its +0x34 are exactly
+the four functions that log `NUbi::CClient2::FriendsRcv_*`:
+
+| key | parser | slot | what the client calls it |
+|---|---|---|---|
+| 78 | 0x4299b0 | +0 | `FriendsRcv_LoginResult` (0xdf41c0) |
+| 75 | 0x429a20 | +4 | `FriendsRcv_AddFriend` (0xdf42e0) |
+| 76 | 0x429a80 | +8 | `FriendsRcv_DelFriend` (0xdf4460) |
+| **74** | **0x428f40** | **+0x34** | **`FriendsRcv_UpdateFriend` (0xdf45e0)** |
+
+**74 is a push and its parser proves it.** 0x428d90 matches the message and then insists
+`[eax+4] == 0x4A` — the message's own type byte — where 75 and 76 go through 0x428fd0 and
+demand the 38/39 envelope with the key repeated inside. A reply is answered; a 74 is
+simply sent. Its six fields, with the getter that reads each:
+
+```
+0  string    0x4426c0   the friend's name
+1  4 bytes   0x442620
+2  string    0x4426c0
+3  4 bytes   0x442620
+4  4 bytes   0x442620
+5  string    0x443400   optional: missing, the client copies its own 132-byte default
+```
+
+**What they mean is not read anywhere**, and nothing in the exe says which number is a
+status. So they are filled the way a friends row plausibly wants — online, the channel
+in words, the channel as a number, the rating — with no two numbers alike, and the
+client will settle it: 0xdf45e0 prints **all six** into the game's log before packing
+them into a 0x3C-byte struct, so one launch says what arrived and the panel says which
+of them it draws. `friendUpdate` in [src/net/friends.ts](../src/net/friends.ts) is the
+one place to change them.
+
+Removal is the add with the key changed: 0x429370 is 0x4292d0 to the instruction, so a
+DELFRIEND is answered `38, [ <byte 76>, "<the name>" ]`. Whether the ask carries the name
+in field 0 the way the add does has **not** been seen on the wire — a nameless one is
+refused and the body goes into the log whole, which is what the first click will settle.
+
 ### The ladder's real row
 
 `ladderPayload` in [src/net/ladder.ts](../src/net/ladder.ts) is the shape, and its comment
@@ -702,6 +753,11 @@ of this file. What that run left:
    returns to the channel screen.
 2. **The profile, and the loop it sits in.** See below — it is the one thing left that
    nothing on our side can settle by reading.
+3. **The friends list** (14.08.2026, written the same day and not launched either). The
+   verdict is two lines of the game's own log — `FriendsRcv_UpdateFriend: ` with our six
+   fields printed back, and then the guest's name in `FriendListView` when the panel is
+   switched to it. What each of the six fields *means* is what that run is for, and they
+   are deliberately all different so the screen can be read backwards into them.
 
 And then the wall proper:
 

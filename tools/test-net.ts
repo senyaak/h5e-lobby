@@ -583,6 +583,27 @@ console.log('\nThe lobby server, from the words the client really said');
       body: [String(LobbyMsg.SET_PLAYER_INFO), ['0', new Uint8Array(own)]],
     }),
   );
+  // And the channel is told again the moment that blob arrives, without being asked:
+  // his rating lives inside it, the member list went out a second before he had one,
+  // and until this the panel drew "…" beside his own name for the whole session.
+  const told = lobby.receive(
+    build({
+      property: Property.GS,
+      priority: 0,
+      type: MessageType.LOBBY_MSG,
+      sender: 4,
+      receiver: 2,
+      body: [String(LobbyMsg.SET_PLAYER_INFO), ['0', new Uint8Array(own)]],
+    }),
+  );
+  check('a player-info is acknowledged and the channel told again', told[0]!.replies.length === 2, told[0]?.note);
+  const pushed = parse(told[0]!.replies[1]!);
+  check('what follows the acknowledgement is the channel', pushed?.body?.[0] === String(LobbyMsg.GROUP_INFO), String(pushed?.body?.[0]));
+  const pushedMembers = (pushed?.body?.[1] as GSValue[])?.[4] as GSValue[];
+  const pushedHim = pushedMembers.map((e) => e as GSValue[]).find((e) => e[0] === 'Senyaak') ?? [];
+  check('carrying his record with the blob in it this time', Buffer.from(pushedHim[4] as Uint8Array).equals(own), JSON.stringify(pushedHim[4]));
+  check('and the log says why it was sent', told[0]!.note.includes('so his rating is drawn'), told[0]?.note);
+
   const asked = lobby.receive(
     build({
       property: Property.GS,

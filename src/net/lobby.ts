@@ -190,12 +190,12 @@ export interface Room {
  * A player is in one channel at a time, so entering one leaves the last.
  */
 export class Presence {
-  private readonly lobbyOf = new Map<string, number>();
+  private readonly lobbyOf_ = new Map<string, number>();
   private readonly blobs = new Map<string, Uint8Array>();
   private readonly addresses = new Map<string, string>();
 
   enter(name: string, lobbyId: number): void {
-    if (name) this.lobbyOf.set(name, lobbyId);
+    if (name) this.lobbyOf_.set(name, lobbyId);
   }
 
   /** Where a player says he lives, from his lobby-server login. */
@@ -208,11 +208,16 @@ export class Presence {
   }
 
   leave(name: string): void {
-    this.lobbyOf.delete(name);
+    this.lobbyOf_.delete(name);
+  }
+
+  /** Which channel a player is in, or null when he is in none. */
+  lobbyOf(name: string): number | null {
+    return this.lobbyOf_.get(name) ?? null;
   }
 
   inLobby(lobbyId: number): string[] {
-    return [...this.lobbyOf.entries()].filter(([, id]) => id === lobbyId).map(([name]) => name);
+    return [...this.lobbyOf_.entries()].filter(([, id]) => id === lobbyId).map(([name]) => name);
   }
 
   /**

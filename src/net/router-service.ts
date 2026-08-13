@@ -406,6 +406,37 @@ export class RouterSession {
    * channel entry, and the only place that knows it is `Presence` — the same list the
    * player panel is drawn from, so the two cannot disagree.
    */
+  /**
+   * A channel, whole: who is in it and what games are open there.
+   *
+   * The same message answers three questions — "I have joined", "tell me again" and
+   * "somebody's record changed" — and it is one function because the three had already
+   * started to drift apart. The mask says what the rest of the message contains and it
+   * is echoed as it was asked; 384 (members and child groups) is what the client uses
+   * for a channel.
+   */
+  private channelInfo(
+    message: GSMessage,
+    lobbyId: number,
+    mask: number = Lsm.GROUPMEMBERS | Lsm.CHILDGROUPINFO,
+    extra: readonly GSValue[][] = [],
+  ): Buffer {
+    const lobby = DEFAULT_LOBBIES.find((l) => l.id === lobbyId) ?? DEFAULT_LOBBIES[0]!;
+    const members = [
+      ...this.presence
+        .inLobby(lobby.id)
+        .map((name) => memberEntry(name, lobby.id, this.addressOf(name), PlayerStatus.NONE, this.presence.info(name))),
+      ...extra,
+    ];
+    const rooms = this.rooms.inLobby(lobby.id).map(roomEntry);
+    return build(
+      reply(message, [
+        String(LobbyMsg.GROUP_INFO),
+        [String(lobby.id), String(mask), lobbyEntry(lobby, this.gameId, members.length), rooms, members],
+      ]),
+    );
+  }
+
   private lobbyList(message: GSMessage): Buffer {
     const lobbies = DEFAULT_LOBBIES.map((lobby) =>
       lobbyEntry(lobby, this.gameId, this.presence.inLobby(lobby.id).length),
@@ -778,14 +809,10 @@ export class RouterSession {
           const asked = Number(typeof fields[2] === 'string' ? fields[2] : '') || Lsm.GROUPMEMBERS | Lsm.CHILDGROUPINFO;
           const lobby = DEFAULT_LOBBIES.find((l) => String(l.id) === groupId) ?? DEFAULT_LOBBIES[0]!;
           this.presence.enter(this.username, lobby.id);
-          const rooms = this.rooms.inLobby(lobby.id).map(roomEntry);
-          // The people in the channel, himself among them. Left empty, the client's
-          // player list is empty too, and "Profile" — "look at the results of the
-          // selected players" — has nothing to act on and stays grey.
-          const here = this.presence.inLobby(lobby.id);
-          const members = here.map((name) =>
-            memberEntry(name, lobby.id, this.addressOf(name), PlayerStatus.NONE, this.presence.info(name)),
-          );
+          // The people in the channel, himself among them, come from `channelInfo`.
+          // Left empty, the client's player list is empty too, and "Profile" — "look at
+          // the results of the selected players" — has nothing to act on and stays grey.
+          //
           // A run with `--ghosts` seats synthetic players in the channel, one with a
           // blob and one without. That experiment has already said what it had to say:
           // the list is fed by GROUP_INFO, the client does not hide itself, and a
@@ -793,13 +820,10 @@ export class RouterSession {
           // channel with four names in it tells us more at a glance than one with one.
           const ghosts = this.ghosts
             ? [
-                { name: 'GhostList', info: undefined },
-                { name: 'GhostBlob', info: playerInfo('GhostBlob', 1234) },
+                memberEntry('GhostList', lobby.id, '127.0.0.1', PlayerStatus.NONE, undefined),
+                memberEntry('GhostBlob', lobby.id, '127.0.0.1', PlayerStatus.NONE, playerInfo('GhostBlob', 1234)),
               ]
             : [];
-          for (const ghost of ghosts) {
-            members.push(memberEntry(ghost.name, lobby.id, '127.0.0.1', PlayerStatus.NONE, ghost.info));
-          }
           const announced = this.ghosts
             ? [
                 build(
@@ -814,16 +838,12 @@ export class RouterSession {
             : [];
           return {
             note:
-              `JOIN_LOBBY ${groupId} ("${lobby.name}") — in, ${rooms.length} game(s) and ${members.length} player(s) listed, mask ${asked}` +
+              `JOIN_LOBBY ${groupId} ("${lobby.name}") — in, ${this.rooms.inLobby(lobby.id).length} game(s) and ` +
+              `${this.presence.inLobby(lobby.id).length + ghosts.length} player(s) listed, mask ${asked}` +
               (this.ghosts ? ' + GhostJoin pushed as MEMBER_JOIN' : ''),
             replies: [
               build(reply(message, [String(MessageType.GSSUCCESS), [subtype, [groupId]]])),
-              build(
-                reply(message, [
-                  String(LobbyMsg.GROUP_INFO),
-                  [groupId, String(asked), lobbyEntry(lobby, this.gameId, members.length), rooms, members],
-                ]),
-              ),
+              this.channelInfo(message, lobby.id, asked, ghosts),
               ...announced,
             ],
           };
@@ -933,11 +953,26 @@ export class RouterSession {
             this.presence.remember(this.username, blob);
           }
           const said = fields.map((field) => (field instanceof Uint8Array ? `<${field.length} bytes>` : JSON.stringify(field)));
+          // AND THE CHANNEL IS TOLD AGAIN, because this blob is where his rating is.
+          //
+          // The order is the client's and it cannot be helped: the member list goes out
+          // when he enters the channel, a second before his ladder row arrives, and only
+          // then does he compose the blob that carries the rating (tag 5 -> +0x38 -> the
+          // panel's column). So the record the panel drew him from had no rating in it,
+          // and his own row said "…" until something made the client ask again.
+          //
+          // Sending the channel's group info here closes that: the panel keys its rows
+          // by NAME and replaces what it finds (0x90fc80 -> 0x911b90), so the same list
+          // arriving again refreshes rather than doubles. It does not loop the way
+          // answering a settings update with a member list did — an arrival does not
+          // make the client send its player info a second time.
+          const inChannel = this.presence.lobbyOf(this.username);
+          const refreshed = inChannel === null ? [] : [this.channelInfo(message, inChannel)];
           return {
             // The reply's shape is the one every other lobby answer has — result,
             // subtype, the first field back. Not yet confirmed by the client's own
             // log line for it; `LobbyRcv_SetPlayerInfoReply` will say.
-            note: `SET_PLAYER_INFO — ${said.join(', ')}`,
+            note: `SET_PLAYER_INFO — ${said.join(', ')}${inChannel === null ? '' : `, channel ${inChannel} told again so his rating is drawn`}`,
             replies: [
               build(
                 reply(message, [
@@ -945,6 +980,7 @@ export class RouterSession {
                   [subtype, [typeof fields[0] === 'string' ? fields[0] : '0']],
                 ]),
               ),
+              ...refreshed,
             ],
           };
         }
@@ -1088,21 +1124,10 @@ export class RouterSession {
           const room = this.rooms.get(Number(groupId));
           const ack = build(reply(message, [String(MessageType.GSSUCCESS), [subtype, [groupId, '0']]]));
           if (lobby) {
-            const members = this.presence
-              .inLobby(lobby.id)
-              .map((name) => memberEntry(name, lobby.id, this.addressOf(name), PlayerStatus.NONE, this.presence.info(name)));
-            const rooms = this.rooms.inLobby(lobby.id).map(roomEntry);
+            const here = this.presence.inLobby(lobby.id).length;
             return {
-              note: `GROUP_INFO_GET for ${groupId} ("${lobby.name}") — ${members.length} player(s), ${rooms.length} game(s), mask ${asked}`,
-              replies: [
-                ack,
-                build(
-                  reply(message, [
-                    String(LobbyMsg.GROUP_INFO),
-                    [groupId, String(asked), lobbyEntry(lobby, this.gameId, members.length), rooms, members],
-                  ]),
-                ),
-              ],
+              note: `GROUP_INFO_GET for ${groupId} ("${lobby.name}") — ${here} player(s), ${this.rooms.inLobby(lobby.id).length} game(s), mask ${asked}`,
+              replies: [ack, this.channelInfo(message, lobby.id, asked)],
             };
           }
           if (room) {

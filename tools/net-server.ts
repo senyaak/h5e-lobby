@@ -137,6 +137,9 @@ if (router.ghosts) log('ghosts on — GhostList, GhostBlob and GhostJoin will be
 // he is here so that the things needing SOMEBODY ELSE — a profile read about another
 // player, a friend to add, a rating that is not one's own — can be tried with one
 // copy of the game. He follows whoever enters a channel.
+router.seedProfile = process.argv.includes('--seed-profile');
+if (router.seedProfile) log('seed-profile on — a player with no profile is handed a minimal one, to see what his profile screen does with it');
+
 log(`${GUEST} is seated in whichever channel a player enters — rating ${router.ladder.row(GUEST)['RATING']}`);
 
 // Every key the player types is accepted; see src/net/cdkey-service.ts for why

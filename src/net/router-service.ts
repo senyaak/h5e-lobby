@@ -44,6 +44,7 @@ import {
 } from './lobby.ts';
 import { HEADER_SIZE as GS_HEADER_SIZE, MessageType, build, moduleFailureBody, moduleReplyBody, parse, reply, type GSMessage } from './gs-message.ts';
 import { decodeBody, type GSValue } from './gs-data.ts';
+import { writeFields } from './structure.ts';
 import { Blowfish } from './blowfish.ts';
 import { decryptWith, generateKeyPair, parsePublicKey, publicKeyBlob, encryptTo, type RsaKeyPair, type RsaPublicKey } from './pkc.ts';
 import { randomBytes } from 'node:crypto';
@@ -137,6 +138,19 @@ function seatGuest(ladder: Ladder, presence: Presence): void {
 }
 
 /**
+ * The record handed to a player who has none, when `--seed-profile` is on.
+ *
+ * A document of the shape everything the game serialises begins with: a four-byte kind
+ * under tag 4, and an empty container under tag 1. What the profile's own tags are is
+ * unknown — this exists to break the loop where the client will not write a profile
+ * because reading one failed.
+ */
+const SEED_PROFILE = writeFields([
+  { tag: 4, value: Buffer.from([4, 0, 0, 0]) },
+  { tag: 1, value: Buffer.alloc(0) },
+]);
+
+/**
  * A refusal's reason, as the friends parser reads one: four bytes, no more and no
  * fewer. 0x442620 compares the blob's length with what the caller asked for and says
  * no if they differ, so a shorter reason is the same as no reason at all.
@@ -202,6 +216,8 @@ export class RouterSession {
   private readonly desks: Map<string, (bytes: Buffer) => void>;
   /** Seat synthetic players in every channel — a diagnostic, off unless asked for. */
   readonly ghosts: boolean;
+  /** Hand a player with no profile a minimal one, to see what his screen then does. */
+  readonly seedProfile: boolean;
 
   constructor(
     role: Role,
@@ -215,11 +231,13 @@ export class RouterSession {
     friends: Friends,
     desks: Map<string, (bytes: Buffer) => void>,
     ghosts = false,
+    seedProfile = false,
   ) {
     this.desks = desks;
     this.profiles = profiles;
     this.friends = friends;
     this.ghosts = ghosts;
+    this.seedProfile = seedProfile;
     this.role = role;
     this.waitModule = waitModule;
     this.proxy = proxy;
@@ -549,7 +567,14 @@ export class RouterSession {
             const written = args[5];
             const bytes = typeof written === 'string' ? Buffer.from(written, 'utf8') : Buffer.from((written as Uint8Array) ?? []);
             this.profiles.set(key, bytes);
-            notes.push(`saved ${bytes.length} byte(s), sent as a ${typeof written === 'string' ? 'string' : 'blob'}`);
+            // The bytes go in the log as HEX, not as a count. Nobody has ever seen a
+            // profile record: it is the client's own composition, we cannot invent one,
+            // and the first one to arrive is the only description of the format there
+            // will ever be. A line saying "saved 214 bytes" would throw that away.
+            notes.push(
+              `saved ${bytes.length} byte(s), sent as a ${typeof written === 'string' ? 'string' : 'blob'}` +
+                `\n    the record, which nothing else records: ${bytes.toString('hex')}`,
+            );
             // A write is answered with an EMPTY payload, and that is not laziness: its
             // reply reader (0x42b2e0) asks for a list at index 1 and a number at index 2
             // and never looks inside the list. Handing back the record instead — which
@@ -567,10 +592,33 @@ export class RouterSession {
           // said 1"), made no profile out of it, and put up "Не удалось создать профиль".
           // A refusal is the truth and the client has a path for it, the same one the
           // ladder's refusal already travels.
+          // With `--seed-profile` a player who has none is handed a MINIMAL RECORD
+          // instead, and that is a deliberate experiment rather than a better answer.
+          //
+          // The reasoning: nobody has ever seen a profile record, we cannot invent one,
+          // and the only thing that can produce a real one is the client — which will
+          // not write one while its own read fails. So the refusal is a closed loop, and
+          // the way out is to answer the read with something the reader survives, get to
+          // the screen that saves, and let the client hand us the format. Every write is
+          // hex-dumped above for exactly that reason.
+          //
+          // The bytes are the skeleton every document the game writes begins with —
+          // `CStructureSaver`, tag 4 holding a four-byte kind, then an empty container
+          // under tag 1 (`structure.ts`, and the player-info blob it was read from). It
+          // is a GUESS about the profile's own tags, and the game's log is the verdict:
+          // "PS get data succeeded" and then whatever the profile screen does with it.
           const stored = this.profiles.get(key);
-          notes.push(stored ? `handing back ${stored.length} byte(s)` : 'nothing stored — refusing, there is no such record');
-          const answer = stored
-            ? moduleReplyBody(subtype, [new Uint8Array(stored), String(stored.length), '0'], requestId)
+          const seeded = !stored && this.seedProfile ? SEED_PROFILE : null;
+          notes.push(
+            stored
+              ? `handing back ${stored.length} byte(s)`
+              : seeded
+                ? `nothing stored — seeding ${seeded.length} byte(s) to see what the screen does: ${seeded.toString('hex')}`
+                : 'nothing stored — refusing, there is no such record',
+          );
+          const record = stored ?? seeded;
+          const answer = record
+            ? moduleReplyBody(subtype, [new Uint8Array(record), String(record.length), '0'], requestId)
             : moduleFailureBody(subtype, 'no such record', requestId);
           const sent = this.answerModule(build(reply(message, answer)));
           return {
@@ -1062,6 +1110,8 @@ export class RouterService {
   readonly friends: Friends;
   /** Passed to every session: seat synthetic players, to see what the client draws. */
   ghosts = false;
+  /** Likewise: answer a first profile read with a seed instead of the truthful refusal. */
+  seedProfile = false;
   /**
    * How to reach a connection that is not the one being answered.
    *
@@ -1107,6 +1157,7 @@ export class RouterService {
       this.friends,
       this.desks,
       this.ghosts,
+      this.seedProfile,
     );
   }
 }

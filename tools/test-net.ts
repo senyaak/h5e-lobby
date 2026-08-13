@@ -1018,6 +1018,42 @@ console.log('\nThe profile, from the read the client really asked for');
   // the pending requests, not counted.
   check('its last field being the id the request carried', carried?.[2] === '2', JSON.stringify(carried?.[2]));
 
+  // And with `--seed-profile` the same read is answered with a minimal record instead.
+  // That is an EXPERIMENT, not a better answer: nobody has ever seen a profile record,
+  // the client composes them, and it will not write one while its own read fails — so
+  // the refusal is a closed loop and this is the way out of it. The seed is the skeleton
+  // every document the game writes begins with; whether the profile's own tags look
+  // anything like it is what the launch is for.
+  {
+    const seeding = new RouterService(
+      { address: '127.0.0.1', port: 40001 },
+      { address: '127.0.0.1', port: 40030 },
+      { address: '127.0.0.1', port: 40031 },
+      { address: '127.0.0.1', port: 40040 },
+      join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-ladder.json'),
+      join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-seed-profiles.json'),
+    );
+    rmSync(join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-seed-profiles.json'), { force: true });
+    seeding.seedProfile = true;
+    const asked = seeding.session('proxy').receive(
+      build({
+        property: Property.GS,
+        priority: 0,
+        type: MessageType.PROXY_HANDLER,
+        sender: 8,
+        receiver: 11,
+        body: ['1025', '2', ['HEROES_29988429c481f219', '0', 'Senyaak', '0', 'PUBLIC']],
+      }),
+    );
+    const seeded = parse(asked[0]!.replies[0]!);
+    check('with --seed-profile the read succeeds instead', seeded?.body?.[0] === '38', String(seeded?.body?.[0]));
+    const payload = (seeded?.body?.[1] as GSValue[])?.[1] as GSValue[];
+    const record = payload?.[0] as Uint8Array;
+    check('carrying a record, with its length beside it as the reader insists', record instanceof Uint8Array && payload?.[1] === String(record.length), JSON.stringify(payload?.[1]));
+    check('and the record is a whole document, not a blob of zeroes', readFields(Buffer.from(record)).map((f) => f.tag).join(',') === '4,1', JSON.stringify(readFields(Buffer.from(record)).map((f) => f.tag)));
+    check('the log says it was seeded, so no reader mistakes it for his own', asked[0]!.note.includes('seeding'), asked[0]?.note);
+  }
+
   // WHERE it goes, which cost more to learn than what is in it. The module's queue is
   // fed by the router's connection, and a reply on the socket the request came in on is
   // never queued at all — measured by the probe: the ladder's two copies produced ONE
@@ -1060,6 +1096,16 @@ console.log('\nThe profile, from the read the client really asked for');
   );
   check('a profile write is answered', wrote[0]!.replies.length === 1, wrote[0]?.note);
   check('and it says how much was kept', wrote[0]!.note.includes(`saved ${written.length} byte(s)`), wrote[0]?.note);
+  // The bytes themselves go in the log. A profile is the client's own composition and we
+  // cannot make one up, so the first write to arrive is the only description of the
+  // format there will ever be — a byte count would throw it away.
+  check('and the record itself is in the log, as hex', wrote[0]!.note.includes(written.toString('hex')), wrote[0]?.note.slice(0, 120));
+  // The reply to a write carries an EMPTY payload: its reader (0x42b2e0) takes body[1]
+  // as a list, its [1] as a list it never opens, and its [2] as the request id.
+  const acknowledged = parse(wrote[0]!.replies[0]!)?.body?.[1] as GSValue[];
+  check('the write reply is the three its reader walks', acknowledged?.length === 3 && Array.isArray(acknowledged[1]), JSON.stringify(acknowledged));
+  check('with nothing in the payload, which is all it reads', (acknowledged?.[1] as GSValue[])?.length === 0, JSON.stringify(acknowledged?.[1]));
+  check('and the id it asked with', acknowledged?.[2] === '3', JSON.stringify(acknowledged?.[2]));
   const again = session.receive(
     build({
       property: Property.GS,

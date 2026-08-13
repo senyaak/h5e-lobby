@@ -10,6 +10,7 @@ to be recovered from memory.
 ```bash
 node tools/net-server.ts            # all our services, one process, logs to _tmp/net/
 node tools/net-server.ts --ghosts   # plus synthetic players in every channel
+node tools/net-server.ts --seed-profile   # hand a first-time player a minimal profile
 ```
 
 `npm start` and `npm test` are the same two things. `--ghosts` is a diagnostic: it seats
@@ -590,6 +591,44 @@ to report. Answering it in full is safe: the panel keeps its rows in a map keyed
 NAME (0x90fc80 looks the name up at 0x911b90 and replaces what it finds), so the same
 list arriving again refreshes rather than doubles.
 
+### The profile is a closed loop, and `--seed-profile` is the way out
+
+What is known, all of it read rather than tried:
+
+| what | where |
+|---|---|
+| the read request and its reply | 0x42b100 / 0x42aec0 + 0x42b400 |
+| the write request — `[game, n, user, n, "PUBLIC", record as a BLOB, its length]` | 0x42b1e0 |
+| the write's reply reader: a list at 1 it never opens, a number at 2 | 0x42b2e0 |
+| the reply handler, and what it posts to the UI on failure (`{22, 4, reason}`) | 0xe12440 |
+| what sends a write, and its own log line "PS set data sent, N bytes" | 0xe1bec0 |
+| the screen behind it: `CMPProfileScreen`, its loader and saver actions | 0x93f260 / 0x9139d0 / 0x913a00 |
+| the dialogs it puts up — captions in `UI/MPProfile/texts.(WindowRelatedTexts).xdb` | `AcquireProfile`, `AcquireProfileFailed`, `UpdateProfile`, `UpdateProfileFailed` |
+
+And the loop: **a profile record is the client's own composition, so the only way to learn
+its format is to catch a write — and the client writes nothing while its read fails.** We
+refuse the read honestly, because nothing is stored; the screen says "AcquireProfileFailed"
+and stops there. Reading further into the UI does not break this: no branch anywhere makes
+a client compose a profile out of a refusal.
+
+So `--seed-profile` answers a first read with a MINIMAL RECORD instead — the skeleton every
+document the game writes begins with (`04 08 04 00 00 00 01 00`: a four-byte kind under tag
+4, an empty container under tag 1). It is a guess about the profile's own tags and it is
+labelled one, in the code, in the log line and in this file. What it is for is to get past
+the failed read to the screen that saves, because **every write is hex-dumped in the session
+log** — one save and the format stops being a guess forever.
+
+The verdict, in the game's own log:
+
+```
+PS get data succeeded            <- the seed was read at all
+...the profile screen opens, or says what it did not like...
+PS set data sent, N bytes        <- and then our log has the bytes
+```
+
+If instead the client reads the seed and dies quietly in a parser, that is the same silence
+every wrong shape in this protocol produces, and the answer is to go back to refusing.
+
 ### The guest, and what he is not
 
 A player the server seats itself: a name, a player-info blob, a ladder row with games in it,
@@ -610,16 +649,8 @@ of this file. What that run left:
    with the channel in full. The verdict is on screen rather than in the log — a guest with
    a name and 1560 beside it, and the player's own 1500 appearing instead of "…" once he
    returns to the channel screen.
-2. **The write we have never seen.** With the profile refused, nothing in that run went on
-   to write one. What sends it is `NUbi::CStateOutOfRoom::ProcessSaveProfile` (0xe1bec0),
-   driven from the multiplayer profile screen (`CMPProfileSaver`, and the widgets
-   `AcquireProfile` / `UpdateProfile` / `AcquireProfileFailed`), and it logs **"PS set data
-   sent, N bytes"** on its way out. So the question is what makes that screen offer to save
-   — not what we answer, which is already the shape its reader wants.
-
-   Worth knowing before designing anything: **we cannot invent a profile.** The record is
-   the client's own composition and the only way to learn its bytes is to catch one; until
-   then a refusal is the honest answer and it costs the player nothing but that dialog.
+2. **The profile, and the loop it sits in.** See below — it is the one thing left that
+   nothing on our side can settle by reading.
 
 And then the wall proper:
 

@@ -1585,6 +1585,15 @@ console.log('\nStarting the game: the chain both players wait on');
   check('and the game is announced to the host himself', ready[0]!.replies.length === 2, String(ready[0]!.replies.length));
   check('and pushed to the guest, who is waiting on exactly this', toGuest.length === 1, String(toGuest.length));
   check('the log says who was told', ready[0]!.note.includes('1 other(s)'), ready[0]?.note);
+  // And the description of the game being played is written down while it still exists:
+  // the room goes when the host leaves, and what is in the log above is ciphertext. It is
+  // the only thing that says whether this was a duel or a map.
+  const described = ready[0]!.note.split('\n').pop() ?? '';
+  check(
+    'and the game description is logged, in a shape dump-struct can read',
+    /^\s+[0-9a-f]{64,}$/.test(described) && ready[0]!.note.includes('dump-struct --hex'),
+    `${described.trim().length / 2} bytes`,
+  );
 
   // The five fields of it, by index AND by kind: 0x423910 returns false on the first
   // one that reads wrong, and a message that fails there is never seen by anything.

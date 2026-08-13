@@ -934,7 +934,16 @@ evening and the next launch went through in 0.44 seconds:
 
 The peers found each other unaided: nothing in this server ever told either client where
 the other one was, beyond the addresses that were already in the room and in each player's
-own blob. What is NOT done is anything about the result — see `GAME_FINISH` below and
+own blob.
+
+**It was a DUEL, in the 1v1 channel, and that is the whole of what has been played.** An
+ordinary map — Casual or Ranked, two players on a multiplayer map with towns and a turn
+order — has never been started once. A duel is a single fight between ready-made heroes:
+it loads differently, it is over in minutes, and it may well ask less of the peers than a
+map does. So "a game works" means this game; the next thing to find out is whether the
+other kind does, and nothing here should be read as saying it already does.
+
+What is NOT done is anything about the result — see `GAME_FINISH` below and
 LADDER.md: the ladder still reads 1500 and 0 games for both of them. The probes are still
 in the extension (`--log net/ubi-room-probe`, `net/ubi-friends-probe`) and can go once
 nothing needs them.

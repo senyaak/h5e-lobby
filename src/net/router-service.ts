@@ -1427,8 +1427,18 @@ export class RouterSession {
           }
           const announcement: GSValue[] = [String(MessageType.GSSUCCESS), gameStartedEntry(room)];
           const told = this.tellRoomThat(room, announcement);
+          // And the description of the game that is about to be played goes into the log
+          // in full, because this is the last moment it is still the host's final word on
+          // it — the room is dropped when he leaves, and the raw bytes in the log above
+          // are ciphertext. It is what says WHICH game this was: the map's path lives in
+          // this document, and a duel and a map differ somewhere inside it and nowhere
+          // else we can see. `node tools/dump-struct.ts --hex <bytes>` reads it back.
+          const settings = Buffer.from(room.info).toString('hex');
           return {
-            note: `GAME_READY — "${room.name}" (${room.id}) starts, announced to him and ${told} other(s)`,
+            note:
+              `GAME_READY — "${room.name}" (${room.id}) starts, announced to him and ${told} other(s)\n` +
+              `             the game as its host described it, ${room.info.length} bytes, for dump-struct --hex:\n` +
+              `             ${settings}`,
             replies: [this.lobbyYes(message, subtype, room), build(reply(message, announcement))],
           };
         }

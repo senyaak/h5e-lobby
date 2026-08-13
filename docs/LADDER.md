@@ -275,8 +275,46 @@ Plenty on the screens — gold, creatures recruited, resources — **does not tr
 so the table is a selection, not a dump.
 
 **id 0 is enough to rate a game**: it names the winner outright, and the length is in id 17
-if a rating should care about it. Nothing computes a rating yet — that is a decision about
-numbers, not about the protocol.
+if a rating should care about it.
+
+### Where the table comes from, and why the rest of it is still unread
+
+14.08.2026, after a long static hunt that ended in a useful failure.
+
+The lobby half is fully traced: the GAME hands the whole thing over in one virtual call,
+**`NUbi::IMatchMaker::GameFinish(map, flag, ctx)` at 0xDE3C40** — slot +0x3C of the vtable
+at 0xFE3E30, reached through `NUbi::CLib`'s `IMatchMaker` sub-object. The argument is
+already the finished thing: a `CHashMap<string, CHashMap<int,int>>`, player name to
+statId to value. `SGameFinish` (ctor 0xDE5F60, 0x30 bytes) wraps it; `CStatePlaying`
+copies it into `ctx+0x328` (0xE1CFE0) and `ProcessGameFinishRated` (0xE1D4E0) walks it into
+`SetMatchResult` calls. **The `bool` at `SGameFinish+0x2C` is the rated/unrated switch**
+(0xE1D532), which is the same fork described above from the other side.
+
+What was NOT found is the code on the GAME's side that BUILDS that map. Ruled out by
+exhaustive search rather than by giving up: all 1006 `call [reg+3Ch]` sites (none has the
+`(map, bool, refptr)` shape), all 207 `push 28h` allocations that would be a player node,
+all 70 hash-map initialisations, and any function called with the 22 small constants. That
+last one is the informative part: **no call site anywhere passes the ids as literals, so
+the ids are almost certainly a loop index over an array** — the question to ask is not "who
+writes id 3" but "who writes element 3".
+
+The end-of-game SCREEN has a different source, now mapped: `CMissionResultsLogger`
+(`GetPlayerRecord` 0xC91450, eight records of 0x5C bytes), read into the screen by 0x861540.
+Its record holds towns occupied at +0x1C, towns lost +0x20, battles total/won/lost at
++0x24/+0x28/+0x2C, heroes lost +0x30, heroes killed +0x34, creatures +0x38, artefacts +0x3C,
+and the two sets of resources at +0x00 and +0x74. The two views overlap only partly — the
+screen knows resources and creatures, which never travel; the table carries a 16.16 number
+and ids 3 and 19, which the screen never shows — so a common origin is likely and a
+separate selection certain.
+
+**The cheap way to finish this is not static.** One breakpoint or detour on 0xDE3C40,
+dumping the map at `[esp+4]`, gives every id with its value and its player name before any
+serialisation, and the return address gives the builder that a full disassembly could not
+find. One rated match would close ids 3, 9 and 19 outright.
+
+Two experiments would settle the ambiguous ones without any reversing at all: a match where
+**heroes lost differs from battles lost** (retreat rather than die) separates id 14, and one
+where **towns captured differs from heroes killed** separates id 15.
 
 ## What the profile screen draws, key by key
 

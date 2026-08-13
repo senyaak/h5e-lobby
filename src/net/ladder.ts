@@ -91,6 +91,15 @@ export const Stat = {
   HEROES_LOST: 14,
   /** Towns captured, or heroes killed: the screen shows both, and both were 1. */
   HEROES_DEFEATED: 15,
+  /**
+   * The average hero level, in the SAME 16.16 fixed point the ladder key wants.
+   *
+   * It arrived as 65536 from everybody and 98304 from one player, which is 1.0 and 1.5 —
+   * and `AVERAGE_HERO_LEVEL` is the one key the profile divides by 65536 (0x93F4C0). Two
+   * fixed-point numbers meeting like that is not a coincidence, but it is still a reading
+   * of two values: the profile line will confirm it, since it has been empty until now.
+   */
+  AVERAGE_HERO_LEVEL: 16,
   SECONDS: 17,
 } as const;
 
@@ -143,6 +152,8 @@ export interface MatchResult {
   seconds: number;
   heroesLost: number;
   heroesDefeated: number;
+  /** Already 16.16 fixed point, which is what the ladder key wants — passed through. */
+  averageHeroLevel: number;
 }
 
 /**
@@ -164,6 +175,7 @@ export function matchResult(row: readonly GSValue[]): MatchResult | null {
     seconds: at(Stat.SECONDS),
     heroesLost: at(Stat.HEROES_LOST),
     heroesDefeated: at(Stat.HEROES_DEFEATED),
+    averageHeroLevel: at(Stat.AVERAGE_HERO_LEVEL),
   };
 }
 
@@ -175,13 +187,16 @@ export function matchResult(row: readonly GSValue[]): MatchResult | null {
  * lost and defeated, and a per-faction table — so the keys are filled in the shape those
  * rows expect rather than as we please.
  *
- * `H_` is "heroes used" and `G_` is "armies used", both drawn as a PERCENTAGE of that
- * player's total (0x93DAB0), so only the proportion between factions matters and not the
- * scale. We know neither number — the results table carries no hero count and no army —
- * so both get one per game, which makes each column read as "how much of my play was with
- * this faction". `G_` is not decoration: the alignment needle and "favourite faction" are
- * computed from it alone (0x93C611, 0x93D5E5), and with it empty the needle sits dead
+ * `G_` is "armies used", drawn as a percentage of that player's own total — so only the
+ * proportion between factions matters, and one per game says "this much of my play was
+ * with this faction". It is not decoration: the alignment needle and "favourite faction"
+ * are computed from it alone (0x93C611, 0x93D5E5), and with it empty the needle sits dead
  * centre and the favourite is always Haven.
+ *
+ * **`H_` is left alone.** Its sum is what the profile calls "heroes hired", and we do not
+ * know how many heroes anybody hired — the results table has no such number. Filled with
+ * a stand-in it reported nonsense: seconds went in there once, and the profile duly said
+ * "Нанято героев: 337". An empty line is honest; a wrong one is not.
  */
 export function settleMatch(ladder: Ladder, results: readonly MatchResult[]): string {
   const winner = results.find((result) => result.won);
@@ -218,7 +233,12 @@ export function settleMatch(ladder: Ladder, results: readonly MatchResult[]): st
       TOT_HEROES_DEFEATED: (row['TOT_HEROES_DEFEATED'] ?? 0) + result.heroesDefeated,
       [`${won ? 'W' : 'L'}_${faction}`]: (row[`${won ? 'W' : 'L'}_${faction}`] ?? 0) + 1,
       [`G_${faction}`]: (row[`G_${faction}`] ?? 0) + 1,
-      [`H_${faction}`]: (row[`H_${faction}`] ?? 0) + 1,
+      // The average of the averages, weighted by games — which is as close as a running
+      // total gets without keeping every game's number.
+      AVERAGE_HERO_LEVEL: Math.round(
+        (((row['AVERAGE_HERO_LEVEL'] ?? 0) * (row['GAMES_PLAYED'] ?? 0)) + result.averageHeroLevel) /
+          ((row['GAMES_PLAYED'] ?? 0) + 1),
+      ),
     });
   }
 

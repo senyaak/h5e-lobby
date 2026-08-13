@@ -19,7 +19,7 @@ import { Blowfish } from '../src/net/blowfish.ts';
 import { CdKeyRequest, CdKeyService } from '../src/net/cdkey-service.ts';
 import { GAME_PORT, LobbyMsg, Lsm, RoomUpdate, playerInfo, withRating } from '../src/net/lobby.ts';
 import { findField, readFields, writeFields } from '../src/net/structure.ts';
-import { LADDER_KEYS, Ladder, STARTING_RATING } from '../src/net/ladder.ts';
+import { FACTIONS, LADDER_KEYS, Ladder, STARTING_RATING } from '../src/net/ladder.ts';
 import { Accounts } from '../src/net/accounts.ts';
 import { Friends } from '../src/net/friends.ts';
 import { openDatabase } from '../src/net/database.ts';
@@ -1766,6 +1766,15 @@ console.log('\nRating a rated game: the ladder, written once');
   check('the time played is the match, in seconds', winner['TOT_TIME_PLAYED'] === 267, String(winner['TOT_TIME_PLAYED']));
   // Faction 1 is PRESERVE and faction 7 is ORCS, and the profile has a row per faction.
   check('the win is credited to the faction he played', winner['W_PRESERVE'] === 1, JSON.stringify({ W_PRESERVE: winner['W_PRESERVE'] }));
+  // The alignment needle and the favourite faction are drawn from G_ and nothing else.
+  check('and the faction is counted as played, which is what moves the alignment needle', winner['G_PRESERVE'] === 1 && loser['G_ORCS'] === 1);
+  // "Heroes hired" is the sum of H_, and we do not know how many heroes anybody hired —
+  // a stand-in there once put the match's seconds on the profile as "Нанято героев: 337".
+  check('heroes hired is left empty rather than invented', FACTIONS.every((f) => (winner['H_' + f] ?? 0) === 0));
+  // The average hero level travels in the results table already in 16.16, the same fixed
+  // point the profile divides by 65536 — 98304 is 1.5.
+  check('the average hero level is carried through as it came', winner['AVERAGE_HERO_LEVEL'] === 98304, String(winner['AVERAGE_HERO_LEVEL']));
+  check('and the other player’s is his own', loser['AVERAGE_HERO_LEVEL'] === 65536, String(loser['AVERAGE_HERO_LEVEL']));
   check('and the loss to his', loser['L_ORCS'] === 1, JSON.stringify({ L_ORCS: loser['L_ORCS'] }));
 
   // AND THE SECOND COPY CHANGES NOTHING. Both players submit the same table, a second

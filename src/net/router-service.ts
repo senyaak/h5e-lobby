@@ -266,6 +266,26 @@ export class RouterSession {
     );
   }
 
+  /**
+   * Where a MODULE's answer goes — and it is not the socket it was asked on.
+   *
+   * Measured, by the probe inside the game rather than by reading: the client's module
+   * queue is fed by the ROUTER's own router (0x41b150, which runs for that transport
+   * only), and a reply sent down the proxy's wait module is never queued at all. The
+   * run that showed it sent the ladder's refusal twice, once on each connection, and
+   * exactly ONE copy was queued; the profile answer, sent only on the proxy's wait
+   * module, was never seen by the probe — not queued, not keyed, not scanned.
+   *
+   * The requests come in on the proxy's wait module all the same. That asymmetry is
+   * the protocol's, not ours.
+   */
+  private answerModule(bytes: Buffer): { replies: Buffer[]; where: string } {
+    const onRouter = this.desks.get('RouterLauncher');
+    if (!onRouter) return { replies: [bytes], where: 'here, with no router connection open' };
+    onRouter(bytes);
+    return { replies: [], where: 'on the router connection' };
+  }
+
   /** Where to say a player is: what he told us, or this machine. */
   private addressOf(name: string): string {
     return name === this.username && this.localAddress ? this.localAddress : this.presence.address(name);
@@ -389,20 +409,17 @@ export class RouterSession {
         // empty lists are where named keys would go if it wanted only some of them.
         //
         // **We refuse it, on purpose, and that is the honest answer we can give.**
-        // Four shapes of a successful reply were ignored in total silence before the
-        // client's matcher was read instead of guessed (`moduleReplyBody`): the number
-        // has to be nested where it looks for it, and — the part no guess would have
-        // found — index 2 of the innermost list is read as a NUMBER (0x4435c0 is atoi,
-        // not a string copy), so the row cannot be the nested list we kept sending. What
-        // the rest of that list holds is parsed at 0x432c80 and is not read yet, so a
-        // success reply cannot be composed. A refusal can be, completely, and the client
-        // has a
-        // path for it: "Failed to get Ladder row for myself, setting N/A, set OWN
-        // player info sent" — which is also how he finally sends his own player info.
+        // A successful row belongs where index 2 of a list is read as a NUMBER (0x4435c0
+        // is atoi, not a string copy), and what the rest of that list holds is parsed at
+        // 0x432c80 and still unread — so a success cannot be composed. A refusal can, and
+        // the client has a path for it: "Failed to get Ladder row for myself, setting N/A,
+        // set OWN player info sent", which is also how he finally sends his own player
+        // info. The rating is kept here meanwhile and reported in the log.
         //
-        // So the rating is kept here and reported in the log; what the client is told
-        // is that there is no row for him yet. That stops a 30-second hang and turns
-        // silence into a line in his log either way.
+        // It is still refused SILENTLY, and the probe has narrowed that to one place: the
+        // reply is queued, keyed, scanned, found, and its status read as 39 — and then the
+        // ladder's own reader (0x42c7f0) says no. Which field it was reading when it said
+        // so is what the getter probe now prints.
         if (subtype === String(LADDER_QUERY)) {
           // Three fields at the top, not two: the number, the id, and the query — so
           // the query is body[2] and `inner` (body[1]) is the id itself.
@@ -413,31 +430,12 @@ export class RouterSession {
           const pivotEntry = Array.isArray(pivotList) ? pivotList[1] : undefined;
           const pivot = Array.isArray(pivotEntry) && typeof pivotEntry[0] === 'string' ? pivotEntry[0] : this.username;
           const stats = this.ladder.row(pivot);
-          // **An experiment, and the ladder is the right thing to run it on**, because a
-          // refusal is the one shape that is fully determined AND the client prints the
-          // reason it was given: "ladder query request failed,reason=…". So two refusals
-          // go out with different reasons, one on each candidate connection, and its log
-          // says which one it read.
-          //
-          // Why there is anything left to try: every gate on the client's path has been
-          // read and we satisfy all of them (0x41b150 routes a 204 into the module queue,
-          // 0x41bf70 drains it, 0x426d50 dispatches by the number's high byte, 0x4286f0
-          // matches), and it is still ignored. The first guess — that the module reads
-          // its own connection — is DEAD: the game closes 40030 within a second of being
-          // handed to 40031, exactly as it closes 40000 after 40001, so the only live
-          // socket is the one we already answer on. What is left is that the module's
-          // queue is fed from the ROUTER's connection, which is where the two module
-          // hand-off answers that DO work travel.
-          const here = 'asked on the module connection';
-          const there = 'asked via the router connection';
-          const onRouter = this.desks.get('RouterLauncher');
-          if (onRouter) onRouter(build(reply(message, moduleFailureBody(LADDER_QUERY, there))));
+          const sent = this.answerModule(build(reply(message, moduleFailureBody(LADDER_QUERY, 'no row yet'))));
           return {
             note:
-              `LADDER query ${requestId} about "${pivot}" — refused twice, "${here}" here` +
-              `${onRouter ? ` and "${there}" on the router` : ' (no router connection open)'}; ` +
+              `LADDER query ${requestId} about "${pivot}" — refused ${sent.where}; ` +
               `we hold rating ${stats['RATING']}, ${stats['GAMES_PLAYED']} game(s)`,
-            replies: [build(reply(message, moduleFailureBody(LADDER_QUERY, here)))],
+            replies: sent.replies,
           };
         }
         // The player's profile, kept for him on the persistantdata module. He asks for
@@ -474,11 +472,14 @@ export class RouterSession {
           }
           const stored = this.profiles.get(key) ?? Buffer.alloc(0);
           notes.push(stored.length ? `handing back ${stored.length} byte(s)` : 'nothing stored yet');
+          const sent = this.answerModule(
+            build(reply(message, moduleReplyBody(subtype, [new Uint8Array(stored), String(stored.length), '0']))),
+          );
           return {
-            note: `${subtype === String(GET_DATA) ? 'PROFILE read' : 'PROFILE write'} — ${where}, ${notes.join(', ')}`,
-            replies: [
-              build(reply(message, moduleReplyBody(subtype, [new Uint8Array(stored), String(stored.length), '0']))),
-            ],
+            note:
+              `${subtype === String(GET_DATA) ? 'PROFILE read' : 'PROFILE write'} — ${where}, ` +
+              `${notes.join(', ')}, answered ${sent.where}`,
+            replies: sent.replies,
           };
         }
         return { note: `PROXY_HANDLER subtype ${String(subtype)} is not implemented`, replies: [] };

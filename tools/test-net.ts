@@ -916,6 +916,33 @@ console.log('\nThe profile, from the read the client really asked for');
   check('with nothing stored, its length is nought', record?.[1] === '0', JSON.stringify(record?.[1]));
   check('and the field after it is there too', record?.[2] === '0', JSON.stringify(record?.[2]));
 
+  // WHERE it goes, which cost more to learn than what is in it. The module's queue is
+  // fed by the router's connection, and a reply on the socket the request came in on is
+  // never queued at all — measured by the probe: the ladder's two copies produced ONE
+  // queued message, and the profile answer, sent only on the proxy's wait module, was
+  // never seen. So when a router connection is open, that is where the answer goes.
+  const onRouter: Buffer[] = [];
+  proxy.desks.set('RouterLauncher', (bytes) => onRouter.push(bytes));
+  const routed = session.receive(
+    build({
+      property: Property.GS,
+      priority: 0,
+      type: MessageType.PROXY_HANDLER,
+      sender: 8,
+      receiver: 11,
+      body: ['1025', '9', ['HEROES_29988429c481f219', '0', 'Senyaak', '0', 'PUBLIC']],
+    }),
+  );
+  check('with a router connection open, nothing goes back down the asking socket', routed[0]!.replies.length === 0, routed[0]?.note);
+  check('and the answer went to the router instead', onRouter.length === 1, String(onRouter.length));
+  check('the note says so, so a log reader knows which socket it took', routed[0]!.note.includes('on the router connection'), routed[0]?.note);
+  check(
+    'and it is the same answer, not a different one',
+    parse(onRouter[0]!)?.type === MessageType.PROXY_HANDLER && (parse(onRouter[0]!)?.body?.[1] as GSValue[])?.[0] === '1025',
+    JSON.stringify(parse(onRouter[0]!)?.body),
+  );
+  proxy.desks.delete('RouterLauncher');
+
   // A write, then a read: we are a store, so what comes back is what went in — byte
   // for byte, with no opinion about what a profile means.
   const written = Buffer.from('HEROES-PROFILE-v1:Senyaak:whatever the game puts here');

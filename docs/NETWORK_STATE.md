@@ -392,9 +392,21 @@ message was classified into: the friends queue and the lobby queue and the modul
 are 24 bytes apart (…640, …688, …712), and a reply in the wrong one is a reply nobody
 will look for.
 
-Also measured, and it settles a guess that cost two runs: the game **closes 40030 within
-a second** of being handed to 40031, exactly as it closes 40000 after 40001. There is
-only ever one live socket per desk, and we were always answering on it.
+**A module's answer goes on the ROUTER's connection, not the one that asked.** This was
+measured the same way and it corrects two earlier readings of mine. The run that settled
+it sent the ladder's refusal on both candidate sockets and the probe saw exactly ONE
+message queued; the profile answer, sent only on the proxy's wait module, was never seen
+at all — not queued, not keyed, not scanned. The requests still arrive on the proxy's wait
+module; the asymmetry is the protocol's. `RouterService.answerModule` is where that lives.
+
+Why the earlier "the connection is not the variable" was wrong: the two-refusal experiment
+looked negative because the client's log prints a reason only after its READER succeeds,
+and the reader fails for a second, independent reason. Two bugs stacked, and only a probe
+inside the client could take them apart.
+
+Also measured: the game **closes 40030 within a second** of being handed to 40031, exactly
+as it closes 40000 after 40001. So "answer where it asked" only ever had one live socket to
+mean — and it was the wrong one.
 
 ### The older question, and why it was the wrong one
 

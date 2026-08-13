@@ -955,12 +955,19 @@ export class RouterSession {
           //
           // The first write from any client replaces it with the real thing, and that
           // write is still the only description of the format there will ever be.
+          // And it is CREATED, not conjured for each read: the row goes into the same
+          // table his account and his rating live in, so from his first look he has a
+          // profile that persists, and the write that follows updates it like any other.
+          // What is in it is the one thing we cannot supply — a record is the client's
+          // own document and we are its storage — so ours is the skeleton and his first
+          // save replaces it whole.
           const stored = this.profiles.get(key);
           const seeded = stored ? null : SEED_PROFILE;
+          if (seeded) this.profiles.set(key, seeded);
           notes.push(
             stored
               ? `handing back ${stored.length} byte(s)`
-              : `nothing stored — seeding ${seeded!.length} byte(s): ${seeded!.toString('hex')}`,
+              : `nothing stored — CREATED one of ${seeded!.length} byte(s): ${seeded!.toString('hex')}`,
           );
           const record = stored ?? seeded;
           const answer = record

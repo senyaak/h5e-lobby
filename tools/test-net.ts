@@ -1174,7 +1174,7 @@ console.log('\nThe profile, from the read the client really asked for');
   // profile screen shut, which is what двойной клик по игроку hit; a minimal document it
   // takes ("PS get data succeeded") and can then write over.
   check('with nothing stored it seeds, rather than refusing', answer?.body?.[0] === '38', String(answer?.body?.[0]));
-  check('and the log says the record was ours, so no reader mistakes it for his own', read[0]!.note.includes('seeding'), read[0]?.note);
+  check('and the log says the record was ours, so no reader mistakes it for his own', read[0]!.note.includes('CREATED'), read[0]?.note);
   const carried = answer?.body?.[1] as GSValue[];
   check('the request number is nested where the matcher looks', carried?.[0] === '1025', String(carried?.[0]));
   check('and what carries it is a three, as the reader wants', carried?.length === 3, String(carried?.length));
@@ -1188,6 +1188,22 @@ console.log('\nThe profile, from the read the client really asked for');
     const record = payload?.[0] as Uint8Array;
     check('carrying a record, with its length beside it as the reader insists', record instanceof Uint8Array && payload?.[1] === String(record.length), JSON.stringify(payload?.[1]));
     check('and the record is a whole document', readFields(Buffer.from(record)).map((f) => f.tag).join(',') === '4,1', JSON.stringify(readFields(Buffer.from(record)).map((f) => f.tag)));
+  }
+
+  // It is CREATED, not made up again on every read: the second read hands back what the
+  // first one stored, out of the same table his account and his rating live in.
+  {
+    const again = session.receive(
+      build({
+        property: Property.GS,
+        priority: 0,
+        type: MessageType.PROXY_HANDLER,
+        sender: 8,
+        receiver: 11,
+        body: ['1025', '3', ['HEROES_29988429c481f219', '0', 'Senyaak', '0', 'PUBLIC']],
+      }),
+    );
+    check('a second read hands back what was stored', again[0]!.note.includes('handing back'), again[0]?.note);
   }
 
   // Every player, not only the guest. Double-clicking a name asks for THAT player's

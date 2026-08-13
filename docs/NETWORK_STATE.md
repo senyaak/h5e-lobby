@@ -1181,3 +1181,51 @@ taken" and "wrong password", so creating an account on first login needs no clie
 change, which Сеня chose over a website or a new screen. Removing the CD-key prompt is
 still open: the key sits in the client's `ubi_cdkey` setting, used by the screens at
 0x87B790, 0x87C840, 0x87CF50, 0x87D2B0.
+
+## Playing over the internet, which is the next thing entirely
+
+14.08.2026, written as a starting point rather than as work done: **everything measured so
+far happened on one machine, over `127.0.0.1`.** Two copies of the game, one server, no
+router between them. The question that follows — can two people on different internet
+connections play through this server without a VPN — has not been touched, and this
+section only collects what is already known so that it does not have to be found again.
+
+**The gameplay is peer to peer and this server never carries it.** The lobby's whole part
+ends when it says the game has started; from there the two clients talk to each other
+directly. So "playing over the internet" is not a lobby feature at all — it is a question
+about two NATs.
+
+What the server already knows about where a player is:
+
+- **his LAN address**, which he states himself in `LOBBYSERVERLOGIN` (address and netmask,
+  e.g. `192.168.178.27/255.255.255.0`) and which is copied into his member record;
+- **how he looks from outside**, because our own NAT service (UDP 40010) is an address
+  mirror: it answers the client with the address the datagram came from. Today that is
+  `127.0.0.1` for everybody, but on a real network it would be each player's public
+  address, and it is already computed and already sent — see `src/net/nat-service.ts`;
+- **the port his game runs on**: 8888, a config variable (`net_game_port`, registered at
+  0x4cf2b0), visible in every log as the source of his NAT pings;
+- **what he tells the others about himself**: the player-info blob carries a sockaddr with
+  the mirrored address, and a second field with the game port and the LAN address
+  (`playerInfo` in `src/net/lobby.ts`). We forward that blob untouched.
+
+So the material for introducing two peers is in hand. What is NOT known, and is the actual
+work:
+
+1. **Which of those addresses a client actually dials** when the game starts — the string
+   in the member record, the sockaddr in the blob, or something the two exchange
+   themselves. On one machine every one of them says `127.0.0.1`, so the run that proved
+   the game works proved nothing about this.
+2. **Whether the game's own transport can traverse NAT at all.** It is UDP with the SRP
+   framing in `src/net/srp.ts`; whether it survives address translation, and whether both
+   ends punch or one expects to be dialled, is unread.
+3. **Whether a hole punch is enough, or a relay is needed.** The NAT service is already the
+   one component that sees both players' public endpoints, which is exactly what a
+   rendezvous server does — telling each peer the other's mirrored address and port at the
+   right moment is the cheap experiment. A relay (this server forwarding the game's UDP
+   between the two) is the fallback that always works and costs bandwidth.
+4. **What the game does when the dial fails** — the timeouts and the message the player
+   sees, which is what a failed attempt will look like from the outside.
+
+The honest summary: the lobby half is finished and measured, and the transport half has
+not begun.

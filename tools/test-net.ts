@@ -1005,11 +1005,23 @@ console.log('\nAdding a friend, from the right-click the client really sent');
   router.username = 'Senyaak';
 
   // Verbatim off the wire (12.08.2026): he right-clicked his own name in the channel.
+  // Which is the one ADDFRIEND that has to be REFUSED — the client offers the option on
+  // anybody, himself included, and a list with yourself on it is what came of saying yes.
   const clicked = router.receive(Buffer.from('00001a004b41faeeefe197d9f491969be2fb959aeef699939c9c', 'hex'));
   check('the right-click is an ADDFRIEND', clicked[0]?.note.startsWith('ADDFRIEND'), clicked[0]?.note);
-  check('and it is answered rather than ignored', clicked[0]!.replies.length === 2, clicked[0]?.note);
+  check('and it is answered rather than ignored', clicked[0]!.replies.length === 1, clicked[0]?.note);
+  check('adding himself is refused', parse(clicked[0]!.replies[0]!)?.type === MessageType.GSFAIL, clicked[0]?.note);
+  check('and he is on nobody\'s list, his own least of all', clicked[0]!.note.includes('not his own friend'), clicked[0]?.note);
 
-  const answer = parse(clicked[0]!.replies[0]!);
+  // The same click on somebody else. The capture is the only ADDFRIEND ever seen, so
+  // the message for a second player is built rather than replayed — the fields are the
+  // capture's, with another name in field 0.
+  const other = router.receive(
+    build({ property: Property.GS, priority: 0, type: MessageType.ADDFRIEND, sender: 4, receiver: 2, body: [GUEST, '', new Uint8Array(4)] }),
+  );
+  check('adding somebody else is answered', other[0]!.replies.length === 2, other[0]?.note);
+
+  const answer = parse(other[0]!.replies[0]!);
   check('the answer is a plain success', answer?.type === MessageType.GSSUCCESS, String(answer?.type));
   // The routing key for a type-38 message is the single byte in field 0, read as a
   // one-byte blob (0x41b150). 75 is what puts this in the friends queue rather than
@@ -1019,8 +1031,8 @@ console.log('\nAdding a friend, from the right-click the client really sent');
   // A STRING, not a list. 0x4292d0 fetches field 1 with the getter at 0x4426c0, which
   // refuses anything whose kind is not 1 — which is exactly how the list we used to
   // send was matched, consumed and then dropped without a word.
-  check('with the friend named beside it, as a plain string', answer?.body?.[1] === 'Senyaak', JSON.stringify(answer?.body?.[1]));
-  check('and the friendship is kept, not just acknowledged', clicked[0]!.note.includes('added, 1 friend(s)'), clicked[0]?.note);
+  check('with the friend named beside it, as a plain string', answer?.body?.[1] === GUEST, JSON.stringify(answer?.body?.[1]));
+  check('and the friendship is kept, not just acknowledged', other[0]!.note.includes('added, 1 friend(s)'), other[0]?.note);
 
   // A nameless request is refused rather than answered with an empty name, and a
   // refusal's reason is FOUR bytes: 0x442620 compares the blob's length with what the
@@ -1099,6 +1111,15 @@ console.log('\nThe friends list, which the client can only be told and never ask
   check('naming message 76 in one byte', delKey instanceof Uint8Array && delKey.length === 1 && delKey[0] === MessageType.DELFRIEND, JSON.stringify(delKey));
   check('and the friend as a plain string', goodbye?.body?.[1] === 'Guest', JSON.stringify(goodbye?.body?.[1]));
   check('and he is gone from the store, not just from the screen', friendsLogin().replies.length === 1, dropped.note);
+
+  // Himself. The client offers "add to friends" on his own name and asks nobody whether
+  // that means anything, so the refusal has to be here.
+  const self = router.receive(
+    build({ property: Property.GS, priority: 0, type: MessageType.ADDFRIEND, sender: 4, receiver: 2, body: ['SENYAAK', '', new Uint8Array(4)] }),
+  )[0]!;
+  check('adding himself is refused', parse(self.replies[0]!)?.type === MessageType.GSFAIL, self.note);
+  check('and nothing is pushed for him either', self.replies.length === 1, String(self.replies.length));
+  check('however he capitalises it', self.note.includes('not his own friend'), self.note);
 
   // A friend who is not logged in is still a row — a friends list that only showed the
   // people already visible in the channel would be a second copy of the players panel.
@@ -1192,6 +1213,40 @@ console.log('\nThe profile, from the read the client really asked for');
     check('carrying a record, with its length beside it as the reader insists', record instanceof Uint8Array && payload?.[1] === String(record.length), JSON.stringify(payload?.[1]));
     check('and the record is a whole document, not a blob of zeroes', readFields(Buffer.from(record)).map((f) => f.tag).join(',') === '4,1', JSON.stringify(readFields(Buffer.from(record)).map((f) => f.tag)));
     check('the log says it was seeded, so no reader mistakes it for his own', asked[0]!.note.includes('seeding'), asked[0]?.note);
+  }
+
+  // And the GUEST has one whatever the flag says. Double-clicking a name asks for that
+  // player's profile, and a refusal is the screen not opening — which is what the guest
+  // was for, so he carries a profile the way he carries a ladder row.
+  {
+    const guestAsked = session.receive(
+      build({
+        property: Property.GS,
+        priority: 0,
+        type: MessageType.PROXY_HANDLER,
+        sender: 8,
+        receiver: 11,
+        body: ['1025', '4', ['HEROES_29988429c481f219', '0', GUEST, '0', 'PUBLIC']],
+      }),
+    );
+    const forGuest = parse(guestAsked[0]!.replies[0]!);
+    check("the guest's profile is answered without --seed-profile", forGuest?.body?.[0] === '38', String(forGuest?.body?.[0]));
+    check('and it is his that was asked for', guestAsked[0]!.note.includes(`${GUEST}'s PUBLIC profile`), guestAsked[0]?.note);
+    // The same session refuses everybody else: this is the guest's own rule, not the
+    // flag turned on by the back door.
+    const forOther = parse(
+      session.receive(
+        build({
+          property: Property.GS,
+          priority: 0,
+          type: MessageType.PROXY_HANDLER,
+          sender: 8,
+          receiver: 11,
+          body: ['1025', '5', ['HEROES_29988429c481f219', '0', 'Nobody', '0', 'PUBLIC']],
+        }),
+      )[0]!.replies[0]!,
+    );
+    check('while a player who never wrote one is still refused', forOther?.body?.[0] === '39', String(forOther?.body?.[0]));
   }
 
   // WHERE it goes, which cost more to learn than what is in it. The module's queue is

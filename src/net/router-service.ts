@@ -615,6 +615,16 @@ export class RouterSession {
             ],
           };
         }
+        // A player is not his own friend. The client offers "add to friends" on his own
+        // name in the channel — it asks nobody whether that makes sense — and we said
+        // yes, so his list had himself on it. The refusal path already exists and this
+        // is what it is for; names are matched the way accounts are, without case.
+        if (friend.toLowerCase() === this.username.toLowerCase()) {
+          return {
+            note: `ADDFRIEND "${friend}" for "${this.username}" — refused, a player is not his own friend`,
+            replies: [build(reply(message, [messageId(MessageType.ADDFRIEND), [reasonCode(1)]], MessageType.GSFAIL))],
+          };
+        }
         const added = this.friends.add(this.username, friend);
         return {
           note:
@@ -815,8 +825,15 @@ export class RouterSession {
           // under tag 1 (`structure.ts`, and the player-info blob it was read from). It
           // is a GUESS about the profile's own tags, and the game's log is the verdict:
           // "PS get data succeeded" and then whatever the profile screen does with it.
+          //
+          // THE GUEST always has one, flag or no flag. Double-clicking a name in the
+          // panel asks for that player's profile, and for him the answer was a refusal —
+          // "PS get data failed,reason=0" and straight back to CStateOutOfRoom, which is
+          // what "профиль не открывается" was. He exists to be the somebody else there
+          // is to look at, so a profile is part of what he is, the same as his ladder
+          // row. A real player's is still his own to write.
           const stored = this.profiles.get(key);
-          const seeded = !stored && this.seedProfile ? SEED_PROFILE : null;
+          const seeded = !stored && (this.seedProfile || key.user === GUEST) ? SEED_PROFILE : null;
           notes.push(
             stored
               ? `handing back ${stored.length} byte(s)`

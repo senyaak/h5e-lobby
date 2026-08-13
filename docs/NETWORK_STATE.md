@@ -90,8 +90,9 @@ player info        -> arrives on its own now, 73 bytes, his and not our inventio
 player list        -> WORKS (12.08.2026): the panel draws him
 friends (add)      -> WORKS (13.08.2026): "FriendsRcv_AddFriend: (38,…,Senyaak)", and a
                       nameless one is refused with our reason: "(39,1,)"
-friends (the list) -> WRITTEN, NOT LAUNCHED (14.08.2026): the list is pushed as 74s at
-                      friends login and on every add; removal (76) answered — see below
+friends (the list) -> WORKS (13.08.2026): pushed as 74s at friends login and on every
+                      add, "FriendsRcv_UpdateFriend: (Guest,1,Ranked,2,1560,)"; removal
+                      answered; still drawn as OFFLINE, which is open — see below
 create game        -> CREATE_ROOM answered, room 100 in the channel
 join own room      -> "LobbyRcv_RoomInfo", then CStateInRoom / CStateWaitingForPlayers
 settings changes   -> GROUP_CONFIG_UPDATE_RES answered, the room echoed back
@@ -561,7 +562,35 @@ had been sending a list, so the message was matched, consumed and dropped in the
 
 ### The friends list is pushed, and 74 is what carries it
 
-14.08.2026, read and written, **not yet launched**. The client can say exactly three
+**LAUNCHED, and the wire half works** (13.08.2026, evening). The client took every push
+and printed it back whole:
+
+```
+NUbi::CClient2::FriendsRcv_UpdateFriend: (Guest,1,Ranked,2,1560,)
+NUbi::CClient2::FriendsRcv_AddFriend:    (38,279128104,Guest)
+NUbi::CClient2::FriendsRcv_DelFriend:    (38,279128104,Guest)
+```
+
+Friends appear in the panel and adding and removing both work. Three things that run
+showed, and only the first two were ours:
+
+1. **A player could add himself.** The client offers "add to friends" on any name in the
+   channel, his own included, and asks nobody whether that means anything. Refused here
+   now, in the shape a friends refusal already had.
+2. **Double-clicking a friend opened nothing** — it asks for that player's profile, the
+   guest had none, and a refusal is the screen not opening (`PS get data failed,reason=0`
+   and straight back to `CStateOutOfRoom`). The guest now carries a profile the way he
+   carries a ladder row.
+3. **A friend the server says is online is drawn as offline.** Not settled: the client
+   keeps only the name and `field 1 == 1` out of the six, and a row is built with a rating
+   of **-1 always** (0x910A00), so either the flag is lost on the way or the word on the
+   screen comes from that -1. Reading cannot tell those apart, so the editor repo has a
+   probe for it — `native/net/ubi-friends-probe.c`, `--log net/ubi-friends-probe` — which
+   prints the flag at the update, at the row, and the tab the panel was on.
+
+The reading below is what the launch was built on, and it held.
+
+14.08.2026, read and written before any of that. The client can say exactly three
 things about friends — `FriendsSend_Login`, `_AddFriend`, `_DelFriend` (0xe0f5c1,
 0xe1905a, 0xe19263) — and none of them is "send me my list". So the list is ours to
 push, and there is a panel waiting for it: `FriendListView` (0x910367), the other half
@@ -753,11 +782,11 @@ of this file. What that run left:
    returns to the channel screen.
 2. **The profile, and the loop it sits in.** See below — it is the one thing left that
    nothing on our side can settle by reading.
-3. **The friends list** (14.08.2026, written the same day and not launched either). The
-   verdict is two lines of the game's own log — `FriendsRcv_UpdateFriend: ` with our six
-   fields printed back, and then the guest's name in `FriendListView` when the panel is
-   switched to it. What each of the six fields *means* is what that run is for, and they
-   are deliberately all different so the screen can be read backwards into them.
+3. **Why a friend is drawn as offline** (13.08.2026). The list itself works; what the
+   panel says about a friend does not. The probe in the editor repo
+   (`--log net/ubi-friends-probe`) prints the flag at three points and the next run
+   answers it. Everything else about the six fields is still unread, and only field 1
+   survives into the client at all.
 
 And then the wall proper:
 

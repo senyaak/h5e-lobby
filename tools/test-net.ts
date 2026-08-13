@@ -1216,6 +1216,26 @@ console.log('\nChat, unwrapped from what the client actually sent');
   check('the echo is the join itself', lines[0] === ':Senyaak JOIN :#LobbyGrp1.1', String(lines[0]));
   check('the names list ends properly', lines[2]?.includes('366') === true, String(lines[2]));
   check('and the channel is remembered', chat.channels.has(':#LobbyGrp1.1'));
+
+  // The guest talks, and he has no connection to talk down. Everything about a second
+  // player rests on a line reaching a client from somebody who is not himself, and
+  // nothing has ever exercised that — so the server can say something as a name of its
+  // own, and this is the shape of what it sends.
+  const service = new IrcService();
+  service.residents = [GUEST];
+  const listener = service.connection();
+  listener.receive(LOGIN);
+  const namesList = listener.receive(JOIN)[0]!.replies.flatMap((reply) => unframe(reply).lines);
+  check('the guest is in the name list a joiner gets', namesList[1]?.endsWith(`:Senyaak ${GUEST}`) === true, String(namesList[1]));
+
+  const said = service.say(GUEST, ':#LobbyGrp1.1', "I'M THE BEST!");
+  check('a line from the guest reaches whoever is in the channel', said.to.length === 1, String(said.to.length));
+  check(
+    'and it is an ordinary PRIVMSG, which is all the client knows how to read',
+    unframe(said.line).lines[0] === `:${GUEST} PRIVMSG :#LobbyGrp1.1 :I'M THE BEST!`,
+    String(unframe(said.line).lines[0]),
+  );
+  check('nobody hears it in a channel they are not in', service.say(GUEST, ':#LobbyGrp9.1', 'hello').to.length === 0);
 }
 
 console.log('\nAccounts: a name belongs to whoever said it first');

@@ -71,6 +71,14 @@ export class IrcConnection {
   nick = '';
   readonly channels = new Set<string>();
   private buffer = Buffer.alloc(0);
+  /**
+   * Names that are in every channel without a connection of their own — the guest.
+   *
+   * He is in the player panel because the lobby says so (GROUP_INFO), and the panel
+   * and the chat are two different lists: this is the one the chat draws its names
+   * from, and a name that talks but is not in it looks like a ghost.
+   */
+  residents: readonly string[] = [];
 
   receive(chunk: Buffer): IrcEvent[] {
     this.buffer = Buffer.concat([this.buffer, chunk]);
@@ -105,9 +113,10 @@ export class IrcConnection {
         const channel = rest[0] ?? '';
         if (channel) {
           this.channels.add(channel);
+          const names = [this.nick, ...this.residents.filter((name) => name !== this.nick)];
           event.replies.push(
             frame(`:${this.nick} JOIN ${channel}`),
-            frame(`:${SERVER} 353 ${this.nick} = ${channel} :${this.nick}`),
+            frame(`:${SERVER} 353 ${this.nick} = ${channel} :${names.join(' ')}`),
             frame(`:${SERVER} 366 ${this.nick} ${channel} :End of /NAMES list`),
           );
           event.broadcast.push({ channel, line: frame(`:${this.nick} JOIN ${channel}`) });
@@ -148,9 +157,12 @@ export class IrcConnection {
 
 export class IrcService {
   private readonly connections = new Set<IrcConnection>();
+  /** Names in every channel that have no connection — see `IrcConnection.residents`. */
+  residents: readonly string[] = [];
 
   connection(): IrcConnection {
     const connection = new IrcConnection();
+    connection.residents = this.residents;
     this.connections.add(connection);
     return connection;
   }
@@ -162,5 +174,28 @@ export class IrcService {
   /** Everyone else who is in this channel. */
   others(channel: string, except: IrcConnection): IrcConnection[] {
     return [...this.connections].filter((c) => c !== except && c.channels.has(channel));
+  }
+
+  /** Everyone in this channel, including whoever is asking. */
+  everyone(channel: string): IrcConnection[] {
+    return [...this.connections].filter((c) => c.channels.has(channel));
+  }
+
+  /** Every channel somebody is sitting in right now. */
+  get channels(): string[] {
+    return [...new Set([...this.connections].flatMap((c) => [...c.channels]))];
+  }
+
+  /**
+   * A line said by somebody who has no connection — the guest, and later anything
+   * else the server wants to put in the chat.
+   *
+   * Chat is real IRC, so this is exactly what a client's own message looks like on the
+   * wire; the client draws whatever arrives and asks no questions about who sent it.
+   * It carries no timestamp, which is why replaying history would look like it was
+   * just said (see docs/NETWORK_STATE.md).
+   */
+  say(nick: string, channel: string, text: string): { line: Buffer; to: IrcConnection[] } {
+    return { line: frame(`:${nick} PRIVMSG ${channel} :${text}`), to: this.everyone(channel) };
   }
 }

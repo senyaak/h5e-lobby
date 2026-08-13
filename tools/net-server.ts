@@ -153,6 +153,35 @@ const cdkey = new CdKeyService();
 // Chat — and the reason a lobby channel can be entered at all: joining a lobby
 // makes the client join an IRC channel. See src/net/irc.ts.
 const irc = new IrcService();
+// The guest is in the chat's name list too. The player panel and the chat are two
+// different lists — the panel comes from GROUP_INFO, this one from the 353 numeric —
+// and a name that talks without being in this one looks like nobody.
+irc.residents = [GUEST];
+
+/**
+ * And he says something, on a timer.
+ *
+ * Not a joke, or not only: nothing has ever tested that a line reaches a client from
+ * anyone other than himself, and the whole of "two players" rests on that. A message
+ * every two minutes says whether chat carries what the server pushes into it, whether
+ * the client draws a nick that has no connection of its own, and — because it keeps
+ * happening — whether the session is still alive after five minutes of sitting in a
+ * channel doing nothing.
+ *
+ * `--quiet-bot` turns it off for a run where it would be in the way.
+ */
+const BOT_SAYS = "I'M THE BEST!";
+const BOT_EVERY = 2 * 60 * 1000;
+if (!process.argv.includes('--quiet-bot')) {
+  setInterval(() => {
+    for (const channel of irc.channels) {
+      const { line, to } = irc.say(GUEST, channel, BOT_SAYS);
+      for (const listener of to) chatSockets.get(listener)?.write(line);
+      if (to.length) log(`IRC  ${GUEST} -> ${channel}: ${BOT_SAYS} (to ${to.length} listener(s))`);
+    }
+  }, BOT_EVERY).unref();
+  log(`${GUEST} will say "${BOT_SAYS}" in every occupied channel every ${BOT_EVERY / 1000}s — --quiet-bot stops him`);
+}
 
 /** Which socket carries which chat connection, so a line can be relayed on. */
 const chatSockets = new Map<IrcConnection, Socket>();

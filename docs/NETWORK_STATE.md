@@ -599,9 +599,26 @@ To prepare:
   outside; the port his pings come from is 8888. That is the material for introducing
   them, and gameplay itself is peer to peer, so this server never carries it.
 
-The open question: **does one install run twice**, or is a second copy of the game
-folder needed? Worth answering before anything else, because it decides how the test
-is even set up.
+The open question was **does one install run twice**, and the answer is **no — and a
+second copy of the folder will not do it either**, which is a thing to know before
+copying six gigabytes. Read out of the exe, not tried:
+
+- `WinMain` (0x4db860) opens with `CreateMutexA(NULL, TRUE, "NIVAL_H5")` and asks
+  `GetLastError`. On 0xB7 (ERROR_ALREADY_EXISTS) it puts up *"You can't run game and
+  editor or two instances of any of then at the same time"* and returns from WinMain.
+  The name has no `Local\` or `Global\` prefix, so it is one name per logon session —
+  a second copy of the folder hits the same mutex, and a second Windows user would not.
+- The branch is `jne` at **0x4db8aa**, five bytes after the compare: `75 1D` where
+  `EB 1D` would mean "carry on regardless". Our exe is our own build already, so this
+  is one byte in the SECOND copy's `bin/H5_Game_H5E.exe` — the first copy keeps the
+  guard and so keeps telling us when we have left an instance running.
+- The other collision is the game port: `net_game_port` is registered at 0x4cf2b0 with
+  a default of 8888 (the float at 0x4cf2b5), and it is where each client's own pings
+  come from. Two instances on one machine want two ports, and it is an ordinary
+  config variable, so the second copy sets it in its own config rather than in code.
+
+So the second client costs a copy of the game folder, one byte in its exe and one
+config line — and, on the evidence above, nothing at all in this server.
 
 **Starting is a chain of five, not one message.** From the client's own RTTI:
 

@@ -838,6 +838,18 @@ copying six gigabytes. Read out of the exe, not tried:
 So the second client costs a copy of the game folder, one byte in its exe and one
 config line — and, on the evidence above, nothing at all in this server.
 
+**DONE, 13.08.2026.** `C:\Projects\homm5-game-net2`, started by its own `run-net2.bat`.
+The byte is not patched by hand: it is a flag of the extension now — `second-instance`
+in `bin/homm5-editor-qol.txt`, which takes the branch off before WinMain reads it,
+because a DllMain runs before the executable's entry point. Beside it, `run-in-background`
+makes the game stop throttling itself to a frame every 40 ms when it is not in front,
+which a second client is by definition half the time. The port is a config line as
+expected: `own-profile` on in that copy, and `net_game_port = 8889` in its own
+`Profiles/global_a2.cfg`. Both are documented in the editor repo's `docs/QOL.md`.
+
+**Two clients want two accounts.** The first login of a name creates it, so the second
+client logs in as another name and nothing has to be prepared here.
+
 **Starting is a chain of five, not one message.** From the client's own RTTI:
 
 ```

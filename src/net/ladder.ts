@@ -147,10 +147,17 @@ export class Ladder {
  *               string field); anything else and the parser returns 7, which the
  *               caller turns into "failed, reason 63"
  *   payload[1]  the table, a list of four:
- *     [0], [1]  two numbers (0x4435c0, atoi). They are kept as fields of the result
- *               (+8 and +0xC); +8 is what the game reads back as a count. Ours are
- *               the number of rows and 0 — **the meaning is a guess**, and the only
- *               one left in this file
+ *     [0]       **the request's own id**, and getting this wrong cost a day. It is
+ *               kept at result+8, and the reader (0x42c7f0) — having already resolved
+ *               the right id out of its pending map — OVERWRITES it with this one at
+ *               0x42c987 before handing it to the game. The game compares it with what
+ *               it is waiting for and drops the reply as "not waiting reply with
+ *               RequestId=N" when they differ. So it is not ours to choose: it is the
+ *               number the query carried, `body[2][1][0]`, which counts 1, 2, 3 …
+ *               across a session while the module's own id counts 1, 3, 5, 7
+ *     [1]       another number, kept at result+0xC. The client prints both in
+ *               `StartResultEntryEnumeration(id,N)`; 0 works and nothing has needed
+ *               more — the one guess left in this file
  *     [2]       the COLUMNS: a list of pairs of strings, each at most 32 characters.
  *               Element 0 is the column's name and it is pushed onto the result's own
  *               ordered vector; element 1 goes into a second map and nothing we have
@@ -169,13 +176,14 @@ export class Ladder {
  * request failed,reason=…", where 63 is a bad tag and 64 a table the parser gave up on.
  */
 export function ladderPayload(
+  requestId: string,
   rows: readonly LadderStats[],
   keys: readonly string[] = LADDER_KEYS,
 ): GSValue[] {
   return [
     '1',
     [
-      String(rows.length),
+      requestId,
       '0',
       keys.map((key) => [key, '1']),
       rows.map((row) => keys.map((key) => String(Math.trunc(row[key] ?? 0)))),

@@ -521,14 +521,23 @@ export class RouterSession {
           const pivotList = Array.isArray(query) ? query[4] : undefined;
           const pivotEntry = Array.isArray(pivotList) ? pivotList[1] : undefined;
           const pivot = Array.isArray(pivotEntry) && typeof pivotEntry[0] === 'string' ? pivotEntry[0] : this.username;
+          // TWO ids travel with a ladder query and they are not the same number. The
+          // module's, `body[1]`, counts 1, 3, 5, 7 across a session (the profile takes
+          // the even ones) and is what the reply is matched by. The ladder's own, the
+          // first field of the query, counts 1, 2, 3, 4 — and it is what the GAME
+          // compares: the reader resolves the module id correctly out of its pending
+          // map and then overwrites the answer with this one (0x42c987) before the
+          // game ever sees it. Sent as anything else, every query after the first is
+          // dropped with "not waiting reply with RequestId=1".
+          const ladderId = Array.isArray(query) && typeof query[0] === 'string' ? query[0] : '1';
           const stats = this.ladder.row(pivot);
           const sent = this.answerModule(
-            build(reply(message, moduleReplyBody(LADDER_QUERY, ladderPayload([stats]), requestId))),
+            build(reply(message, moduleReplyBody(LADDER_QUERY, ladderPayload(ladderId, [stats]), requestId))),
           );
           return {
             note:
-              `LADDER query ${requestId} about "${pivot}" — one row (rating ${stats['RATING']}, ` +
-              `${stats['GAMES_PLAYED']} game(s)), answered ${sent.where}`,
+              `LADDER query ${requestId} (the ladder's own id ${ladderId}) about "${pivot}" — one row ` +
+              `(rating ${stats['RATING']}, ${stats['GAMES_PLAYED']} game(s)), answered ${sent.where}`,
             replies: sent.replies,
           };
         }

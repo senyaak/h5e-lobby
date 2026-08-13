@@ -629,6 +629,31 @@ PS set data sent, N bytes        <- and then our log has the bytes
 If instead the client reads the seed and dies quietly in a parser, that is the same silence
 every wrong shape in this protocol produces, and the answer is to go back to refusing.
 
+### A ladder query carries TWO ids, and the reply is judged by the other one
+
+13.08.2026, and it cost a day of reading because the first query of a session hides it.
+
+- **the module's id** — `body[1]`, counting 1, 3, 5, 7 across a session (the profile
+  takes the even ones). The reply is MATCHED by it: it goes back at index 2 of the
+  three, the client looks it up in its pending map (`lower_bound`, 0x42b810) and gets
+  the right entry. This was right all along.
+- **the ladder's own id** — the first field of the query itself, `body[2][1][0]`,
+  counting 1, 2, 3, 4. The reply is JUDGED by it. After resolving the correct id from
+  the map, the reader **overwrites it** (0x42c987) with `[result+8]` — the first number
+  of the table we sent — and hands THAT to the game, which compares it with what it is
+  waiting for and logs "not waiting reply with RequestId=N — ignoring message".
+
+We were sending the row count there, which is 1, and the first query's ladder id is
+also 1: it worked once per session and every later query was dropped, including every
+"Profile" on a player, which is a ladder query pivoted on him.
+
+The measurement that settled it printed both of the ladder's maps whole, on every
+insert and every lookup — the queue at +0x64 and the pending sends at +0x80, walked
+node by node with the map's address on each line. It showed the lookup working
+perfectly (`LOOKUP for 3 … landed on key 3, whose value is 2`) three lines before the
+game was told 1, which is what pointed at the overwrite. Three earlier readings of the
+insert side had each been self-consistent and each wrong about where to look.
+
 ### The guest, and what he is not
 
 A player the server seats itself: a name, a player-info blob, a ladder row with games in it,

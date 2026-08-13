@@ -80,12 +80,19 @@ envelope has been accepted. The shape, and `ladderPayload` in
 
 ```
 [ "1",                                 <- atoi'd and compared with 1 (0x443740)
-  [ "<row count>", "0",                <- two numbers, kept at result+8 and +0xC
+  [ "<the ladder's request id>", "0",  <- two numbers, kept at result+8 and +0xC
     [ ["RATING","1"], ["WINS","1"], … ],   <- the columns: pairs of strings, ≤32 chars
     [ ["1500","6", … ] ] ] ]               <- the rows: strings, ≤128 chars each
 ```
 
-Two rules are the whole of it, and both refuse in silence:
+**The first number is the request's own id, not a count.** A query carries two ids —
+the module's (`body[1]`: 1, 3, 5, 7) which the reply is matched by, and the ladder's own
+(the query's first field: 1, 2, 3, 4) which the GAME compares against what it is waiting
+for. The reader resolves the first correctly and then overwrites it with this one
+(0x42c987). Send anything else and every query after the first is dropped with "not
+waiting reply with RequestId=…" — and the first one works, because both ids are 1 there.
+
+Three rules are the whole of it, and all three refuse in silence:
 
 - **a row has exactly as many cells as there are columns.** 0x432b10 divides both
   vectors by their element size and returns error 3 if the counts differ — there is no

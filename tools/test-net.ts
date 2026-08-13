@@ -896,7 +896,7 @@ console.log('\nThe ladder, from the query the client really sent');
   check('the payload opens with the tag the parser insists reads as 1', payload?.[0] === '1', JSON.stringify(payload?.[0]));
   const table = payload?.[1] as GSValue[];
   check('and the table under it is a four', table?.length === 4, String(table?.length));
-  check('whose first number is how many rows follow', table?.[0] === '1', JSON.stringify(table?.[0]));
+  check("whose first number is the ladder's own request id", table?.[0] === '1', JSON.stringify(table?.[0]));
   const columns = table?.[2] as GSValue[];
   const rows = table?.[3] as GSValue[];
   check('the columns are the 46 keys the exe names', columns?.length === LADDER_KEYS.length, String(columns?.length));
@@ -915,6 +915,37 @@ console.log('\nThe ladder, from the query the client really sent');
   );
   check('the rating in it is the one we hold', (rows?.[0] as GSValue[])?.[0] === String(STARTING_RATING), JSON.stringify((rows?.[0] as GSValue[])?.[0]));
   check('the rating is named in the log too', asked[0]!.note.includes(String(STARTING_RATING)), asked[0]?.note);
+
+  // THE SECOND QUERY, which is where this went wrong for a whole session. Two ids
+  // travel with a ladder query: the module's (`body[1]`, counting 1, 3, 5, 7 because
+  // the profile takes the even ones) and the ladder's own, the first field of the
+  // query, counting 1, 2, 3. The reply is MATCHED by the first and JUDGED by the
+  // second — 0x42c987 overwrites the correctly-resolved id with whatever the table's
+  // first number says, and the game then drops anything it is not waiting for.
+  //
+  // The first query hides it, because both ids are 1 and so is the row count that used
+  // to be sent there. So this asks with a query whose ids DIFFER, which is the only
+  // shape that can fail.
+  const second = proxy.receive(
+    build({
+      property: Property.GS,
+      priority: 0,
+      type: MessageType.PROXY_HANDLER,
+      sender: 8,
+      receiver: 11,
+      body: [
+        '1281',
+        '3',
+        ['1', ['2', 'HEROES_29988429c481f219', '1', '0', ['1', ['Senyaak', '1']], [[], [], []]]],
+      ],
+    }),
+  );
+  const secondCarried = parse(second[0]!.replies[0]!)?.body?.[1] as GSValue[];
+  check('a second query is answered too', second[0]!.replies.length === 1, second[0]?.note);
+  check('matched by the MODULE id it asked with', secondCarried?.[2] === '3', JSON.stringify(secondCarried?.[2]));
+  const secondTable = (secondCarried?.[1] as GSValue[])?.[1] as GSValue[];
+  check("and judged by the LADDER's id, which is 2 here and not the row count", secondTable?.[0] === '2', JSON.stringify(secondTable?.[0]));
+  check('the log names both, so a mismatch is visible without a launch', second[0]!.note.includes('query 3 (the ladder\'s own id 2)'), second[0]?.note);
   const stats = new Ladder(join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-ladder.json')).row('Senyaak');
   check('with all 46 named fields in the store', Object.keys(stats).length === 46, String(Object.keys(stats).length));
   check('starting rated, not at zero', stats['RATING'] === STARTING_RATING, String(stats['RATING']));

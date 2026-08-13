@@ -323,10 +323,10 @@ thirty levels wide, each with a good and an evil face:
 | 60 … 89 | 6000 … 8999 | scout, **Sylvan's Wood Elf** | harbinger, Dark Assassin |
 | 90 … 119 | 9000 … 11999 | legionnaire, Swordsman | beast, Horned Demon |
 | 120 … 149 | 12000 … 14999 | captain, Footman | taskmaster, Blood Witch |
-| 150 … 179 | 15000 … 17999 | squire, **Sylvan's Druid** | Marauder |
-| 180 … 209 | 18000 … 20999 | knight, Cavalier | Vampire Lord |
+| 150 … 179 | 15000 … 17999 | squire, **Sylvan's Druid** | pack hound, Marauder |
+| 180 … 209 | 18000 … 20999 | knight, Cavalier | pack leader, Vampire Lord |
 | 210 … 239 | 21000 … 23999 | champion, Paladin | ringleader, Matron |
-| 240 … 269 | 24000 … 26999 | baron, Priest | mastermind |
+| 240 … 269 | 24000 … 26999 | baron, Priest | mastermind, Demilich |
 | 270 … 299 | 27000 … 29999 | duke, **Academy's Giant** | overseer, Arch Devil |
 | 300 and up | 30000 and up | regent, Arch Angel | overlord, Shadow Dragon |
 
@@ -335,6 +335,20 @@ and which creature is fixed by the band, not by what the player plays: the good 
 mostly Haven with a wood elf, a druid and a giant along the way, the evil one mostly
 Inferno and Dungeon with two undead at the end. Twenty-two portraits in all, and a player
 "unlocks" one by reaching the band, which is the whole of that mechanism.
+
+**There is no avatar to choose.** The screen has `AvatarBack` and `AvatarForward` buttons
+and their tooltips say "pick the previous/next badge", but they are the stump of a cut
+feature: their `.xdb` says `<Enabled>false</Enabled>` with no commands, and in the exe each
+name appears exactly once — where the screen finds the button and sets its visibility. No
+handler, no list, no index (the field that looks like it held one is zeroed and never
+read). The picture is `<Icon>` of the rank record and nothing else, so **the only things
+that change a player's portrait are his rating and which factions he has played**. Giving
+players a real choice would mean patching the exe and the two `.xdb` files.
+
+**And the profile blob holds only the comment.** Three captures of a real save differ in
+one field: a UTF-16 string of what the player typed into "Additional information", under a
+constant header. No avatar, no rank, no statistics — the screen's numbers all come from the
+ladder. So storing that blob opaquely, as this server does, loses nothing.
 
 **Which says what the number was meant to be.** A scale whose top rank begins at 30000 and
 whose bands are 3000 wide is not an Elo rating — it is an accumulating score, points per

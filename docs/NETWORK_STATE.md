@@ -1048,16 +1048,27 @@ short, and his address twice. **What the last three mean is not established**: t
 fit "two addresses and a port", and neither handler in the chain reads any of them, so
 nothing depends on it being right — but nothing proves it either.
 
-**`START_MATCH` (17) cannot be sent by this build, and everything behind it is dead.**
-The gate is `[ctx+0xE8]` (0xE12DC3), and the byte is written in exactly one place —
-`ProcessStartMatchReply` at 0xE130E9 — which runs only in `CStateWaitStartMatchReply`,
-constructed only at 0xE12EC9, one line after START_MATCH goes out. Nothing else in NUbi
-writes it. So a game goes from `GAME_CONNECTED` straight into `CStatePlaying`, and
-MATCH_STARTED 62, PlayerMatchStarted 44, SUBMIT_MATCH 30, MATCH_FINISH 45 and
-FINAL_MATCH_RESULTS 71 never happen. We answer 17 anyway, because it costs a line; we
-push nothing on it, because a push no client can ask for is a guess nothing can check.
-The first version of this pushed `MATCH_STARTED` on a hunch — removed once the duel showed
-17 never arrives.
+**A rated game sends `START_MATCH` (17), and then the whole second half happens.**
+Measured 13.08.2026 on an ordinary map in the Ranked channel:
+
+```
+START_MATCH 17        -> "yes", and MATCH_STARTED 62 pushed to the room
+PlayerMatchStarted 44 <- from BOTH players, 200ms later; nothing waits on it
+   ... eight minutes of game ...
+SUBMIT_MATCH 30       <- from BOTH, the whole results table
+                      -> SubmitMatchResultReply, then FINAL_MATCH_RESULTS 71 (bare!)
+MATCH_FINISH 45       <- once every player has stopped
+```
+
+The shapes are in [LADDER.md](LADDER.md), including why 71 must not be wrapped. **A duel
+sends none of this** — it goes from `GAME_CONNECTED` straight into play and ends with
+`GAME_FINISH` 35 — which is why an earlier version of this section declared the rated
+branch dead code and removed the `MATCH_STARTED` push as an unprovable guess. It was
+proved by the next game. The gate on `[ctx+0xE8]` (0xE12DC3) is real, its polarity was
+read correctly, and what sets the byte the first time is still not found: it is not the
+channel, not `eventId`, not our push, and not anything the room carries — the code between
+`GAME_CONNECTED` and the gate reads none of them. **Answer the rated chain unconditionally;
+it turns on without us.**
 
 **`GAME_FINISH` (35) is how a game ends, and it is not answered.** `ProcessGameFinish`
 (0xE1CFE0) branches on the same dead flag, so every game takes the unrated door:

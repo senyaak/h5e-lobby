@@ -1612,14 +1612,61 @@ console.log('\nStarting the game: the chain both players wait on');
     check(`${who}: field 4 is a string`, typeof fields[4] === 'string' && fields[4].length > 0, String(fields[4]));
   }
 
-  // START_MATCH, which this build cannot send: the flag that gates it is only ever set
-  // one line after it goes out. Answered anyway, and nothing is announced on it — a push
-  // no client can ask for is a guess that can never be checked.
+  // START_MATCH — the message a RATED game sends, and the one the duel never sent. The
+  // push that answers it carries the match id the client quotes back with its results.
   toGuest.length = 0;
   const match = host.receive(lobbyMsg([String(LobbyMsg.START_MATCH), [id]]));
-  check('START_MATCH is answered', match[0]!.replies.length === 1, match[0]?.note);
+  check('START_MATCH is answered', match[0]!.replies.length === 2, match[0]?.note);
   check('with a success naming its subtype', yes(match[0]!.replies[0], LobbyMsg.START_MATCH).names);
-  check('and nothing is announced on it', toGuest.length === 0, String(toGuest.length));
+  const running = (parse(match[0]!.replies[1]!)?.body?.[1] as GSValue[]) ?? [];
+  check('and the match is announced', running[0] === String(LobbyMsg.MATCH_STARTED), String(running[0]));
+  check('carrying the match id the results will quote back', running[1] === id, JSON.stringify(running));
+  check('the guest hears it too', toGuest.length === 1, String(toGuest.length));
+
+  // Which both of them answer, and neither waits on.
+  const acked = guest.receive(lobbyMsg([String(LobbyMsg.PLAYER_MATCH_STARTED), [id]]));
+  check('PLAYER_MATCH_STARTED needs no answer', acked[0]!.replies.length === 0, acked[0]?.note);
+  check('but it is named, with whose it is', acked[0]!.note.includes('Player2'), acked[0]?.note);
+
+  // The results of a rated game — the table verbatim off the wire, 13.08.2026, the run
+  // whose unanswered submit left "please wait while the results are sent to ubi.com" on
+  // both screens. Two things are owed: the reply, and the final-results push.
+  const table: GSValue[] = [
+    id,
+    '0',
+    ['Senyaak', '21', '22', '4194303', ['0', '1', '0', '980', '0', '0', '0', '0', '0', '1', '0', '0', '0', '0', '2', '0', '65536', '474', '0', '0', '0', '0']],
+    ['Senyaak2', '21', '22', '4194303', ['1', '7', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '1', '65536', '474', '0', '250', '0', '1']],
+  ];
+  const submitted = host.receive(lobbyMsg([String(LobbyMsg.SUBMIT_MATCH), table]));
+  check('SUBMIT_MATCH is answered, and the final results follow', submitted[0]!.replies.length === 2, submitted[0]?.note.split('\n')[0]);
+  const submitReply = yes(submitted[0]!.replies[0], LobbyMsg.SUBMIT_MATCH);
+  check('the reply is a success naming its subtype', submitReply.success && submitReply.names);
+  // The id is quoted from the REQUEST: the client compares it with what MATCH_STARTED
+  // told it, and a mismatch is not an error but an endless wait (0xE1340F).
+  const quoted = ((parse(submitted[0]!.replies[0]!)?.body?.[1] as GSValue[])?.[1] as GSValue[])?.[0];
+  check('and carries back the match id the client quoted', quoted === id, String(quoted));
+
+  const final = parse(submitted[0]!.replies[1]!)?.body ?? [];
+  // BARE, not wrapped in 38: the parser for 71 reads body[1][0] as the match id, so in an
+  // envelope the id would arrive as 71 and never match what the client stored.
+  check('the final results go out bare, not in a 38 envelope', final[0] === String(LobbyMsg.FINAL_MATCH_RESULTS), String(final[0]));
+  const carried = (final[1] as GSValue[]) ?? [];
+  check('with the match id first, where the client reads it', carried[0] === id, String(carried[0]));
+  check('then the type byte it insists is 38', carried[1] === String(MessageType.GSSUCCESS), String(carried[1]));
+  const standings = (carried[2] as GSValue[][]) ?? [];
+  // A row per player, each a name and a list of numbers. An empty list of ROWS makes the
+  // client fail itself with reason 65, so there must be at least one.
+  check('and a row for each player who played', standings.length === 2, JSON.stringify(standings.map((r) => r[0])));
+  check('each row a name and a list of numbers', standings.every((row) => typeof row[0] === 'string' && Array.isArray(row[1])), JSON.stringify(standings[0]));
+  check('named as the players the table named', standings[0]?.[0] === 'Senyaak' && standings[1]?.[0] === 'Senyaak2', JSON.stringify(standings.map((r) => r[0])));
+  // And the table itself is written down whole — the stat ids in it are named nowhere in
+  // the lobby library, so this log line is the only record of what a played game looks like.
+  check('the whole table goes into the log', submitted[0]!.note.includes('4194303') && submitted[0]!.note.includes('980'), submitted[0]!.note.split('\n')[1]);
+
+  // The last word of a rated game, which the client sends once everybody has stopped.
+  const finished = host.receive(lobbyMsg([String(LobbyMsg.MATCH_FINISH), [id]]));
+  check('MATCH_FINISH is answered', finished[0]!.replies.length === 1, finished[0]?.note);
+  check('with a success naming its subtype', yes(finished[0]!.replies[0], LobbyMsg.MATCH_FINISH).names);
 
   // The end of the game, which both players report and neither waits on. It is the only
   // word this server gets that a game was played at all.

@@ -39,6 +39,7 @@ import {
   Rooms,
   gameStartedEntry,
   lobbyEntry,
+  matchStartedEntry,
   memberEntry,
   playerInfo,
   roomEntry,
@@ -1442,24 +1443,98 @@ export class RouterSession {
             replies: [this.lobbyYes(message, subtype, room), build(reply(message, announcement))],
           };
         }
-        // START_MATCH, which this build cannot send. Kept because answering costs one
-        // line and the shape is the same as the other three; NOT built out further,
-        // because everything past it would be a guess nothing can ever exercise.
+        // And the match itself, which is where a game becomes RATED. The host sends this
+        // when the room is a rated one; the answer, and then MATCH_STARTED to everybody,
+        // which carries the **match id** the client will quote back with its results.
         //
-        // The gate is `[ctx+0xE8]`, and it is a closed loop: START_MATCH goes out only
-        // when the flag is set (0xE12DC3), the flag is set only in ProcessStartMatchReply
-        // (0xE130E9), that runs only in CStateWaitStartMatchReply, which is constructed
-        // only at 0xE12EC9 — one line after START_MATCH is sent. Nothing else in NUbi
-        // writes the byte. So a game here goes straight from GAME_CONNECTED into
-        // CStatePlaying, and the whole rated branch — START_MATCH 17, MATCH_STARTED 62,
-        // SUBMIT_MATCH 30, MATCH_FINISH 45, FINAL_MATCH_RESULTS 71 — is unreachable.
-        // Measured, not deduced: the duel of 13.08.2026 was played end to end and not
-        // one of those appeared on the wire.
+        // Measured 13.08.2026, on an ordinary map in the Ranked channel: both clients
+        // answered the push with subtype 44 (`PlayerMatchStarted`) within 200ms, played,
+        // and submitted a results table opening with that same id. A duel the day before
+        // never sent START_MATCH at all — which is why this push was briefly removed as
+        // an unprovable guess, on the evidence of the one game that could not show it.
         if (subtype === String(LobbyMsg.START_MATCH)) {
           const room = this.roomInPlay(Array.isArray(inner) ? inner : []);
+          if (!room) {
+            return { note: 'START_MATCH — he is in no room of ours, yes anyway', replies: [this.lobbyYes(message, subtype, room)] };
+          }
+          const running: GSValue[] = [String(MessageType.GSSUCCESS), matchStartedEntry(room)];
+          const told = this.tellRoomThat(room, running);
           return {
-            note: `START_MATCH — ${room ? `"${room.name}" (${room.id})` : 'no room of his'}, yes`,
-            replies: [this.lobbyYes(message, subtype, room)],
+            note: `START_MATCH — "${room.name}" (${room.id}) is running, ${told} other(s) told`,
+            replies: [this.lobbyYes(message, subtype, room), build(reply(message, running))],
+          };
+        }
+        // "I have started the match" — both players say it as soon as MATCH_STARTED
+        // reaches them, and then they play for eight minutes without another word, so
+        // nothing is waiting on an answer here. Named rather than answered.
+        if (subtype === String(LobbyMsg.PLAYER_MATCH_STARTED)) {
+          const room = this.roomInPlay(Array.isArray(inner) ? inner : []);
+          return {
+            note: `PLAYER_MATCH_STARTED — ${this.username} is in ${room ? `"${room.name}" (${room.id})` : 'a room we do not have'}, nothing to answer`,
+            replies: [],
+          };
+        }
+        // THE RESULTS OF A RATED GAME, and the screen that hangs without an answer:
+        // "Пожалуйста, подождите пока результаты игры не отправятся на ubi.com".
+        //
+        // Both players send the whole table, once, at the end. Two things are owed back,
+        // and the client waits in a separate state for each:
+        //
+        //   SubmitMatchResultReply   the ordinary 38 envelope, with the MATCH ID under it
+        //   FINAL_MATCH_RESULTS 71   a push, and it must NOT be wrapped in 38 (below)
+        //
+        // The match id is the one we invented: `MATCH_STARTED` carried it, the client
+        // stored it (`ctx+0x258`, written in ProcessMatchStarted 0xE1D2B0) and quotes it
+        // at the head of this table. It is taken from the REQUEST rather than from the
+        // room, because by now the room may be gone and the client compares against what
+        // it was told — a mismatch leaves it waiting for ever (0xE1340F), which is a
+        // hang, not an error.
+        //
+        // The table itself is logged whole. The stat ids in it are not named anywhere in
+        // the lobby library — the game builds those pairs — so the log is the only record
+        // of what a played game looks like, and it is what any rating of ours will be
+        // computed from once the columns are known.
+        if (subtype === String(LobbyMsg.SUBMIT_MATCH)) {
+          const fields = Array.isArray(inner) ? inner : [];
+          const matchId = typeof fields[0] === 'string' ? fields[0] : '0';
+          // [matchId, 0, row, row, …] — a row is [name, highestStatId, howMany, mask, [values]]
+          const rows = fields.slice(2).filter((field): field is GSValue[] => Array.isArray(field));
+          const played = rows.map((row) => (typeof row[0] === 'string' ? row[0] : '?'));
+          // The rows we send back are read by nobody: 0x426380 parses them — a name of at
+          // most 32 characters and a list of numbers — and the handler (0xE135C0) looks
+          // only at the type byte and the id. The new ratings do not travel here; the
+          // client goes and asks the ladder. So each player gets his rating as it stands,
+          // which is honest and parses.
+          const standings: GSValue[] = played.map((name) => [name, [String(this.ladder.row(name)['RATING'] ?? 0)]]);
+          return {
+            note:
+              `SUBMIT_MATCH ${matchId} — results from ${this.username} for ${played.join(' vs ')}, ` +
+              `answered and the final results pushed back\n` +
+              `             the table as it arrived: ${said(inner)}`,
+            replies: [
+              build(reply(message, [String(MessageType.GSSUCCESS), [subtype, [matchId]]])),
+              // **Bare, not wrapped.** The client's matcher accepts either shape, but the
+              // parser for 71 reads `body[1][0]` as the MATCH ID — in a 38 envelope that
+              // slot is the echoed subtype, so the id would arrive as 71 and never match.
+              // GROUP_REMOVE is already sent bare for the same reason.
+              build(
+                reply(message, [
+                  String(LobbyMsg.FINAL_MATCH_RESULTS),
+                  [matchId, String(MessageType.GSSUCCESS), standings],
+                ]),
+              ),
+            ],
+          };
+        }
+        // And the last word of a rated game: the client sends it once every player has
+        // stopped playing, and waits for a plain yes (0xE13AE0 checks the type byte and
+        // nothing else).
+        if (subtype === String(LobbyMsg.MATCH_FINISH)) {
+          const fields = Array.isArray(inner) ? inner : [];
+          const matchId = typeof fields[0] === 'string' ? fields[0] : '0';
+          return {
+            note: `MATCH_FINISH ${matchId} — ${this.username} is done, yes`,
+            replies: [build(reply(message, [String(MessageType.GSSUCCESS), [subtype, [matchId]]]))],
           };
         }
         // The game is over. Both players say so — `CStatePlaying::ProcessGameFinish`

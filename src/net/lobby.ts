@@ -51,6 +51,8 @@ export const LobbyMsg = {
   GAME_FINISH: 35,
   UPDATE_GAME_INFO: 41,
   SET_PLAYER_INFO: 42,
+  /** "I have started the match" — the answer both players give to MATCH_STARTED. */
+  PLAYER_MATCH_STARTED: 44,
   MATCH_FINISH: 45,
   GET_ALT_GROUP_INFO: 46,
   MEMBER_JOIN: 50,
@@ -372,6 +374,24 @@ export function roomEntry(room: Room, probe = false): GSValue[] {
  */
 export function gameStartedEntry(room: Room, port = GAME_PORT): GSValue[] {
   return [String(LobbyMsg.GAME_STARTED), room.info, String(port), room.address, room.altAddress];
+}
+
+/**
+ * "The match is running" — pushed after START_MATCH, and it is what makes a game rated.
+ *
+ * Two numbers (0x423150), and the second one is the **match id**: the client keeps it and
+ * sends it back at the top of its results table. We give it the room's id, and the table
+ * that arrived at the end of the rated game of 13.08.2026 opened with exactly that number.
+ *
+ * This was removed once, as an unproven guess, on the strength of a DUEL in which
+ * START_MATCH never arrived. The next game — an ordinary map in the Ranked channel —
+ * sent START_MATCH, both clients answered this push with subtype 44
+ * (`PlayerMatchStarted`), and eight minutes later they submitted their results. So the
+ * guess was right, and the duel it was disproved by was simply a different kind of game —
+ * the first case of a series, proving the wrong thing about the rest of it.
+ */
+export function matchStartedEntry(room: Room): GSValue[] {
+  return [String(LobbyMsg.MATCH_STARTED), String(room.id)];
 }
 
 /**

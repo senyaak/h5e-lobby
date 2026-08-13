@@ -196,18 +196,46 @@ entirely: `ProcessGameFinishUnrated` (0xE1DEB0) sends `LobbySend_GameFinish(…)
 45 is `LobbySend_MatchFinish`, sent from `CStateWaitAllPlayersFinishedMatch::ProcessStep`
 at 0xE13945, which is inside the rated chain and after the results have gone.)*
 
-**And none of this page can happen in this build.** Which door `ProcessGameFinish`
-(0xE1CFE0) takes is decided by `[ctx+0xE8]` at 0xE1D073, and that byte is written in
-exactly one place — `ProcessStartMatchReply`, 0xE130E9 — which is reachable only after
-START_MATCH has been sent, which happens only when the byte is already set. A closed
-loop with no way in: every path here (SUBMIT_MATCH 30, FINAL_MATCH_RESULTS 71,
-MATCH_FINISH 45, MATCH_STARTED 62, PlayerMatchStarted 44) is dead code in the shipped
-game, and every game is unrated. Measured as well as read: the duel of 13.08.2026 was
-played end to end and the only thing either client sent afterwards was 35.
+**All of this happens, and it was measured on 13.08.2026** — an ordinary map in the
+Ranked channel, two live players. `START_MATCH` arrived, both clients answered our
+`MATCH_STARTED` push with subtype 44 within 200 ms, played for eight minutes, and each
+sent the table below. **We answered neither, and both screens hung on "Пожалуйста,
+подождите пока результаты игры не отправятся на ubi.com"** — which is what an unanswered
+`CStateWaitSubmitMatchResultReply` looks like from the player's chair.
 
-So a rating in this lobby, if it is ever wanted, is **ours to compute**, from what the
-server saw: who was in the room, when GAME_STARTED went out, and the GAME_FINISH each
-player sends when he is done. The protocol will not bring a result.
+*(A page of this file used to say the opposite — that the whole rated chain was dead code,
+because `[ctx+0xE8]` gates START_MATCH and nothing seemed to set it. That was written
+after a DUEL, which never sends START_MATCH at all. The gate is real and its polarity was
+read correctly; what sets the byte the first time is still not found, and is a question
+for the game's own code rather than the lobby library. **Do not design around that flag.**
+The rated branch is answered unconditionally, because it turns on without us.)*
+
+The two things owed back, both now implemented:
+
+```
+SubmitMatchResultReply   ["38", ["30", [matchId]]]
+FINAL_MATCH_RESULTS 71   ["71", [matchId, "38", [[name, [numbers…]], …]]]   ← BARE
+MatchFinishReply         ["38", ["45", [matchId]]]
+```
+
+**71 must not be wrapped in a 38 envelope.** Its parser (0x426380) reads `body[1][0]` as
+the match id — the slot an envelope fills with the echoed subtype — so a wrapped push
+delivers the id as 71, the client compares it with what it stored and waits for ever
+(0xE136D4, *"iMatchID in reply doesn't match"*). The rows are parsed (a name of at most
+32 characters, then a list of numbers) but read by nobody: the handler looks at the type
+byte and the id only, and goes to the ladder for the new ratings. An empty list of ROWS,
+though, makes the client fail itself with reason 65.
+
+**The match id is ours.** It is the second field of `MATCH_STARTED`, the client stores it
+(`ctx+0x258`, 0xE1D2B0) and quotes it at the head of its table; we send the room's id and
+take it back out of the request rather than the room, which by then may be gone.
+
+**What the numbers mean is still unknown.** The stat ids are built by the GAME, not by the
+lobby library, and are named nowhere in it. One rated match with a KNOWN winner would
+settle the column that says who won — the same table arrives, and the client also prints
+every `LobbySend_SetMatchResult(name, statId, value)` into its own log. Until then the
+table is logged whole and the ladder is left alone: a rating computed from a column nobody
+has identified would be worse than none.
 
 ## The 46 keys, in the exe's own order
 

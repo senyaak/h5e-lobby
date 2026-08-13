@@ -278,6 +278,65 @@ so the table is a selection, not a dump.
 if a rating should care about it. Nothing computes a rating yet — that is a decision about
 numbers, not about the protocol.
 
+## What the profile screen draws, key by key
+
+Read 13.08.2026 out of `CMPProfileScreen` — the ladder→screen table is 0x93F4C0 and the
+drawing is 0x93C3C0. This is what a ladder row is FOR, so it decides what is worth writing
+into one.
+
+| key | on screen |
+|---|---|
+| `RATING` | the experience bar, its two labels, **and the rank** |
+| `MAX_WINS_STREAK`, `MAX_LOSSES_STREAK`, `CUR_WINS_STREAK`, `CUR_LOSSES_STREAK` | the four streak lines |
+| `TOT_TIME_PLAYED` | hours played (it divides by 60, so **seconds**), days played, average game length |
+| `TOT_HEROES_LOST`, `TOT_HEROES_DEFEATED` | heroes lost, heroes defeated |
+| `W_<faction>`, `L_<faction>` | the wins/losses columns of the faction table — **and the games, wins and losses at the top, which are their sums** |
+| `H_<faction>` | the "heroes used" column, as a percentage of their own total; their sum is "heroes hired" |
+| `G_<faction>` | the "armies used" column, likewise — **and the alignment needle, and the favourite faction** |
+| `AVERAGE_HERO_LEVEL` | average hero level, **as 16.16 fixed point**: multiply by 65536 |
+
+**`GAMES_PLAYED`, `WINS`, `LOSSES`, `TOT_HEROES_HIRED` and `DISCONNECTIONS` are not read
+by this screen at all** — it counts games, wins and losses from the per-faction columns.
+They still have to be sent (the parser wants one cell per column) and may well be read
+somewhere else, but nothing on the profile depends on them.
+
+**The alignment needle is `G_` and nothing else** (0x93C611): good is HEAVEN, PRESERVE,
+ACADEMY and DWARVES, evil is DUNGEON, NECROMANCY, INFERNO and ORCS, and the needle sits at
+`good ÷ total`. With all of them zero the ratio defaults to exactly one half — which is why
+it was dead centre — and "good" also selects which NAME a rank has: the same eleven ranks
+come in a good and an evil flavour (peasant/slave, knight/pack leader, regent/overlord).
+
+## Rank is the rating divided by a hundred
+
+`0x93CD4B` divides `RATING` by 100 to get a LEVEL; the bar's labels are that level and the
+next, and the bar itself is the remainder over 100. The level is then looked up in a table
+of eleven ranks that lives in the game's data, not the exe —
+`UI/UIGameRoot.(UIGameRoot).xdb`, node `<ranks>` — matched as `min ≤ level < max`:
+
+| rank | levels | so, rating |
+|---|---|---|
+| peasant / slave | 0 … 15 | 0 … 1599 |
+| recruit / minion | 16 … 19 | 1600 … 1999 |
+| scout / harbinger | 20 … 31 | 2000 … 3199 |
+| legionnaire / beast | 32 … 63 | 3200 … 6399 |
+| captain / taskmaster | 64 … 95 | 6400 … 9599 |
+| squire / pack hound | 96 … 127 | 9600 … 12799 |
+| knight / pack leader | 128 … 191 | 12800 … 19199 |
+| champion / ringleader | 192 … 255 | 19200 … 25599 |
+| baron / mastermind | 256 … 319 | 25600 … 31999 |
+| duke / overseer | 320 … 399 | 32000 … 39999 |
+| regent / overlord | 400 and up | 40000 and up |
+
+**Which says what the number was meant to be.** A scale whose top rank begins at 40000 and
+whose first band is 1600 wide is not an Elo rating — it is an accumulating score, points
+per game played. Our 1500 start therefore lands a brand-new player in the FIRST rank
+already (level 15 of a band that ends at 16), and Elo's ±16 a game would keep him there
+for life: a hundred wins would move him one rank.
+
+A rating below zero is worse than useless: the level matches no row and the screen draws an
+empty rank with no icon (0x93D451). Zero itself is fine — level 0, first rank, empty bar —
+so the Elo update floors at 0.
+
 ## The 46 keys, in the exe's own order
 
 The client's stat vocabulary, read out of 0xFE5CC0…0xFE5F1C — reproduce with

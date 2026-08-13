@@ -107,7 +107,12 @@ export const ELO_K = 32;
 export function elo(winner: number, loser: number, k = ELO_K): { winner: number; loser: number } {
   const expected = 1 / (1 + 10 ** ((loser - winner) / 400));
   const change = Math.round(k * (1 - expected));
-  return { winner: winner + change, loser: loser - change };
+  // **Never below zero.** The client turns the rating into a level by dividing by 100
+  // (0x93CD4B) and looks that level up in a table of eleven ranks; a level under zero
+  // matches no row, and the screen then draws an EMPTY rank with no icon (0x93D451,
+  // against a zeroed record). A rating of exactly 0 is fine — level 0, rank one, an
+  // empty progress bar — so the floor is 0 rather than anything cleverer.
+  return { winner: winner + change, loser: Math.max(0, loser - change) };
 }
 
 /** One player's line of a submitted table, as the ladder cares about it. */
@@ -150,10 +155,13 @@ export function matchResult(row: readonly GSValue[]): MatchResult | null {
  * lost and defeated, and a per-faction table — so the keys are filled in the shape those
  * rows expect rather than as we please.
  *
- * `H_` and `G_` are the two per-faction columns nobody has named. Games and seconds are
- * the only per-faction quantities we have, so they go in one each: whichever way round
- * they land, the profile's two "used" columns will say which is which, and that is
- * cheaper than another reading of the exe.
+ * `H_` is "heroes used" and `G_` is "armies used", both drawn as a PERCENTAGE of that
+ * player's total (0x93DAB0), so only the proportion between factions matters and not the
+ * scale. We know neither number — the results table carries no hero count and no army —
+ * so both get one per game, which makes each column read as "how much of my play was with
+ * this faction". `G_` is not decoration: the alignment needle and "favourite faction" are
+ * computed from it alone (0x93C611, 0x93D5E5), and with it empty the needle sits dead
+ * centre and the favourite is always Haven.
  */
 export function settleMatch(ladder: Ladder, results: readonly MatchResult[]): string {
   const winner = results.find((result) => result.won);
@@ -184,7 +192,7 @@ export function settleMatch(ladder: Ladder, results: readonly MatchResult[]): st
       TOT_HEROES_DEFEATED: (row['TOT_HEROES_DEFEATED'] ?? 0) + result.heroesDefeated,
       [`${won ? 'W' : 'L'}_${faction}`]: (row[`${won ? 'W' : 'L'}_${faction}`] ?? 0) + 1,
       [`G_${faction}`]: (row[`G_${faction}`] ?? 0) + 1,
-      [`H_${faction}`]: (row[`H_${faction}`] ?? 0) + result.seconds,
+      [`H_${faction}`]: (row[`H_${faction}`] ?? 0) + 1,
     });
   }
 

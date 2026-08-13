@@ -1245,6 +1245,48 @@ console.log('\nChat, unwrapped from what the client actually sent');
   check('nobody hears it in a channel they are not in', service.say(GUEST, ':#LobbyGrp9.1', 'hello').to.length === 0);
 }
 
+console.log('\nThe keep-alive, and the channel counts');
+{
+  const service = new RouterService(
+    { address: '127.0.0.1', port: 40001 },
+    { address: '127.0.0.1', port: 40030 },
+    { address: '127.0.0.1', port: 40031 },
+    { address: '127.0.0.1', port: 40040 },
+    join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-net.db'),
+  );
+
+  // Six bytes, no body, every 31 seconds — verbatim off the wire. Unanswered, the
+  // client gives up on the whole session at about two minutes: two of them in one run,
+  // 122 and 121 seconds after connecting, both ending in "disconnected from router".
+  const alive = service.session('router').receive(Buffer.from('000006003a41', 'hex'));
+  check('a keep-alive is answered, not swallowed', alive[0]!.replies.length === 1, alive[0]?.note);
+  const back = parse(alive[0]!.replies[0]!);
+  check('with the same message type', back?.type === MessageType.STILLALIVE, String(back?.type));
+  check('and no body at all, as it came', back?.body === null, JSON.stringify(back?.body));
+  check('the parties the other way round', back?.sender === 1 && back?.receiver === 4, `${back?.sender}->${back?.receiver}`);
+  check('it is the same six bytes', alive[0]!.replies[0]!.toString('hex') === '000006003a14', alive[0]!.replies[0]!.toString('hex'));
+
+  // The channel list said 0 players in every channel, whoever was standing in them:
+  // the count came from a description of the channels rather than from who is there.
+  const lobby = service.session('lobby');
+  const listed = lobby.receive(
+    build({
+      property: Property.GS,
+      priority: 0,
+      type: MessageType.LOBBY_MSG,
+      sender: 4,
+      receiver: 2,
+      body: [String(LobbyMsg.CHANGE_REQUESTED_LOBBIES), ['1']],
+    }),
+  );
+  const channels = (parse(listed[0]!.replies[0]!)?.body?.[1] as GSValue[])?.[3] as GSValue[];
+  const counted = (id: string): string =>
+    String((channels.map((c) => c as GSValue[]).find((c) => c[2] === id) ?? [])[13]);
+  check('the channel list is three channels', channels?.length === 3, String(channels?.length));
+  check('Ranked has the guest in it, and says so', counted('2') === '1', counted('2'));
+  check('the empty ones say nothing else', counted('1') === '0' && counted('3') === '0', `${counted('1')}, ${counted('3')}`);
+}
+
 console.log('\nAccounts: a name belongs to whoever said it first');
 {
   // In memory, because an account test that shares a file with the last run is a test

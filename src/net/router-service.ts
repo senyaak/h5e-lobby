@@ -9,12 +9,12 @@
 //   KEY_EXCHANGE "2"   here is a Blowfish key      -> and here is ours
 //   LOGIN              here is a username          -> GSSUCCESS
 //   JOINWAITMODULE     where do I go now           -> an address and a port
-//   STILLALIVE         keep-alive                     (no answer)
+//   STILLALIVE         keep-alive, every 31s        -> the same six bytes back
 //
 // Accounts are ours to define: the client shows a name and a password, and what
-// they mean is a decision on this side. For now every name is accepted, which is
-// the smallest thing that lets the session continue — `docs/NETWORK.md` says
-// what registration will look like when there is somewhere to keep it.
+// they mean is a decision on this side. The first login of a name CREATES it, with
+// the password that came with it, and every login after that is checked against it —
+// `src/net/accounts.ts`, kept in the one database (`src/net/database.ts`).
 //
 // Messages arrive over a TCP stream and can be bundled, so a session buffers and
 // walks whole messages by their size field.
@@ -44,7 +44,7 @@ import {
   stampRoomIds,
   type Room,
 } from './lobby.ts';
-import { HEADER_SIZE as GS_HEADER_SIZE, MessageType, build, moduleFailureBody, moduleReplyBody, parse, reply, type GSMessage } from './gs-message.ts';
+import { HEADER_SIZE as GS_HEADER_SIZE, MessageType, Property, build, moduleFailureBody, moduleReplyBody, parse, reply, type GSMessage } from './gs-message.ts';
 import { decodeBody, type GSValue } from './gs-data.ts';
 import { writeFields } from './structure.ts';
 import { Blowfish } from './blowfish.ts';
@@ -397,8 +397,19 @@ export class RouterSession {
     return name === this.username && this.localAddress ? this.localAddress : this.presence.address(name);
   }
 
+  /**
+   * The three channels, with **how many are actually in each**.
+   *
+   * It said 0 for every channel however many players were standing in them, because
+   * `DEFAULT_LOBBIES` is a description of the channels and its `members` is a field
+   * nobody had ever filled in. The number the screen shows is the last field of a
+   * channel entry, and the only place that knows it is `Presence` — the same list the
+   * player panel is drawn from, so the two cannot disagree.
+   */
   private lobbyList(message: GSMessage): Buffer {
-    const lobbies = DEFAULT_LOBBIES.map((lobby) => lobbyEntry(lobby, this.gameId));
+    const lobbies = DEFAULT_LOBBIES.map((lobby) =>
+      lobbyEntry(lobby, this.gameId, this.presence.inLobby(lobby.id).length),
+    );
     return build(reply(message, [String(LobbyMsg.GROUP_INFO), ['1', String(Lsm.CHILDGROUPINFO), ['0'], lobbies]]));
   }
 
@@ -1125,8 +1136,37 @@ export class RouterSession {
         }
         return { note: `lobby message subtype ${String(subtype)} is not implemented`, replies: [] };
       }
+      // The keep-alive, and it is ANSWERED since 13.08.2026 — with the same bare
+      // header it arrived as, parties the other way round.
+      //
+      // Why: a session that sits in a channel doing nothing dies at almost exactly two
+      // minutes. Two of them in one run, 122 and 121 seconds after the connection was
+      // made, both ending in "ProcessLoginDisconnection: disconnected from router" with
+      // the client closing every socket. Nothing else in this protocol goes unanswered,
+      // and this is the only message the client sends that never got a word back: it
+      // arrives every 31 seconds as six bytes with no body at all (`00 00 06 00 3a 41`)
+      // and it is the client asking whether anybody is there.
+      //
+      // It had never been noticed because it takes two idle minutes to happen, and until
+      // the guest started talking nobody sat in a channel that long — the longest session
+      // before it was 118 seconds. That is also why the chat was the first suspect; the
+      // bot did not cause this, it only kept the client in the channel long enough.
+      //
+      // Answer everything (see the top of this file). It costs six bytes.
       case MessageType.STILLALIVE:
-        return { note: 'STILLALIVE', replies: [] };
+        return {
+          note: 'STILLALIVE — answered',
+          replies: [
+            build({
+              property: Property.GS,
+              priority: message.priority,
+              type: MessageType.STILLALIVE,
+              sender: message.receiver,
+              receiver: message.sender,
+              body: null,
+            }),
+          ],
+        };
       default:
         return { note: `no handler for message type ${message.type} — nothing sent`, replies: [] };
     }

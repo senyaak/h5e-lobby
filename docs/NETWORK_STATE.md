@@ -11,8 +11,10 @@ to be recovered from memory.
 ```bash
 node tools/net-server.ts            # all our services, one process, logs to logs/
 node tools/net-server.ts --ghosts   # plus synthetic players in every channel
-node tools/net-server.ts --seed-profile   # hand a first-time player a minimal profile
 ```
+
+`--seed-profile` was a flag here and is now simply what happens: a player with no profile
+of his own is handed a minimal one, because refusing is a profile screen that stays shut.
 
 `npm start` and `npm test` are the same two things. `--ghosts` is a diagnostic: it seats
 players who do not exist, and what the client draws of them is evidence (see the player

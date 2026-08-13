@@ -705,7 +705,7 @@ to report. Answering it in full is safe: the panel keeps its rows in a map keyed
 NAME (0x90fc80 looks the name up at 0x911b90 and replaces what it finds), so the same
 list arriving again refreshes rather than doubles.
 
-### The profile is a closed loop, and `--seed-profile` is the way out
+### The profile is a closed loop, and the seed is the way out
 
 What is known, all of it read rather than tried:
 
@@ -725,7 +725,7 @@ refuse the read honestly, because nothing is stored; the screen says "AcquirePro
 and stops there. Reading further into the UI does not break this: no branch anywhere makes
 a client compose a profile out of a refusal.
 
-So `--seed-profile` answers a first read with a MINIMAL RECORD instead — the skeleton every
+So a read with nothing behind it is answered with a MINIMAL RECORD instead — the skeleton every
 document the game writes begins with (`04 08 04 00 00 00 01 00`: a four-byte kind under tag
 4, an empty container under tag 1). It is a guess about the profile's own tags and it is
 labelled one, in the code, in the log line and in this file. What it is for is to get past

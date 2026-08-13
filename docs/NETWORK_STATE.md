@@ -910,14 +910,57 @@ expected: `own-profile` on in that copy, and `net_game_port = 8889` in its own
   ```
 
   0xDE2660 reads `[+0x8C]` as a version — `0x10000…0x10032` or `0x20000/0x20001` go on to
-  `[+0x18]`, anything else (ours reads 0x30001, which is the client's own 3.1 and is not
-  ours to set) falls back to `[+0x17C]`. The row is drawn by 0x8DD160 out of `[+0x34]`
-  (padlock) and `[+0x90]` (STARTED), neither of which was ever set. `CGamesView2::AddGame`
-  (0x8DCE50) is the door: it takes the description, checks the same `[+0x18]`, and copies
-  it into a 0x1A0-byte `CGameData`.
+  `[+0x18]`, anything else falls back to `[+0x17C]`. The row is drawn by 0x8DD160 out of
+  `[+0x34]` (padlock) and `[+0x90]` (STARTED), neither of which was ever set.
+  `CGamesView2::AddGame` (0x8DCE50) is the door: it takes the description, checks the same
+  `[+0x18]`, and copies it into a 0x1A0-byte `CGameData`.
+
+  **The "ours reads 0x30001 = (field 4 << 16) | field 3" that stood here is wrong.**
+  `CGameData+0x8C` comes from the description's `+0x80`, and 0xE06BA0 — the one function
+  that turns an arrived room into a description — writes only `+0x00` (id), `+0x04` (lobby
+  server), `+0x1C` (name) and `+0x6C` (max players). Everything else, the version and the
+  byte the Join button reads included, is loaded **from the settings blob**. Which is the
+  same conclusion the button itself gave: forwarding the blob fixed it, numbering the
+  twenty fields never did.
 
 **Two clients want two accounts.** The first login of a name creates it, so the second
 client logs in as another name and nothing has to be prepared here.
+
+**`eventId` is a caption, and a duel is not a channel.** Field 11 of a channel and of a
+room, and it was worth finding out what the client does with it before designing anything
+around it:
+
+- **A room's eventId is thrown away.** 0xE06BA0, the one function that turns an arrived
+  room into a game description, copies the id, the lobby-server id, the name, the player
+  cap and the blob — `+0xAC`, where the parser put eventId, is never read. It does not
+  reach `CGameData` at all, so nothing on the games screen can depend on it.
+- **A channel's eventId survives, into `lobbyObj+0x1C`**, and has exactly one reader in
+  the whole exe: 0x799276, a four-way jump that turns it into a localised string —
+  0 `MODE_TRAINING`, 1 `MODE_RATING`, 2 and 3 `MODE_DUEL` — and stores THAT, not the
+  number, in the channel row. Anything ≥ 4 leaves the cell empty without complaint. There
+  is no filtering, no sorting and no other effect: 0x798BD0 lists every channel it is
+  given.
+- **It must still be a number and it must still be there.** The field readers (0x41FC80
+  for a room, 0x41FE40 for a channel) return false at index 11 if it is missing or not
+  numeric, and a record that fails there is dropped in silence — the whole channel, or
+  the whole game.
+- **A duel comes from a different screen, not from the channel.** `CCreateLobbyInterfaceCommand`
+  opens `CLobbyScreen`; `CCreateDMLobbyCommand` (0x876550) opens `CMPDMLobbyScreen` and
+  sets `duel_lobby_open`, and a game started there runs `CDuelGame` (0x938590) and the
+  peer-to-peer `CCreateDuelCommand` instead of `CMPStart`. Neither path reads eventId.
+  So the duel of 13.08.2026 was a duel because the player went in by that door, not
+  because the channel said 2 — and **a duel can be hosted in any channel, "Ranked"
+  included**.
+
+Which answers "can there be a rated duel room": as far as the client is concerned there
+is no such thing as a rated room at all (see the dead flag above), and duel-ness is not a
+property of the room we serve. A channel with eventId 1 is honestly captioned
+`MODE_RATING` and a duel played in it is a duel — the rating, if it is ever wanted, is
+arithmetic of ours over `GAME_FINISH` and nothing the client will help with.
+
+What is still not known is which field of the settings blob makes a game a duel: no
+capture of a duel's `CREATE_ROOM` exists. Since 13.08.2026 the blob is written into the
+log at GAME_READY, so the next duel and the next map answer that by themselves.
 
 **A GAME WAS PLAYED, 13.08.2026.** Two clients, a room, and a duel from the lobby to the
 end — 18:56:36 to 19:00:14 on our own server, no Ubi.com anywhere. The first attempt that

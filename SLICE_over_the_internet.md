@@ -41,6 +41,9 @@ So there are two transports and they get two different answers:
 | relay (`40200`), browser lobby (`8081`) | tunnel, `wss://` and `https://` |
 | everything the game itself dials | a routable address: port forwarding, a VPS, or a private network |
 
+How many ports that second row costs is a separate question with a good answer — one,
+once §2.3 is done — but it is never zero, and no tunnel of this kind changes that.
+
 The agent already supports its half: `relay.c` accepts `ws://` and `wss://`, takes the
 port from the scheme (80 / 443) unless one is given, and passes
 `WINHTTP_FLAG_SECURE` when the scheme is secure. Two things about that URL, both
@@ -88,10 +91,95 @@ address it is actually advertising — that line is what gets copied into the ba
 
 Node 24 or newer (the services run TypeScript straight off disk; there is nothing to
 build and nothing to install). Units and `h5e.target` from `deploy/systemd/`, env from
-`deploy/h5e-lobby.env.example`, and the firewall opened for the ten gateway ports plus
+`deploy/h5e-lobby.env.example`, and the firewall opened for the ports in §2.3 plus
 `8081` and `40200` — but **not** `40100`.
 
-### 2.3. Point the two client-side files at the laptop
+### 2.3. Nine listening ports become one
+
+The number of DESKS is Ubisoft's — their lobby is split up and the client dials each
+part separately. The port NUMBERS are ours: the client learns every one of them from
+the ini we serve, from the wait-module reply, from `PROXY_HANDLER` and from the
+join-lobby hand-off, all four of which read the endpoints wired at
+`services/gateway/main.ts:100-106`. Nothing in the client or in our code compares them
+or assumes they differ. So a host that must open one port can have one port.
+
+What is in use, measured on the three-player run (`logs/gateway-latest.log`):
+
+| desk | proto | in that run |
+|---|---|---|
+| the ini itself (`8080`) | TCP | 3 requests, one per client |
+| `Lobby:40040` | TCP | 255 connections |
+| `RouterLauncher:40001` | TCP | 103 |
+| `IRC:6667` | TCP | 41 |
+| `ProxyLauncher:40031` | TCP | 39 |
+| `Router:40000` | TCP | 30 |
+| `Proxy:40030` | TCP | 18 |
+| `NATServer:40010` | UDP | 125 datagrams |
+| `CDKeyServer:40020` | UDP | 37 datagrams |
+
+Five more sockets we open saw nothing at all: TCP on `NATServer` and `CDKeyServer`, UDP
+on `Router`, `RouterLauncher` and `CDKeyServerLauncher` — `main.ts` binds UDP for every
+`tcp+udp` desk whether a handler exists or not, and for three of them none does.
+
+**The client always speaks first.** All eighteen connections in that capture opened with
+the client's message; no desk waits to be greeted. IRC is the slowest by far — about
+eleven seconds of silence after connecting — but it speaks unprompted in the end. That
+is what makes one listener possible at all: there is always something to read before
+anything has to be decided.
+
+And what there is to read separates cleanly. The GS desks share a six-byte header whose
+**type** byte says which one it is: `219` KEY_EXCHANGE is the router, `102` LOGIN or
+`77` LOGINWAITMODULE is the proxy, `210` LOBBYSERVERLOGIN is the lobby. HTTP announces
+itself with `GET `. IRC is what is left, and it fails the GS test twice over — its
+u16 frame length read as a GS size does not match what arrived, and its second byte is
+not a known message type. On the UDP side: CD-key datagrams start `d3` and carry a
+big-endian body length that adds up to the datagram's own length; everything else is
+the NAT mirror — with one ordering trap, that the mirror echoes **any** datagram under
+twelve bytes as a keep-alive, so that fallback has to be tried last.
+
+Two of the merges need no sniffing whatsoever: `Router` and `RouterLauncher` are served
+by byte-identical code, and so are `Proxy` and `ProxyLauncher` — the handler picks its
+behaviour from the role, and the role comes from the desk, never from the port. Giving
+each pair one number is an edit to the desk table plus renaming one lookup key
+(`main.ts:320`, `router-service.ts:571`), about ten lines, and six TCP numbers become
+four.
+
+Do it in this order, because each step can fail on its own and say why:
+
+1. **Merge the two launcher pairs.** This is also the one real unknown of the whole
+   plan: whether the client accepts being handed a wait-module address equal to the
+   connection it is already on. Nothing in the code or the notes answers that, and this
+   is the cheapest way to ask.
+2. **Drop the five dead sockets.** Closing them is how it gets proved they were dead.
+3. **Sniff-demux the remaining four TCP desks** onto one listener. The work is that the
+   session object is built at connect time today, before any byte has arrived, so it has
+   to move behind a classify step that buffers the first message and then replays it.
+   Keep the detected role in the log line — "which desk" is the diagnostic this project
+   runs on, and losing it would be a real regression. The classifier belongs in its own
+   exported function so `tools/test-net.ts` can drive it with the first packets recorded
+   in `logs/gateway-latest.log`: a regression test that needs no game.
+4. **Merge the two UDP desks** onto one socket, CD-key tested before the short-datagram
+   echo.
+5. **Fold the ini's HTTP server in** as well. Then `http_proxy=http://<host>:<port>`
+   names the same port as everything else.
+
+Altogether: roughly 150 lines of `main.ts` rewritten, one new function of about thirty,
+and a scatter of one-line edits — `nat-service.ts:67` and `lobby.ts:669` both spell
+`40010` into what they report, and those literals must follow the number. **No protocol
+change, and nothing in `router-service.ts`'s message handling moves** — the roles
+already exist; only the way a connection is given one changes.
+
+Worth noticing at the end of it: the browser lobby and the relay are both reached by an
+HTTP request too (a WebSocket handshake is a `GET`), so if the last step is taken they
+could share the same listener as well, told apart by path. That is what "one port"
+could actually mean here — the whole product on one number, plus the same number in UDP.
+
+**And none of this touches a player's machine.** The peer port each game listens on
+(`8888`, `8889`, `8890` here) needs nothing opened and nothing forwarded — its traffic
+leaves over the agent's outbound WebSocket. That is what the relay bought, and it is
+the reason only the host of the fleet has a firewall question at all.
+
+### 2.4. Point the two client-side files at the laptop
 
 Per game copy, and neither of them is in a repository:
 
@@ -102,7 +190,7 @@ Per game copy, and neither of them is in a repository:
   unchanged. The editor's **Network** tab writes this file; use it rather than an
   editor.
 
-### 2.4. How to know the stage worked
+### 2.5. How to know the stage worked
 
 Same three readings as the local runs, and they are all in logs we already write:
 
@@ -143,7 +231,9 @@ This is where the remaining design work is, and there are two separate problems.
 
 ### 4.1. The desks need an address the game can dial
 
-Three ways, and they are not equivalent:
+With §2.3 done this is one TCP port and the same number in UDP, which makes every option
+below cheaper — but it is still an address that has to exist. Three ways, and they are
+not equivalent:
 
 - **A small VPS running the fleet** — the only one that works for people who are not
   us. It is also where the tunnel stops being needed for the relay.

@@ -1284,10 +1284,66 @@ and the map's own properties agree: `sRMGProps.RMGmap true`, `RMGstartseed 17867
 under `InitialParams`. A generated map therefore costs a relay nothing at all — which
 removes the case the throttling worry was mostly about.
 
+### The database checksum, which is what refuses a custom map
+
+Hosting a map the other player does not have ends with "Контрольная сумма игровой базы
+данных клиента не соответствует контрольной сумме игровой базы данных сервера… Код ошибки
+0.2.0" — reason 2. Read off the disassembly of `bin/H5_Game_H5E.exe`:
+
+**It is the joining client refusing itself.** `NUbi::SContext::CanEnterGame` at **0xdf02c0**
+(the lobby twin of the LAN 0xdeebe0) is reached from
+`CStateOutOfRoom::ProcessGameEnter` **0xe1b380**, call site 0xe1b3ed. It compares the
+checksum the client computed for itself against `SGameInfo+0xC4` in its own copy of the
+host's room record — reason 5 at 0xdf03ba, version 1 at 0xdf0481, password 9 at 0xdf0503,
+**checksum compared at 0xdf051a and reason 2 written at 0xdf0597**. No round trip: the
+struct it works from carries a live `IStatusListener*`, which cannot have crossed a socket.
+Only on the LAN path does the value go on the wire and the HOST check it (0xdeee9d).
+
+**What it is computed over** — entry 0x7dba20:
+
+```
+checksum = TablesChecksum() XOR selectedMap->SAdvMapDesc::GetChecksum()
+```
+
+`TablesChecksum` (0x7dbd80) is zlib `adler32` seeded with `SRPGStats::GetChecksum()`
+(`/GameMechanics/RPGStats.xdb`), folded with the literal `"3.1"`, then the checksums of
+exactly **14 reference tables** under `/GameMechanics/RefTables/` — Creatures, Skills,
+UndividedSpells, Artifacts, MicroArtifactEffects, CombatAbilities, WarMachines,
+TownTypesInfo, ArenaBuildingsStats, CombatArenaTypes, CampaignBonus, CombatLog and the two
+GhostMode tables. A resource's own `GetChecksum` (vtable +0x10) is an adler32 over its
+parsed field values **recursing through every `NDb::Ref`**, so everything those tables
+reach is in scope.
+
+Nothing enumerates a directory, a mount list or an archive's contents. So:
+
+- **Extra maps do not count.** Two players with different collections can play any map
+  they both have — only the *selected* map's descriptor is XORed in, and it has to be the
+  same build of the same file on both sides.
+- **A mod counts only if it overrides one of those tables or something they reference.**
+  Retextures, music, UI, new maps: free. Our own `homm5-editor.h5u` is the opposite case —
+  it edits exactly this kind of data, so the checksum is in effect a "same version of our
+  mod" check, and that is a feature rather than a problem.
+- Untraced edge: whether a `.h5m` joins the global VFS at startup. If one contained its own
+  copy of a reference-table path it would poison the sum. Not observed, not ruled out.
+
+There is a gate byte at 0x108F91C (initialised to 1) and a per-`SGameInfo` bool at +0x104
+that leave the field zero, and a `no_checksum` config key (string 0xfa86d0) — what connects
+them was not traced.
+
+**A trap for this server.** The host computes the value into `SGameInfo+0xC4` while
+composing his room description, so it rides in the settings blob we forward. That blob is
+the one he replaces moments after creating the room (522 → 590 → 660 bytes), and forwarding
+a stale copy once already broke the join button. A joiner given an early blob would see
+checksum 0 against his own non-zero value and refuse locally with 0.2.0 — **on two
+byte-identical installs**. If that error ever appears where the content matches, look here
+before looking at mods.
+
 ### Still open
 
-1. **A hand-made map that the other player does not have.** The generated ones are
-   settled — see below — and this is the last candidate for a burst worth throttling.
+1. **Getting a hand-made map to the other player.** Not a transport question after all:
+   the game never sends one, it refuses the join instead (see the checksum section). So
+   distribution is ours to do — the lobby knows which map a room is for, and the launcher
+   could fetch it before the player enters. Nothing of this is written.
 2. **An adventure map, and more than two players.** Everything above is a duel between two
    clients. A third install is ready at `C:\Projects\homm5-game-net3` (port 8890,
    `run-net3.bat`) and will say whether the peers form a mesh or a star, and whether

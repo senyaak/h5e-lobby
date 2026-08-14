@@ -1,16 +1,32 @@
 # SLICE — The lobby off this machine, and then onto the internet
 
-> **Status, 14.08.2026:** §2.1, §2.2 and §2.3 done, and §3 done ahead of its turn because
-> the tunnel came with the install. The gateway is two sockets now, both on `8080` — one
-> TCP, one UDP — so the firewall question §2.2 leaves open is one line, not fifteen. The four services plus a cloudflared
-> tunnel run as `senyaak-h5e-*` user units in the `~/Projects/tunnels` fleet
-> (`systemctl --user start senyaak-h5e.target`, `deploy/README.md`);
-> `https://h5e-lobby.example.com` is the lobby and `wss://relay-h5e.example.com/agent`
-> is the relay, both answering `/health` over a real certificate. **Not** done, and it is
-> the part only a game can do: no game has played through any of this yet — the two
-> client-side files (§2.4) still point nowhere, the rest of §2.5 has not been read off,
-> and stage three is untouched. The firewall is not in the way — `ufw` here is installed
-> but disabled, and the desks answer over the LAN as they are.
+> **Status, 15.08.2026: STAGE ONE AND STAGE TWO ARE DONE, and three players proved it.**
+> The lobby runs on the laptop as `senyaak-h5e-*` user units in the `~/Projects/tunnels`
+> fleet (`systemctl --user start senyaak-h5e.target`, `deploy/README.md`); the gateway is
+> two sockets, both on `8080`, one TCP and one UDP; `https://h5e-lobby.example.com` is the
+> lobby and `wss://relay-h5e.example.com/agent` is the relay, both over a real
+> certificate.
+>
+> Measured on the run: all three copies identified themselves by the endpoint they play on
+> — `we play on port 8888`, `8889`, `8890`, at `192.168.178.27` — and the relay carried
+> their traffic (1922 out against 1899 back on one, 2046 against 2051 on another). The
+> third sat at 158, which is not a failure: the pair fighting a battle exchange about 1900
+> while everybody talks to the third at about 80. **No secret was involved anywhere**, on
+> either side of it (see `docs/ARCHITECTURE.md`, Identity).
+>
+> **BE EXACT ABOUT WHAT CROSSED WHAT.** Two halves went two different ways, and only one of
+> them left the house. The desks went over the **LAN**: `http_proxy` in each copy's bat file
+> names `192.168.178.23:8080`, so login, chat and the room list never left the switch. The
+> peer traffic went **through the tunnel**: the agents dial
+> `wss://relay-h5e.example.com/agent`, so every game datagram went out to Cloudflare and
+> came back. Calling the whole run a tunnel run, as an earlier version of this block and a
+> commit title did, is wrong.
+>
+> The firewall is not in the way here — `ufw` is installed and disabled — and what would
+> need opening is one port in two protocols.
+>
+> What is NOT done is everything from stage three: the desks have never been reached from
+> off this LAN.
 >
 > What IS built and measured is the local half — four services, three copies of the game,
 > every peer datagram carried by our own relay ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),

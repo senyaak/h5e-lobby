@@ -14,7 +14,7 @@
 // Exports:
 //   CoreClient   start(), post(), history(), replacePresence(), identifyAgent()
 
-import type { ChannelInfo, ChatMessage, FromCore, Origin, PresenceEntry, ToCore } from './core-protocol.ts';
+import type { ChannelInfo, ChatMessage, FromCore, Origin, PresenceEntry, RoomInfo, ToCore } from './core-protocol.ts';
 import { decode, encode } from './core-protocol.ts';
 
 export interface CoreClientOptions {
@@ -183,6 +183,11 @@ export class CoreClient {
     this.tell({ kind: 'presence.replace', origin, entries });
   }
 
+  /** The gateway's whole room list, sent when it is not what was sent last. */
+  replaceRooms(rooms: RoomInfo[]): void {
+    this.tell({ kind: 'rooms.replace', rooms });
+  }
+
   async history(channel: string, limit?: number): Promise<ChatMessage[]> {
     const reply = await this.ask((id) => ({ kind: 'chat.history', id, channel, ...(limit ? { limit } : {}) }));
     return reply.messages ?? [];
@@ -206,9 +211,11 @@ export class CoreClient {
       : { ok: false, name, reason: reply.error ?? 'refused' };
   }
 
-  async registerAgent(token: string, nick: string, room: string): Promise<void> {
-    const reply = await this.ask((id) => ({ kind: 'agent.register', id, token, nick, room }));
-    if (!reply.ok) throw new Error(reply.error ?? 'the core refused the agent');
+  /** A secret for this player's agent, said once. Re-issuing revokes the last one. */
+  async issueAgent(name: string): Promise<string> {
+    const reply = await this.ask((id) => ({ kind: 'agent.issue', id, name }));
+    if (!reply.ok || !reply.secret) throw new Error(reply.error ?? 'the core issued nothing');
+    return reply.secret;
   }
 
   async identifyAgent(token: string): Promise<{ nick: string; room: string } | null> {

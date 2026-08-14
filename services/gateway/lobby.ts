@@ -299,6 +299,11 @@ export class Rooms {
     return name ? [...this.rooms.values()].filter((room) => room.members.includes(name)) : [];
   }
 
+  /** Every open room. The gateway tells the core about these, so the relay can be asked. */
+  all(): Room[] {
+    return [...this.rooms.values()];
+  }
+
   remove(id: number): void {
     this.rooms.delete(id);
   }

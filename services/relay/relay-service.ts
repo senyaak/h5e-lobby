@@ -84,16 +84,26 @@ export function startRelay(options: RelayOptions): Promise<RunningRelay> {
       peer.close();
     };
 
-    const cached = recent.get(token);
-    if (cached && Date.now() - cached.at < GRACE_MS) {
-      admit(cached);
-    } else if (!token) {
+    if (!token) {
       refuse('no token');
     } else {
+      // The core is ASKED FIRST, every time. The grace window below is for a core that
+      // cannot answer — it is not a shortcut past one that can: a "no" from the core is
+      // final, and an agent whose game has ended must be refused even though he was
+      // admitted a minute ago. Answering that out of the cache is what this did at first,
+      // and what let a finished room keep taking connections.
       core
         .identifyAgent(token)
-        .then((identity) => (identity ? admit(identity) : refuse('the core does not know that agent')))
-        .catch((error: Error) => refuse(`the core did not answer — ${error.message}`));
+        .then((identity) => (identity ? admit(identity) : refuse('the core does not know that agent, or he is in no room')))
+        .catch((error: Error) => {
+          const cached = recent.get(token);
+          if (cached && Date.now() - cached.at < GRACE_MS) {
+            log(`relay the core did not answer (${error.message}) — admitting ${cached.nick} on a minute-old identity`);
+            admit(cached);
+            return;
+          }
+          refuse(`the core did not answer — ${error.message}`);
+        });
     }
 
     peer.onMessage((bytes) => {

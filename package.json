@@ -18,6 +18,7 @@
     "test": "node tools/test-net.ts && node tools/test-services.ts",
     "test-net": "node tools/test-net.ts",
     "test-services": "node tools/test-services.ts",
+    "issue-agent": "node tools/issue-agent.ts",
     "net-decode": "node tools/net-decode.ts",
     "typecheck": "tsc --noEmit"
   },

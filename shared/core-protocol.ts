@@ -40,6 +40,22 @@ export interface PresenceEntry {
   origin: Origin;
 }
 
+/**
+ * A game somebody is hosting, as much of it as anyone outside the gateway needs.
+ *
+ * The relay's one question is "which room is this agent in", and this is what answers it.
+ * Nothing here is the game's own room record — no settings blob, no addresses, no map:
+ * the core is not being asked to understand a game, only to say who is playing it with
+ * whom.
+ */
+export interface RoomInfo {
+  id: number;
+  name: string;
+  /** Who is hosting. He is in `members` too. */
+  master: string;
+  members: string[];
+}
+
 export interface ChannelInfo {
   /** `#LobbyGrp1.2` — the key everything else uses. */
   key: string;
@@ -59,6 +75,15 @@ export type ToCore =
   | { kind: 'chat.history'; id: number; channel: string; limit?: number }
   /** The whole of one service's view, sent whenever it changes. Simpler than deltas. */
   | { kind: 'presence.replace'; origin: Origin; entries: PresenceEntry[] }
+  /**
+   * The same, for rooms: the gateway's whole list, whenever it is not what was sent last.
+   *
+   * A list rather than "player X joined room Y" because rooms appear, fill, empty and
+   * vanish on the client's own messages, and a missed delta would leave the core telling
+   * the relay about a game that finished. What cannot go stale is a picture that is
+   * replaced whole.
+   */
+  | { kind: 'rooms.replace'; rooms: RoomInfo[] }
   | { kind: 'channels'; id: number }
   /**
    * "Is this the password for this account?" — the browser's login, asked for it by the
@@ -71,7 +96,22 @@ export type ToCore =
    * more than that.
    */
   | { kind: 'auth.verify'; id: number; name: string; password: string }
-  | { kind: 'agent.register'; id: number; token: string; nick: string; room: string }
+  /**
+   * Give this player an agent secret, and keep it.
+   *
+   * Asked once per installation, by whatever sets a copy of the game up — the launcher
+   * eventually, `tools/issue-agent.ts` today. The secret goes into the extension's config
+   * and the game never sees it.
+   */
+  | { kind: 'agent.issue'; id: number; name: string }
+  /**
+   * The relay's one question, asked once per connection.
+   *
+   * The answer is two facts of different ages: WHO, from the secret, which was issued
+   * once and does not change; and WHICH ROOM, from what the gateway last said, which
+   * changes every time somebody joins a game. An agent whose player is in no room is
+   * refused — there is nothing for him to be relayed to yet.
+   */
   | { kind: 'agent.identify'; id: number; token: string };
 
 export type FromCore =
@@ -86,6 +126,8 @@ export type FromCore =
       messages?: ChatMessage[];
       channels?: ChannelInfo[];
       agent?: { nick: string; room: string };
+      /** On a successful `agent.issue`: the secret, said once and never again. */
+      secret?: string;
       /** On a successful `auth.verify`: the account's own spelling of its name. */
       account?: { name: string };
     };

@@ -28,6 +28,13 @@ export interface RunningCore {
   port(): number;
   /** `ws://…/core`, which is what the other services are configured with. */
   url(): string;
+  /**
+   * Stop listening, and cut every connection that is open.
+   *
+   * A plain `server.close()` waits for its sockets, and a WebSocket does not end on its
+   * own — so without this, closing the core leaves the services still talking to it. That
+   * is exactly the state a test of "the core is away" must not be in.
+   */
   close(): Promise<void>;
 }
 
@@ -52,10 +59,15 @@ export function startCore(options: CoreServerOptions): Promise<RunningCore> {
     response.end('the core speaks WebSocket at /core\n');
   });
 
+  const peers = new Set<{ close(): void }>();
   serveWebSocket(server, (peer) => {
     const connection = core.connect((text) => peer.sendText(text));
+    peers.add(peer);
     peer.onMessage((bytes) => connection.receive(bytes));
-    peer.onClose(() => connection.close());
+    peer.onClose(() => {
+      peers.delete(peer);
+      connection.close();
+    });
   });
 
   return new Promise((resolve) => {
@@ -66,7 +78,11 @@ export function startCore(options: CoreServerOptions): Promise<RunningCore> {
         server,
         port: () => port,
         url: () => `ws://${options.host}:${port}/core`,
-        close: () => new Promise<void>((done) => server.close(() => done())),
+        close: () =>
+          new Promise<void>((done) => {
+            for (const peer of [...peers]) peer.close();
+            server.close(() => done());
+          }),
       });
     });
   });

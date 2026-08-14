@@ -244,9 +244,13 @@ gateway keeps writing `logs/latest.log` as well, because that is the file that g
    to be seen from inside the game.
 2. **The agent and the relay, locally**: three copies of the game, three agents, one
    relay, everything on `127.0.0.1`, no tunnel and no 443. In order:
-   - **the lobby's half, which needs no game**: the gateway tells the core who is in a
-     room as it fills, so the relay's one question has an answer; and an agent's secret is
-     issued rather than registered by hand;
+   - ~~**the lobby's half, which needs no game**~~ — **done 14.08.2026.** The gateway
+     sends the core its whole room list whenever it changes (`rooms.replace`, on the same
+     two-second poll as presence), and the core answers the relay's one question out of
+     two facts of different ages: WHO from the agent's secret, which is issued once and
+     kept as a hash (`services/core/rules/agents.ts`, `npm run issue-agent -- <name>`),
+     and WHICH ROOM from what the gateway last said. An agent whose player is in no room
+     is refused, and so is one whose game has ended.
    - **the agent**, in C, in `homm5-editor-net/native/net/` — WinHTTP for the WebSocket,
      a hook on the socket the game plays on;
    - **then three copies**, and only then whatever the addressing turns out to need.

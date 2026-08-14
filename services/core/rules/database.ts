@@ -56,6 +56,14 @@ const SCHEMA = `
     PRIMARY KEY (user, friend)
   );
 
+  CREATE TABLE IF NOT EXISTS agents (
+    name       TEXT PRIMARY KEY COLLATE NOCASE,
+    token_hash TEXT NOT NULL,
+    issued_at  INTEGER NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS agents_by_token ON agents (token_hash);
+
   CREATE TABLE IF NOT EXISTS chat (
     id      INTEGER PRIMARY KEY AUTOINCREMENT,
     channel TEXT NOT NULL,

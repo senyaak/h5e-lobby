@@ -141,12 +141,14 @@ export class Accounts {
    *
    * Here because a server that can create an account and not remove one is a server
    * whose test data is forever. Deleting is never refused; what it takes with it is
-   * said plainly instead: the profile, the ladder row and the friendships all go.
+   * said plainly instead: the profile, the ladder row, the friendships and the agent's
+   * secret all go.
    */
   forget(name: string): void {
     this.db.prepare('DELETE FROM users WHERE name = ?').run(name);
     this.db.prepare('DELETE FROM profiles WHERE user = ?').run(name);
     this.db.prepare('DELETE FROM ladder WHERE user = ?').run(name);
     this.db.prepare('DELETE FROM friends WHERE user = ? OR friend = ?').run(name, name);
+    this.db.prepare('DELETE FROM agents WHERE name = ?').run(name);
   }
 }

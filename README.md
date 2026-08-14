@@ -45,6 +45,7 @@ npm start                             # all four, output prefixed, logs to logs/
 npm run gateway                       # just the game side (--ghosts, --quiet-bot, --probe-… as before)
 npm test                              # 300+ checks: the protocol, and the services against each other
 npm run typecheck
+npm run issue-agent -- Senyaak        # an agent secret for one copy of the game
 node tools/net-decode.ts --file dump.txt   # a hex dump from the log, back into a message
 ```
 

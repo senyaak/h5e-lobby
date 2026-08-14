@@ -21,7 +21,7 @@ import { createSocket } from 'node:dgram';
 import { config } from '../../shared/config.ts';
 import { hexDump, openLog } from '../../shared/log.ts';
 import { CoreClient } from '../../shared/core-client.ts';
-import type { PresenceEntry } from '../../shared/core-protocol.ts';
+import type { PresenceEntry, RoomInfo } from '../../shared/core-protocol.ts';
 import { NatService } from './nat-service.ts';
 import { GUEST, GUEST_LOBBY, RouterService } from './router-service.ts';
 import { CdKeyService } from './cdkey-service.ts';
@@ -189,14 +189,20 @@ core.onChat = (message, sender) => {
 core.start();
 
 /**
- * What the browser is shown about who is here.
+ * What the core is told about who is where: the channels, and the rooms.
  *
- * There is no event for it: presence lives inside the router's own state and nothing
+ * There is no event for either — both live inside the router's own state and nothing
  * announces a change. Two seconds of polling costs nothing next to reaching into the
- * session machinery for a hook, and a channel list that is two seconds stale is a channel
- * list nobody can tell from a fresh one.
+ * session machinery for a hook, and a picture that is two seconds old is one nobody can
+ * tell from a fresh one. Each is sent only when it is not what was sent last.
+ *
+ * The presence half is drawn by the browser. The rooms half answers the relay's one
+ * question — "which room is this agent in" — and it is a whole list rather than "X joined
+ * Y" on purpose: rooms appear, fill, empty and vanish on the client's own messages, and a
+ * missed delta would leave the core routing a game that has finished.
  */
 let lastPresence = '';
+let lastRooms = '';
 setInterval(() => {
   const entries: PresenceEntry[] = [];
   for (const lobby of DEFAULT_LOBBIES) {
@@ -205,9 +211,23 @@ setInterval(() => {
     }
   }
   const shape = JSON.stringify(entries);
-  if (shape === lastPresence) return;
-  lastPresence = shape;
-  core.replacePresence('game', entries);
+  if (shape !== lastPresence) {
+    lastPresence = shape;
+    core.replacePresence('game', entries);
+  }
+
+  const rooms: RoomInfo[] = router.openRooms.map((room) => ({
+    id: room.id,
+    name: room.name,
+    master: room.master,
+    members: [...room.members],
+  }));
+  const roomShape = JSON.stringify(rooms);
+  if (roomShape !== lastRooms) {
+    lastRooms = roomShape;
+    core.replaceRooms(rooms);
+    log(`RTR  rooms -> core: ${rooms.map((room) => `${room.id} [${room.members.join(', ')}]`).join('; ') || 'none'}`);
+  }
 }, 2000).unref();
 
 /**

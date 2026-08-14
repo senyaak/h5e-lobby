@@ -346,15 +346,33 @@ console.log('\nsessions that run out, and sockets that hold them open');
 console.log('\nthe relay');
 // ---------------------------------------------------------------------------------
 
-await gateway.registerAgent('token-a', 'PlayerA', 'room-7');
-await gateway.registerAgent('token-b', 'PlayerB', 'room-7');
-await gateway.registerAgent('token-c', 'PlayerC', 'room-9');
+// Three enrolled copies of the game — a secret each, the way `tools/issue-agent.ts` asks
+// for one. Nobody says which room they are in: that comes from the gateway's room list.
+const secretA = await gateway.issueAgent('PlayerA');
+const secretB = await gateway.issueAgent('PlayerB');
+const secretC = await gateway.issueAgent('PlayerC');
+check('an agent secret is long and not the player s name', secretA.length >= 32 && !secretA.includes('PlayerA'));
+check('and each is different', new Set([secretA, secretB, secretC]).size === 3);
+
+// The rooms, as the gateway sees them: two players in one game, one in another.
+gateway.replaceRooms([
+  { id: 7, name: 'a duel', master: 'PlayerA', members: ['PlayerA', 'PlayerB'] },
+  { id: 9, name: 'somewhere else', master: 'PlayerC', members: ['PlayerC'] },
+]);
+await until(() => false, 100);
 
 const relay = await startRelay({ host: '127.0.0.1', port: 0, coreUrl: core.url(), coreToken: TOKEN });
 
-/** An agent: a WebSocket that says who it is by its token and then carries datagrams. */
-async function openAgent(token: string): Promise<{ got: Buffer[]; send(bytes: Uint8Array): void; closed(): boolean; close(): void }> {
-  const socket = new WebSocket(`ws://127.0.0.1:${relay.port()}/agent?token=${token}`);
+interface Agent {
+  got: Buffer[];
+  send(bytes: Uint8Array): void;
+  closed(): boolean;
+  close(): void;
+}
+
+/** An agent: a WebSocket that says who it is by its secret and then carries datagrams. */
+async function openAgentOn(port: number, token: string): Promise<Agent> {
+  const socket = new WebSocket(`ws://127.0.0.1:${port}/agent?token=${token}`);
   socket.binaryType = 'arraybuffer';
   const got: Buffer[] = [];
   let closed = false;
@@ -364,9 +382,9 @@ async function openAgent(token: string): Promise<{ got: Buffer[]; send(bytes: Ui
   return { got, send: (bytes) => socket.send(bytes), closed: () => closed, close: () => socket.close() };
 }
 
-const agentA = await openAgent('token-a');
-const agentB = await openAgent('token-b');
-const agentC = await openAgent('token-c');
+const agentA = await openAgentOn(relay.port(), secretA);
+const agentB = await openAgentOn(relay.port(), secretB);
+const agentC = await openAgentOn(relay.port(), secretC);
 // Admission is one question to the core each, answered in whatever order they come back,
 // so this waits for all three rather than assuming the order they connected in.
 const seated = (): string => {
@@ -385,9 +403,63 @@ check('unchanged', agentB.got[0]?.equals(Buffer.from([1, 2, 3, 4])) === true, ag
 check('and nobody in another room sees it', agentC.got.length === 0, `${agentC.got.length} datagram(s)`);
 check('nor does the sender', agentA.got.length === 0, `${agentA.got.length} datagram(s)`);
 
-const stranger = await openAgent('token-nobody-issued');
+const stranger = await openAgentOn(relay.port(), 'a-secret-nobody-issued');
 check('an agent the core does not know is dropped', await until(() => stranger.closed()));
-check('and never joins a room', !JSON.stringify(relay.rooms()).includes('token-nobody-issued'), JSON.stringify(relay.rooms()));
+check('and never joins a room', Object.values(relay.rooms()).flat().length === 3, JSON.stringify(relay.rooms()));
+
+// The room is the fresh half of the answer: the secret says who, the gateway says where.
+const secretD = await gateway.issueAgent('PlayerD');
+const homeless = await openAgentOn(relay.port(), secretD);
+check('an enrolled agent whose player is in no room is refused too', await until(() => homeless.closed()));
+
+// And when the game ends, the room goes — the next connection has nothing to join.
+gateway.replaceRooms([{ id: 9, name: 'somewhere else', master: 'PlayerC', members: ['PlayerC'] }]);
+await until(() => false, 100);
+const afterwards = await openAgentOn(relay.port(), secretB);
+check('once the room is gone, its agents are no longer admitted', await until(() => afterwards.closed()));
+check(
+  'while the game that is still open keeps its own',
+  relay.rooms()['room-9']?.join(',') === 'PlayerC',
+  JSON.stringify(relay.rooms()),
+);
+
+// ---------------------------------------------------------------------------------
+console.log('\nthe relay with the core away');
+// ---------------------------------------------------------------------------------
+{
+  // The property the whole design turns on: everything else may restart, and a game in
+  // progress must not notice. Its own core and its own relay, because this one is going
+  // to be killed — with its connections cut, or "away" would mean "still answering".
+  const spare = await startCore({ host: '127.0.0.1', port: 0, db, token: TOKEN, channels: CHANNELS });
+  const feed = new CoreClient({ url: spare.url(), token: TOKEN, service: 'gateway' });
+  feed.start();
+  await until(() => feed.connected);
+  feed.replaceRooms([{ id: 5, name: 'a game in progress', master: 'PlayerA', members: ['PlayerA', 'PlayerB'] }]);
+  await until(() => false, 100);
+
+  const spareRelay = await startRelay({ host: '127.0.0.1', port: 0, coreUrl: spare.url(), coreToken: TOKEN });
+  const before = await openAgentOn(spareRelay.port(), secretA);
+  check('an agent is admitted while the core is up', await until(() => Object.values(spareRelay.rooms()).flat().length === 1));
+  before.close();
+  await until(() => Object.values(spareRelay.rooms()).flat().length === 0);
+
+  feed.stop();
+  await spare.close();
+
+  const during = await openAgentOn(spareRelay.port(), secretA);
+  check(
+    'and again after the core has gone, on the identity it confirmed a moment ago',
+    await until(() => Object.values(spareRelay.rooms()).flat().length === 1, 6000),
+    JSON.stringify(spareRelay.rooms()),
+  );
+  check('into the same room, so a game in progress carries on', spareRelay.rooms()['room-5']?.join(',') === 'PlayerA');
+
+  const unknown = await openAgentOn(spareRelay.port(), secretC);
+  check('but one it has never confirmed is refused rather than guessed at', await until(() => unknown.closed(), 6000));
+
+  during.close();
+  await spareRelay.close();
+}
 
 // ---------------------------------------------------------------------------------
 console.log('\nthe chat line, in and out of the game s wrapper');

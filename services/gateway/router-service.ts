@@ -1830,6 +1830,16 @@ export class RouterService {
   private readonly lobbyServer: Endpoint;
   private readonly rooms = new Rooms();
   private readonly matches = new Matches();
+  /**
+   * Who is in which game, for anyone outside this file who has to know.
+   *
+   * Read-only on purpose: rooms are made and unmade by the client's own messages, and
+   * the one other reader — the loop that tells the core, so the relay can be asked "which
+   * room is this agent in" — has no business changing one.
+   */
+  get openRooms(): readonly Room[] {
+    return this.rooms.all();
+  }
   /** Shared by every desk, because a rating belongs to the player, not the socket. */
   readonly ladder: Ladder;
   /** Likewise: who is in which channel is the same fact on every connection. */

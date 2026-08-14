@@ -16,6 +16,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { ChatStore, HISTORY_DEFAULT } from './chat.ts';
 import { Accounts } from './rules/accounts.ts';
+import { Agents } from './rules/agents.ts';
 import {
   CORE_PROTOCOL,
   decode,
@@ -23,6 +24,7 @@ import {
   type ChannelInfo,
   type FromCore,
   type PresenceEntry,
+  type RoomInfo,
   type ToCore,
 } from '../../shared/core-protocol.ts';
 
@@ -45,20 +47,23 @@ interface Client {
   send(text: string): void;
   /** This connection's share of the presence list, replaced whole when it says so. */
   presence: PresenceEntry[];
+  /** And of the room list — today only the gateway ever fills this in. */
+  rooms: RoomInfo[];
 }
 
 export class CoreService {
   readonly chat: ChatStore;
   readonly accounts: Accounts;
+  readonly agents: Agents;
   readonly channels: ChannelInfo[];
   private readonly clients = new Set<Client>();
-  private readonly agents = new Map<string, { nick: string; room: string }>();
   private readonly token: string;
   private readonly log: (line: string) => void;
 
   constructor(options: CoreOptions) {
     this.chat = new ChatStore(options.db);
     this.accounts = new Accounts(options.db);
+    this.agents = new Agents(options.db);
     this.channels = options.channels;
     this.token = options.token;
     this.log = options.log ?? ((): void => {});
@@ -69,12 +74,23 @@ export class CoreService {
     return [...this.clients].flatMap((client) => client.presence);
   }
 
+  /** Every game being hosted, as the gateway last described them. */
+  rooms(): RoomInfo[] {
+    return [...this.clients].flatMap((client) => client.rooms);
+  }
+
+  /** The room a player is in, in the form the relay groups its agents by. */
+  private roomOf(nick: string): string {
+    const room = this.rooms().find((one) => one.members.some((member) => member.toLowerCase() === nick.toLowerCase()));
+    return room ? `room-${room.id}` : '';
+  }
+
   get connections(): number {
     return this.clients.size;
   }
 
   connect(send: (text: string) => void): CoreConnection {
-    const client: Client = { service: '?', authenticated: false, send, presence: [] };
+    const client: Client = { service: '?', authenticated: false, send, presence: [], rooms: [] };
     this.clients.add(client);
     return {
       receive: (frame) => this.receive(client, frame),
@@ -140,6 +156,17 @@ export class CoreService {
         this.tellEveryone({ kind: 'presence', entries: this.presence() });
         return;
       }
+      case 'rooms.replace': {
+        // Nobody is told: the only reader is the relay, and it asks one question about
+        // one agent when a connection opens. Pushing a room list at three services that
+        // do not draw rooms would be chatter.
+        client.rooms = message.rooms;
+        this.log(
+          `core  ${client.service} has ${message.rooms.length} room(s): ` +
+            (message.rooms.map((room) => `${room.id} "${room.name}" [${room.members.join(', ')}]`).join('; ') || '—'),
+        );
+        return;
+      }
       case 'channels': {
         client.send(encode({ kind: 'reply', id: message.id, ok: true, channels: this.channels }));
         return;
@@ -159,24 +186,27 @@ export class CoreService {
         );
         return;
       }
-      case 'agent.register': {
-        this.agents.set(message.token, { nick: message.nick, room: message.room });
-        this.log(`core  agent ${message.nick} registered for room ${message.room}`);
-        client.send(encode({ kind: 'reply', id: message.id, ok: true }));
+      case 'agent.issue': {
+        const secret = this.agents.issue(message.name);
+        this.log(`core  an agent secret was issued for ${message.name}`);
+        client.send(encode({ kind: 'reply', id: message.id, ok: true, secret }));
         return;
       }
       case 'agent.identify': {
-        // The one question the relay ever asks, and it asks it once per connection. An
-        // unknown token is refused here rather than anywhere downstream: that refusal is
-        // the whole of the relay's admission control.
-        const agent = this.agents.get(message.token);
-        client.send(
-          encode(
-            agent
-              ? { kind: 'reply', id: message.id, ok: true, agent }
-              : { kind: 'reply', id: message.id, ok: false, error: 'no such agent' },
-          ),
-        );
+        // The one question the relay ever asks, and it asks it once per connection. Both
+        // halves are refused here rather than anywhere downstream — that refusal is the
+        // whole of the relay's admission control.
+        const nick = this.agents.resolve(message.token);
+        const room = nick ? this.roomOf(nick) : '';
+        if (!nick || !room) {
+          this.log(`core  an agent was refused: ${nick ? `${nick} is in no room` : 'no such secret'}`);
+          client.send(
+            encode({ kind: 'reply', id: message.id, ok: false, error: nick ? 'not in a room' : 'no such agent' }),
+          );
+          return;
+        }
+        this.log(`core  agent ${nick} is in ${room}`);
+        client.send(encode({ kind: 'reply', id: message.id, ok: true, agent: { nick, room } }));
         return;
       }
       default:

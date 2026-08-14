@@ -103,28 +103,43 @@ Two facts force it:
 - **the game dials a peer directly, over UDP, at an address it is told.** Over the
   internet that address is useless and often unreachable.
 
-So the agent terminates both. The game is pointed at `127.0.0.1` for everything, and the
-agent decides what happens next:
+So the agent terminates both — from inside the process, by taking over the calls the game
+already makes:
 
 ```
-game ──UDP→ 127.0.0.x ─┬─ agent ──UDP────────→ peer          when a hole punch works
-                       └─ agent ──WS─────────→ relay         when it does not
-game ──TCP/UDP→ 127.0.0.1 ─ agent ──WS───────→ core          always: login, channel, room
+game's own socket calls ─┬─ agent ──UDP────────→ peer          when a hole punch works
+                         └─ agent ──WS─────────→ relay         when it does not
+game's desk connections ─── agent ──WS─────────→ core          always: login, channel, room
 ```
 
-The path choice is invisible to the game and to the core: the address written into the
-room description is the agent's own loopback stand-in either way, so the agent may even
-change its mind mid-game. The core's part is to hand out the materials for the choice —
-the peers' public endpoints, which its NAT desk already observes, and the relay's address.
+The path choice is invisible to the game and to the core, so the agent may change its mind
+mid-game. The core's part is to hand out the materials for the choice — the peers' public
+endpoints, which its NAT desk already observes, and the relay's address.
 
-**Identity.** The agent holds a long-lived secret in its config, issued once by the
-launcher logging in with the player's account. It never passes through the game. The game
-then logs in *inside* that tunnel, which gives the core a free consistency check: a login
-under a different name than the tunnel's owner is refused.
+**Identity.** The agent holds a long-lived secret, issued once by the launcher logging in
+with the player's account, and kept in the extension's own config rather than anywhere the
+game can read. The game then logs in *inside* that tunnel, which gives the core a free
+consistency check: a login under a different name than the tunnel's owner is refused.
 
-Eventually the agent is a DLL loaded by the existing native extension (WinHTTP has
-WebSocket support, so no TLS or dependency of our own). For the local pretest it is a Node
-process — same protocol, same behaviour, cheap to iterate.
+**The agent is C, inside the game** — a module of the existing native extension
+(`homm5-editor`, worktree `homm5-editor-net`, `native/net/`), not a process beside it.
+Сеня settled that on 14.08.2026, against an earlier line here that had it as a Node
+process "for the local pretest, cheap to iterate". It was not cheaper: a process outside
+the game has to be *dialled*, so the game would have to be handed a loopback stand-in
+address for every peer and the server would have to write those addresses into the room
+description — a whole mechanism built to be thrown away, and a second implementation of
+the agent's protocol to keep in step with the first.
+
+In the process there is nothing to dial. The extension already detours the game's own
+calls (`native/net/ubi-log.c` and the probes beside it); the agent hooks the socket the
+game plays on and decides, per datagram, between the peer and the relay. WinHTTP carries
+the WebSocket, so there is no TLS and no dependency of ours on that side either.
+
+What the address in the room description becomes, then, is a **key and not a
+destination**: the game hands it to a hook that has to recognise which peer it means. The
+client already knows the room's players and their records, so the agent may well build
+that table itself — in which case the per-recipient patching below is not needed at all.
+That is the first thing to find out when the agent is written, not to assume either way.
 
 ## What is already proven
 
@@ -141,10 +156,12 @@ From `NETWORK_STATE.md`, measured with packet captures on 14.08.2026:
 - generated maps are never transferred — the recipe travels and each client builds its
   own; hand-made maps are never transferred either, the join is refused instead.
 
-The one thing the pretest still has to add: the blob must be patched **per recipient**.
-Three agents on one machine cannot claim the same stand-in address, so what player P is
-told about Q depends on P. In production a single map would do; per-recipient is more
-general and is needed locally anyway.
+That last measurement was taken with a stand-in relay *outside* the game, which is why it
+needed the blob rewritten: something had to be dialled. With the agent inside the process
+the question changes shape — the address is a key the hook resolves, and the client
+already holds the room's player records, so the table may be built there. **That is open
+until the agent's first run**, and the wrong way to settle it is to build the per-recipient
+patching first and never find out.
 
 ## The web lobby
 
@@ -222,11 +239,17 @@ gateway keeps writing `logs/latest.log` as well, because that is the file that g
    was replayed to a client joining the game's chat port afterwards, and a line said on
    that port appeared in the browser as it was said. `tools/test-services.ts` holds the
    same journey as thirty-odd checks. What is NOT done: a browser player does not appear in
-   the game's own player panel — that list is `GROUP_INFO`, which only the lobby fills — and
-   the browser has no account behind its name yet.
+   the game's own player panel — that list is `GROUP_INFO`, which only the lobby fills.
+   The browser logs in with the game's account (see above); what it still lacks is a way
+   to be seen from inside the game.
 2. **The agent and the relay, locally**: three copies of the game, three agents, one
-   relay, everything on `127.0.0.1`, no tunnel and no 443. Per-recipient blob patching
-   turns the debug `--probe-peer-address` into the real thing.
+   relay, everything on `127.0.0.1`, no tunnel and no 443. In order:
+   - **the lobby's half, which needs no game**: the gateway tells the core who is in a
+     room as it fills, so the relay's one question has an answer; and an agent's secret is
+     issued rather than registered by hand;
+   - **the agent**, in C, in `homm5-editor-net/native/net/` — WinHTTP for the WebSocket,
+     a hook on the socket the game plays on;
+   - **then three copies**, and only then whatever the addressing turns out to need.
 3. **The tunnel**: cloudflared in front, the agent's URL changes and nothing else does.
 4. **Two machines**, then a phone hotspot for a real CGNAT path.
 

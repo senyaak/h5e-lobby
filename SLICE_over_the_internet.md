@@ -1,7 +1,8 @@
 # SLICE — The lobby off this machine, and then onto the internet
 
-> **Status, 14.08.2026:** §2.1 done, §2.2 done on this machine, §3 done ahead of its
-> turn because the tunnel came with the install. The four services plus a cloudflared
+> **Status, 14.08.2026:** §2.1, §2.2 and §2.3 done, and §3 done ahead of its turn because
+> the tunnel came with the install. The gateway is two sockets now — `8080` TCP and
+> `40010` UDP — so the firewall question §2.2 leaves open is two lines, not fifteen. The four services plus a cloudflared
 > tunnel run as `senyaak-h5e-*` user units in the `~/Projects/tunnels` fleet
 > (`systemctl --user start senyaak-h5e.target`, `deploy/README.md`);
 > `https://h5e-lobby.example.com` is the lobby and `wss://relay-h5e.example.com/agent`
@@ -110,6 +111,13 @@ build and nothing to install). Units and `h5e.target` from `deploy/systemd/`, en
 `deploy/h5e-lobby.env.example`, and the firewall opened for the ports in §2.3 plus
 `8081` and `40200` — but **not** `40100`.
 
+With §2.3 done that is `8080/tcp` and `40010/udp`, and nothing else:
+
+```bash
+sudo ufw allow from 192.168.178.0/24 to any port 8080 proto tcp
+sudo ufw allow from 192.168.178.0/24 to any port 40010 proto udp
+```
+
 Not that way here. `deploy/systemd/` is for a host of its own (`/opt`, a `h5e` user,
 root); this machine already has a fleet, so the four went into it as `senyaak-h5e-*`
 **user** units in `~/Projects/tunnels/systemd/`, running the working copy at
@@ -128,7 +136,7 @@ Two corrections to the paragraph above, learnt by doing it:
   another machine yet. A game on this same box is unaffected — its traffic to this box's
   own LAN address goes over `lo`, which ufw lets through.
 
-### 2.3. Nine listening ports become one
+### 2.3. Nine listening ports become one — DONE (14.08.2026)
 
 **This is lobby-side work and has nothing to do with the agent.** Two separate axes get
 confused easily: how many ports the fleet's host must allow (this section — the gateway
@@ -224,6 +232,36 @@ HTTP request too (a WebSocket handshake is a `GET`), so if the last step is take
 could share the same listener as well, told apart by path. That is what "one port"
 could actually mean here — the whole product on one number, plus the same number in UDP.
 
+**How it came out.** All five steps, in that order, one commit each. Fifteen sockets are
+two: **`8080` in TCP** — the ini, the router, the proxy, the lobby and chat — and
+**`40010` in UDP** for the mirror and the CD-key window. The classifier is
+`services/gateway/desk.ts`, driven in `tools/test-net.ts` by the KEY_EXCHANGE the client
+really sent, a real wrapped IRC line, the recorded SRP SYN and FIN, and the halves of the
+first two; live, a key exchange in one write and in two, a NICK, a CD-key challenge and a
+SYN all landed at the right desk.
+
+Four things worth knowing, three of them departures from the plan above:
+
+- **The shared number is the ini's, `8080`, not the router's `40000`.** `http_proxy` is
+  written by hand into each copy's `run-net.bat`, every desk address is read out of the
+  ini we serve — so keeping the hand-written one means the game side needs **no edit at
+  all**, where the other way round wanted three bat files changed.
+- **UDP stays on `40010`** rather than moving to `8080` as well. `lobby.ts` writes the
+  mirror's port into the room description as the address others are told to dial, so
+  making the two literally equal means threading it through `playerInfo` and its callers.
+  It buys one firewall line; it is not that step's business. The literal is at least gone:
+  both files now read `NAT_PORT` from `nat-service.ts`.
+- **`CDKeyServerLauncher` on `40021` went too**, which is the sixth dead socket — the
+  table above accounts for five. Its number became the CD-key desk's own, so the ini still
+  names a launcher and nothing answers nothing.
+- **The CD-key type byte does not decide.** `cdkey-service.ts` reads the request out of
+  the body and has never looked at `d3`; our own recorded requests carry a different byte.
+  The length that adds up is the test, with the mirror's short-datagram echo tried last.
+
+What is still open is the one real unknown the plan named: whether the client accepts a
+wait-module address equal to the connection it is already on. That is answered by a game
+logging in, not by us.
+
 **And none of this touches a player's machine.** The peer port each game listens on
 (`8888`, `8889`, `8890` here) needs nothing opened and nothing forwarded — its traffic
 leaves over the agent's outbound WebSocket. That is what the relay bought, and it is
@@ -248,8 +286,9 @@ relay wss://relay-h5e.example.com/agent
 ```
 
 The first is `H5E_HOST` from `~/.config/h5e-lobby.env` and has to be an address the game
-can dial — it changes here and in the bat file together, and its port changes again if
-§2.3's last step folds HTTP in. The second is already the internet one, so the relay half
+can dial — it changes here and in the bat file together. Its **port** does not change any
+more, which is why §2.3 put every desk on the ini's own number: `8080` is now the whole
+of what the game dials in TCP. The second is already the internet one, so the relay half
 of this stage needs no LAN at all.
 
 ### 2.5. How to know the stage worked

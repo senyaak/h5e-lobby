@@ -32,6 +32,27 @@ import { readFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+/**
+ * A suite that hangs says nothing, and nothing is worse than a red line.
+ *
+ * This came from a sabotage run that never returned: the defect being sabotaged also kept
+ * a socket open, so `close()` waited for ever and forty minutes passed before anybody
+ * noticed there was no verdict.
+ *
+ * It is deliberately NOT unref'd. A hang comes in two shapes — a loop still holding a
+ * handle, and a loop gone empty under a promise that will never settle — and an unref'd
+ * timer only ever catches the first: in the second Node just leaves, quietly, with a code
+ * nobody reads as "this hung". Keeping it alive costs nothing here because both suites end
+ * by calling `process.exit` themselves.
+ */
+const WATCHDOG_MS = 5 * 60 * 1000;
+setTimeout(() => {
+  console.log(`
+!! this suite has been running for ${WATCHDOG_MS / 1000}s and is not moving — something is holding a handle open
+`);
+  process.exit(2);
+}, WATCHDOG_MS);
+
 let failures = 0;
 function check(name: string, ok: boolean, detail = ''): void {
   console.log(`  ${ok ? 'ok  ' : 'FAIL'}  ${name}${detail ? ' — ' + detail : ''}`);

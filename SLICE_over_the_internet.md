@@ -8,8 +8,9 @@
 > `https://h5e-lobby.example.com` is the lobby and `wss://relay-h5e.example.com/agent`
 > is the relay, both answering `/health` over a real certificate. **Not** done, and it is
 > the part only a game can do: no game has played through any of this yet — the two
-> client-side files (§2.4) still point nowhere, §2.5 has not been read off, the firewall
-> is still closed, and stage three is untouched.
+> client-side files (§2.4) still point nowhere, the rest of §2.5 has not been read off,
+> and stage three is untouched. The firewall is not in the way — `ufw` here is installed
+> but disabled, and the desks answer over the LAN as they are.
 >
 > What IS built and measured is the local half — four services, three copies of the game,
 > every peer datagram carried by our own relay ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
@@ -113,7 +114,12 @@ build and nothing to install). Units and `h5e.target` from `deploy/systemd/`, en
 `deploy/h5e-lobby.env.example`, and the firewall opened for the ports in §2.3 plus
 `8081` and `40200` — but **not** `40100`.
 
-With §2.3 done that is `8080`, in both protocols, and nothing else:
+With §2.3 done that would be `8080` and nothing else, in both protocols. **On this
+machine there is nothing to open**: `ufw` is installed and its unit is `active`, but
+`/etc/ufw/ufw.conf` says `ENABLED=no`, so it loads no rules at all — the `DROP` default
+policy and the empty `user.rules` are what *would* apply if it were switched on. Checked
+from off the loopback path, from a container on `docker0`: the ini comes back from
+`192.168.178.23:8080`. If it is ever enabled, this is the whole of what the gateway needs:
 
 ```bash
 sudo ufw allow from 192.168.178.0/24 to any port 8080
@@ -132,10 +138,10 @@ Two corrections to the paragraph above, learnt by doing it:
 - **`8081` and `40200` do NOT need opening.** cloudflared dials them from inside the
   host; nothing arrives at them from outside. The only firewall question is the gateway's
   ports — which is exactly why §2.3 is worth doing before anything is opened at all.
-- The firewall here is untouched and closed: `ufw` is active with
-  `DEFAULT_INPUT_POLICY="DROP"` and **no** user rules, so no desk is reachable from
-  another machine yet. A game on this same box is unaffected — its traffic to this box's
-  own LAN address goes over `lo`, which ufw lets through.
+- The firewall here turns out not to be one: `ufw`'s unit is `active`, but the tool is
+  `ENABLED=no` and enforces nothing. The desks are reachable from the LAN as they stand.
+  An earlier line here said the opposite, on the strength of the unit's state and the
+  default policy in `/etc/default/ufw` — neither of which means a rule is loaded.
 
 ### 2.3. Nine listening ports become one — DONE (14.08.2026)
 
@@ -303,7 +309,9 @@ of this stage needs no LAN at all.
 Same three readings as the local runs, and they are all in logs we already write:
 
 - the gateway answers the ini over the LAN (`200`, `[Servers]` with the laptop's
-  address in it), the game logs in and chat reaches the browser;
+  address in it) — **the half of this that needs no game is done**: fetched from a
+  container on another interface, `200` with `RouterIP0=192.168.178.23` and every desk on
+  `8080` — the game logs in and chat reaches the browser;
 - `rooms -> core: … at [Senyaak@<lan>:8888, …]` in `logs/gateway-latest.log` — the
   endpoints are what lets the relay address anybody;
 - no `named …, which is nobody here` in `logs/relay-latest.log`, and in each game's log

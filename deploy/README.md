@@ -81,7 +81,9 @@ goes through `http_proxy`, which has to be a routable address. So the relay reac
 internet as `wss://relay-h5e.example.com/agent` while the game still dials `H5E_HOST`
 directly — SLICE §1. What that costs the host is one number now rather than fifteen
 sockets: `8080`, in TCP and UDP, because the desks are told apart by what a connection
-says first (`services/gateway/desk.ts`) and not by the port it arrived on.
+says first (`services/gateway/desk.ts`) and not by the port it arrived on. That one number
+is what a firewall has to allow, if there is one — on this machine `ufw` is installed but
+`ENABLED=no`, so nothing is filtered.
 
 ## Day to day
 

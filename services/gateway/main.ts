@@ -61,23 +61,29 @@ interface Service {
   prefix: string;
   port: number;
   launcher: number | null;
-  kind: 'tcp' | 'tcp+udp';
+  /**
+   * Which sockets are opened. Not what the desk could conceivably speak — what it was
+   * measured speaking, and what there is a handler for here. The ini advertises a desk
+   * once; whether that address answers in TCP, in UDP or in both is ours to say, and the
+   * client only ever dials one of them.
+   */
+  listens: ('tcp' | 'udp')[];
 }
 
 const SERVICES: Service[] = [
-  { prefix: 'Router', port: 40000, launcher: 40000, kind: 'tcp+udp' },
-  { prefix: 'NATServer', port: 40010, launcher: null, kind: 'tcp+udp' },
-  { prefix: 'CDKeyServer', port: 40020, launcher: 40021, kind: 'tcp+udp' },
-  { prefix: 'IRC', port: 6667, launcher: null, kind: 'tcp' },
+  { prefix: 'Router', port: 40000, launcher: 40000, listens: ['tcp'] },
+  { prefix: 'NATServer', port: 40010, launcher: null, listens: ['udp'] },
+  { prefix: 'CDKeyServer', port: 40020, launcher: 40020, listens: ['udp'] },
+  { prefix: 'IRC', port: 6667, launcher: null, listens: ['tcp'] },
 ];
 
 // Not in the ini: the client is told where this one lives when it asks for a
 // module (PROXY_HANDLER). It is where persistent data and the ladder sit.
-const PROXY: Service = { prefix: 'Proxy', port: 40030, launcher: 40030, kind: 'tcp' };
+const PROXY: Service = { prefix: 'Proxy', port: 40030, launcher: 40030, listens: ['tcp'] };
 
 // Also not in the ini: where the lobby itself lives, handed over when the client
 // asks to join a lobby server.
-const LOBBY: Service = { prefix: 'Lobby', port: 40040, launcher: null, kind: 'tcp' };
+const LOBBY: Service = { prefix: 'Lobby', port: 40040, launcher: null, listens: ['tcp'] };
 
 function serversIni(): string {
   const lines = ['[Servers]'];
@@ -306,143 +312,154 @@ async function replayHistory(channel: string, socket: Socket): Promise<void> {
   }
 }
 
+/** One TCP desk: the socket the game connects to, and everything it says once it has. */
+function openTcpDesk(label: string, port: number): void {
+  createTcpServer((socket: Socket) => {
+    const id = ++connections;
+    const peer = `${socket.remoteAddress}:${socket.remotePort}`;
+    log(`TCP  #${id} ${label}:${port} <- ${peer} connected`);
+    // Four desks speak the GS protocol; the chat port speaks IRC in a wrapper.
+    const session =
+      label === 'Router' || label === 'RouterLauncher'
+        ? router.session('router')
+        : label === 'Proxy' || label === 'ProxyLauncher'
+          ? router.session('proxy')
+          : label === 'Lobby'
+            ? router.session('lobby')
+            : null;
+    // Which desk this socket is, so a reply can go out on a connection other than
+    // the one that asked. Only the newest socket per desk is kept: with one player
+    // there is only ever one of each.
+    if (session) {
+      // How to write on THIS connection — which is what a second player needs and the
+      // desks map cannot give: it holds one socket per desk name, so two players'
+      // Lobby sockets are the same name and the second replaced the first.
+      session.send = (bytes: Buffer) => {
+        socket.write(bytes);
+        log(`TCP  #${id} ${label}:${port} -> ${bytes.length} bytes, sent unasked\n${hexDump(bytes)}`);
+      };
+      router.desks.set(label, (bytes: Buffer) => {
+        socket.write(bytes);
+        log(`TCP  #${id} ${label}:${port} -> ${bytes.length} bytes, asked for by another desk\n${hexDump(bytes)}`);
+      });
+      socket.on('close', () => {
+        session.send = null;
+        if (router.desks.get(label)) router.desks.delete(label);
+      });
+    }
+    const chat = label === 'IRC' ? irc.connection() : null;
+    if (chat) {
+      chatSockets.set(chat, socket);
+      socket.on('close', () => {
+        chatSockets.delete(chat);
+        irc.drop(chat);
+      });
+    }
+    socket.on('data', (data: Buffer) => {
+      log(`TCP  #${id} ${label}:${port} <- ${data.length} bytes\n${hexDump(data)}`);
+      if (chat) {
+        for (const event of chat.receive(data)) {
+          log(`IRC  #${id} ${event.note}`);
+          for (const answer of event.replies) socket.write(answer);
+          // What one player says reaches whoever else is in that channel.
+          for (const out of event.broadcast) {
+            for (const other of irc.others(out.channel, chat)) chatSockets.get(other)?.write(out.line);
+          }
+          // And it reaches the core, which keeps it and passes it to the browser.
+          if (event.said) {
+            core.post({
+              channel: event.said.channel,
+              nick: fromGameText(event.said.nick),
+              text: fromGameText(event.said.text),
+              origin: 'game',
+              sender: GATEWAY_ID,
+            });
+          }
+          if (event.joined) void replayHistory(event.joined, socket);
+        }
+        return;
+      }
+      if (!session) return;
+      let events;
+      try {
+        events = session.receive(data);
+      } catch (err) {
+        log(`TCP  #${id} ${label}:${port} !! ${(err as Error).message}`);
+        return;
+      }
+      for (const event of events) {
+        log(`RTR  #${id} ${event.note}`);
+        for (const answer of event.replies) {
+          socket.write(answer);
+          log(`TCP  #${id} ${label}:${port} -> ${answer.length} bytes\n${hexDump(answer)}`);
+        }
+      }
+    });
+    socket.on('close', () => {
+      const gone = session?.close();
+      if (gone) log(`RTR  #${id} ${gone}`);
+      log(`TCP  #${id} ${label}:${port} closed`);
+    });
+    socket.on('error', (err: Error) => log(`TCP  #${id} ${label}:${port} error: ${err.message}`));
+  })
+    .on('error', (err: Error) => log(`TCP  ${label}:${port} listen failed: ${err.message}`))
+    .listen(port, bind, () => log(`tcp  ${label} on ${bind}:${port}`));
+}
+
+/** One UDP desk: the NAT mirror or the CD-key window, each keeping its own state. */
+function openUdpDesk(label: string, port: number): void {
+  // Two of the UDP services answer: the NAT mirror and the CD-key desk. Each
+  // keeps its own state, so the instance is made once per port, not per
+  // datagram.
+  const nat = label === 'NATServer' ? new NatService(port) : null;
+  const service = nat
+    ? { tag: 'NAT', handle: (data: Buffer, from: { address: string; port: number }) => nat.handle(data, from) }
+    : label === 'CDKeyServer'
+      ? { tag: 'KEY', handle: (data: Buffer, from: { address: string; port: number }) => cdkey.handle(data, from) }
+      : null;
+  const udp = createSocket('udp4');
+  udp.on('message', (data: Buffer, from) => {
+    log(`UDP  ${label}:${port} <- ${from.address}:${from.port}, ${data.length} bytes\n${hexDump(data)}`);
+    if (!service) return;
+    let result;
+    try {
+      result = service.handle(data, from);
+    } catch (err) {
+      log(`UDP  ${label}:${port} !! ${(err as Error).message}`);
+      return;
+    }
+    log(`${service.tag}  ${result.note}`);
+    for (const reply of result.replies) {
+      udp.send(reply, from.port, from.address);
+      log(`UDP  ${label}:${port} -> ${from.address}:${from.port}, ${reply.length} bytes\n${hexDump(reply)}`);
+    }
+    // Some answers go out a second time a moment later — see `againAfterMs`
+    // in services/gateway/nat-service.ts for the race that makes that necessary.
+    const again = (result as { againAfterMs?: number }).againAfterMs;
+    if (again) {
+      setTimeout(() => {
+        for (const reply of result.replies) udp.send(reply, from.port, from.address);
+        log(`UDP  ${label}:${port} -> ${from.address}:${from.port}, the same ${result.replies.length} answer(s) again`);
+      }, again);
+    }
+  });
+  udp.on('error', (err: Error) => log(`UDP  ${label}:${port} bind failed: ${err.message}`));
+  udp.bind(port, bind, () => log(`udp  ${label} on ${bind}:${port}`));
+}
+
+// A desk opens the sockets it was measured using and no others (SLICE §2.3, step 2).
+// The ones we used to bind and nobody ever spoke to — TCP on the NAT mirror and on the
+// CD-key window, UDP on the router and on the launchers — are gone, and closing them is
+// how it gets proved they were dead. A client that turns up at one now hears a refusal
+// instead of a silence, which is the loudest way there is of being told.
 for (const service of [...SERVICES, PROXY, LOBBY]) {
   // A `Set`, because a launcher that shares its desk's number is one socket and one
   // label, not two of each. When they differ this is still two sockets, as it was.
   const ports = [...new Set([service.port, service.launcher].filter((p): p is number => p !== null))];
   for (const port of ports) {
     const label = port === service.port ? service.prefix : `${service.prefix}Launcher`;
-
-    createTcpServer((socket: Socket) => {
-      const id = ++connections;
-      const peer = `${socket.remoteAddress}:${socket.remotePort}`;
-      log(`TCP  #${id} ${label}:${port} <- ${peer} connected`);
-      // Four desks speak the GS protocol; the chat port speaks IRC in a wrapper.
-      const session =
-        label === 'Router' || label === 'RouterLauncher'
-          ? router.session('router')
-          : label === 'Proxy' || label === 'ProxyLauncher'
-            ? router.session('proxy')
-            : label === 'Lobby'
-              ? router.session('lobby')
-              : null;
-      // Which desk this socket is, so a reply can go out on a connection other than
-      // the one that asked. Only the newest socket per desk is kept: with one player
-      // there is only ever one of each.
-      if (session) {
-        // How to write on THIS connection — which is what a second player needs and the
-        // desks map cannot give: it holds one socket per desk name, so two players'
-        // Lobby sockets are the same name and the second replaced the first.
-        session.send = (bytes: Buffer) => {
-          socket.write(bytes);
-          log(`TCP  #${id} ${label}:${port} -> ${bytes.length} bytes, sent unasked\n${hexDump(bytes)}`);
-        };
-        router.desks.set(label, (bytes: Buffer) => {
-          socket.write(bytes);
-          log(`TCP  #${id} ${label}:${port} -> ${bytes.length} bytes, asked for by another desk\n${hexDump(bytes)}`);
-        });
-        socket.on('close', () => {
-          session.send = null;
-          if (router.desks.get(label)) router.desks.delete(label);
-        });
-      }
-      const chat = label === 'IRC' ? irc.connection() : null;
-      if (chat) {
-        chatSockets.set(chat, socket);
-        socket.on('close', () => {
-          chatSockets.delete(chat);
-          irc.drop(chat);
-        });
-      }
-      socket.on('data', (data: Buffer) => {
-        log(`TCP  #${id} ${label}:${port} <- ${data.length} bytes\n${hexDump(data)}`);
-        if (chat) {
-          for (const event of chat.receive(data)) {
-            log(`IRC  #${id} ${event.note}`);
-            for (const answer of event.replies) socket.write(answer);
-            // What one player says reaches whoever else is in that channel.
-            for (const out of event.broadcast) {
-              for (const other of irc.others(out.channel, chat)) chatSockets.get(other)?.write(out.line);
-            }
-            // And it reaches the core, which keeps it and passes it to the browser.
-            if (event.said) {
-              core.post({
-                channel: event.said.channel,
-                nick: fromGameText(event.said.nick),
-                text: fromGameText(event.said.text),
-                origin: 'game',
-                sender: GATEWAY_ID,
-              });
-            }
-            if (event.joined) void replayHistory(event.joined, socket);
-          }
-          return;
-        }
-        if (!session) return;
-        let events;
-        try {
-          events = session.receive(data);
-        } catch (err) {
-          log(`TCP  #${id} ${label}:${port} !! ${(err as Error).message}`);
-          return;
-        }
-        for (const event of events) {
-          log(`RTR  #${id} ${event.note}`);
-          for (const answer of event.replies) {
-            socket.write(answer);
-            log(`TCP  #${id} ${label}:${port} -> ${answer.length} bytes\n${hexDump(answer)}`);
-          }
-        }
-      });
-      socket.on('close', () => {
-        const gone = session?.close();
-        if (gone) log(`RTR  #${id} ${gone}`);
-        log(`TCP  #${id} ${label}:${port} closed`);
-      });
-      socket.on('error', (err: Error) => log(`TCP  #${id} ${label}:${port} error: ${err.message}`));
-    })
-      .on('error', (err: Error) => log(`TCP  ${label}:${port} listen failed: ${err.message}`))
-      .listen(port, bind, () => log(`tcp  ${label} on ${bind}:${port}`));
-
-    if (service.kind === 'tcp+udp') {
-      // Two of the UDP services answer: the NAT mirror and the CD-key desk. Each
-      // keeps its own state, so the instance is made once per port, not per
-      // datagram.
-      const nat = label === 'NATServer' ? new NatService(port) : null;
-      const service = nat
-        ? { tag: 'NAT', handle: (data: Buffer, from: { address: string; port: number }) => nat.handle(data, from) }
-        : label === 'CDKeyServer'
-          ? { tag: 'KEY', handle: (data: Buffer, from: { address: string; port: number }) => cdkey.handle(data, from) }
-          : null;
-      const udp = createSocket('udp4');
-      udp.on('message', (data: Buffer, from) => {
-        log(`UDP  ${label}:${port} <- ${from.address}:${from.port}, ${data.length} bytes\n${hexDump(data)}`);
-        if (!service) return;
-        let result;
-        try {
-          result = service.handle(data, from);
-        } catch (err) {
-          log(`UDP  ${label}:${port} !! ${(err as Error).message}`);
-          return;
-        }
-        log(`${service.tag}  ${result.note}`);
-        for (const reply of result.replies) {
-          udp.send(reply, from.port, from.address);
-          log(`UDP  ${label}:${port} -> ${from.address}:${from.port}, ${reply.length} bytes\n${hexDump(reply)}`);
-        }
-        // Some answers go out a second time a moment later — see `againAfterMs`
-        // in services/gateway/nat-service.ts for the race that makes that necessary.
-        const again = (result as { againAfterMs?: number }).againAfterMs;
-        if (again) {
-          setTimeout(() => {
-            for (const reply of result.replies) udp.send(reply, from.port, from.address);
-            log(`UDP  ${label}:${port} -> ${from.address}:${from.port}, the same ${result.replies.length} answer(s) again`);
-          }, again);
-        }
-      });
-      udp.on('error', (err: Error) => log(`UDP  ${label}:${port} bind failed: ${err.message}`));
-      udp.bind(port, bind, () => log(`udp  ${label} on ${bind}:${port}`));
-    }
+    if (service.listens.includes('tcp')) openTcpDesk(label, port);
+    if (service.listens.includes('udp')) openUdpDesk(label, port);
   }
 }
 

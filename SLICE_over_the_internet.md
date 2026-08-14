@@ -169,6 +169,16 @@ and a scatter of one-line edits — `nat-service.ts:67` and `lobby.ts:669` both 
 change, and nothing in `router-service.ts`'s message handling moves** — the roles
 already exist; only the way a connection is given one changes.
 
+**The game side needs almost nothing for any of this.** Every desk port reaches the
+client through the ini, so it takes whatever we say. The agent keeps a list of desk
+ports to tell a desk from a player, reads it from the same ini, matches by number alone
+and already refuses a duplicate (`native/net/agent.c:88-95`), so nine numbers collapsing
+to one leaves it with a one-entry list and nothing to change. Two small things do follow
+from that, though: `run-net.bat`'s `http_proxy` names the ini's port by hand, so it
+changes if the last step folds HTTP in; and because the agent separates desks from peers
+**by port and nothing else**, the number chosen for the desks must not be one a game
+also listens on for peers (`8888` upward here).
+
 Worth noticing at the end of it: the browser lobby and the relay are both reached by an
 HTTP request too (a WebSocket handshake is a `GET`), so if the last step is taken they
 could share the same listener as well, told apart by path. That is what "one port"

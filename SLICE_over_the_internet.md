@@ -96,6 +96,12 @@ build and nothing to install). Units and `h5e.target` from `deploy/systemd/`, en
 
 ### 2.3. Nine listening ports become one
 
+**This is lobby-side work and has nothing to do with the agent.** Two separate axes get
+confused easily: how many ports the fleet's host must allow (this section — the gateway
+only), and how a player's peer traffic gets out (the agent and the relay, done and
+measured). Neither waits on the other, and a change here must not turn into a change
+there.
+
 The number of DESKS is Ubisoft's — their lobby is split up and the client dials each
 part separately. The port NUMBERS are ours: the client learns every one of them from
 the ini we serve, from the wait-module reply, from `PROXY_HANDLER` and from the

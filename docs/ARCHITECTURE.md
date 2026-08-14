@@ -258,11 +258,24 @@ gateway keeps writing `logs/latest.log` as well, because that is the file that g
      665 carried by the relay, 665 handed back, and exactly **one** datagram arriving directly
      — the first handshake, before the relay was up. So no stand-in addresses and no
      per-recipient patching: that question is closed by there being no address to rewrite.
-   - **three copies** — first attempt lagged and dropped a connection, for two reasons of
-     ours: the fleet was still running a build whose room list carried no endpoints, so the
-     relay sent every datagram to everybody in the room; and `roomEndpoints` walked the
-     description as fields, which does not survive a real one. Both fixed, **the run has not
-     been repeated yet**.
+   - ~~**three copies**~~ — **done 14.08.2026: three of them played.** The first attempt
+     lagged and dropped a connection, and two things were wrong on our side: the fleet was
+     running a build whose room list carried no endpoints, so the relay sent every datagram
+     to everybody in the room; and `roomEndpoints` walked the description as fields, which
+     does not survive a real one. Both fixed. Then two runs, and what they prove is not the
+     same thing:
+     - **three players, a whole game, no complaints** — but on the fleet from before the
+       routing, so the relay was still fanning every datagram out to the room. All three
+       carried heavy traffic (131369 / 86685 / 137738 out, 135526 / 129785 / 141575 back).
+       Worth keeping: the fan-out on its own is not what made the first attempt unplayable.
+     - **the addressing, on the fixed fleet** — the room list reached the core with all
+       three endpoints (`at 192.168.178.27:8888, :8889, :8890`), the relay logged no
+       `named …, which is nobody here`, and the counters came out one-to-one: 17794 carried
+       against 17795 handed back, 17801 against 17789. All three were playing; the third
+       was put back to the lobby early on (`ProcessGameLeave`, an orderly leave — nothing
+       direct arrived, nothing errored, `DISCONNECTIONS=0`), which is why his counter stops
+       at 357 while the other two go on. So the precise path has carried three, but the
+       long game so far is the one on the old fleet.
    - what is still missing for a real game between strangers: a hole punch (today EVERY peer
      datagram goes through the relay), and the tunnel.
 3. **The tunnel**: cloudflared in front, the agent's URL changes and nothing else does.

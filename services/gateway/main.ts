@@ -27,6 +27,7 @@ import { GUEST, GUEST_LOBBY, RouterService } from './router-service.ts';
 import { CdKeyService } from './cdkey-service.ts';
 import { IrcConnection, IrcService, chatLine, frame, fromGameText, toGameText } from './irc.ts';
 import { probePeerAddress, probeRoomFields, roomEndpoints } from './lobby.ts';
+import { classifyDesk, type Desk } from './desk.ts';
 import { DEFAULT_LOBBIES, lobbyChannel } from '../../shared/channels.ts';
 
 const settings = config();
@@ -70,20 +71,31 @@ interface Service {
   listens: ('tcp' | 'udp')[];
 }
 
+/**
+ * The one number every TCP desk is at. It was four (`40000`, `6667`, `40030`, `40040`)
+ * and they are one, because the desk a connection wants is in the first thing it says
+ * and not in the port it said it on (`services/gateway/desk.ts`). The number is the
+ * router's own, which is what the ini named first anyway.
+ *
+ * It must not be one a game listens on for its peers — `8888` upward here — because the
+ * agent tells a desk from a player by port and nothing else.
+ */
+const DESKS = 40000;
+
 const SERVICES: Service[] = [
-  { prefix: 'Router', port: 40000, launcher: 40000, listens: ['tcp'] },
+  { prefix: 'Router', port: DESKS, launcher: DESKS, listens: ['tcp'] },
   { prefix: 'NATServer', port: 40010, launcher: null, listens: ['udp'] },
   { prefix: 'CDKeyServer', port: 40020, launcher: 40020, listens: ['udp'] },
-  { prefix: 'IRC', port: 6667, launcher: null, listens: ['tcp'] },
+  { prefix: 'IRC', port: DESKS, launcher: null, listens: ['tcp'] },
 ];
 
 // Not in the ini: the client is told where this one lives when it asks for a
 // module (PROXY_HANDLER). It is where persistent data and the ladder sit.
-const PROXY: Service = { prefix: 'Proxy', port: 40030, launcher: 40030, listens: ['tcp'] };
+const PROXY: Service = { prefix: 'Proxy', port: DESKS, launcher: DESKS, listens: ['tcp'] };
 
 // Also not in the ini: where the lobby itself lives, handed over when the client
 // asks to join a lobby server.
-const LOBBY: Service = { prefix: 'Lobby', port: 40040, launcher: null, listens: ['tcp'] };
+const LOBBY: Service = { prefix: 'Lobby', port: DESKS, launcher: null, listens: ['tcp'] };
 
 function serversIni(): string {
   const lines = ['[Servers]'];
@@ -312,17 +324,66 @@ async function replayHistory(channel: string, socket: Socket): Promise<void> {
   }
 }
 
-/** One TCP desk: the socket the game connects to, and everything it says once it has. */
-function openTcpDesk(label: string, port: number): void {
+/**
+ * One listener, every TCP desk.
+ *
+ * The desk is not the port any more — it is what the connection says first
+ * (`services/gateway/desk.ts`). Nothing can be built at connect time, then: the session
+ * or the chat connection is made once the first message has been read, and that first
+ * message is then handed on as if it had arrived afterwards. The rest of this is what it
+ * always was; only the way a connection is given its role changed.
+ */
+function openDeskListener(port: number): void {
   createTcpServer((socket: Socket) => {
     const id = ++connections;
     const peer = `${socket.remoteAddress}:${socket.remotePort}`;
-    log(`TCP  #${id} ${label}:${port} <- ${peer} connected`);
-    // Four desks speak the GS protocol; the chat port speaks IRC in a wrapper.
+    log(`TCP  #${id} :${port} <- ${peer} connected`);
+    /** Set the moment the desk is known; until then every read goes into `waiting`. */
+    let take: ((data: Buffer) => void) | null = null;
+    let waiting: Buffer | null = null;
+
+    socket.on('data', (data: Buffer) => {
+      if (take) {
+        take(data);
+        return;
+      }
+      waiting = waiting ? Buffer.concat([waiting, data]) : data;
+      const verdict = classifyDesk(waiting);
+      if (verdict.wait) {
+        log(`TCP  #${id} :${port} <- ${waiting.length} bytes, undecided — ${verdict.note}`);
+        return;
+      }
+      if (!verdict.desk) {
+        log(`TCP  #${id} :${port} !! ${verdict.note} — closing\n${hexDump(waiting)}`);
+        socket.end();
+        return;
+      }
+      log(`TCP  #${id} ${verdict.desk}:${port} — ${verdict.note}`);
+      take = attach(verdict.desk, socket, id, port);
+      const first = waiting;
+      waiting = null;
+      take(first);
+    });
+
+    socket.on('error', (err: Error) => log(`TCP  #${id} :${port} error: ${err.message}`));
+  })
+    .on('error', (err: Error) => log(`TCP  desks:${port} listen failed: ${err.message}`))
+    .listen(port, bind, () => log(`tcp  desks on ${bind}:${port}`));
+}
+
+/**
+ * Give a classified connection its desk, and hand back how to feed it.
+ *
+ * Everything here used to happen at connect time, when the label came from the port.
+ * The only change is when it runs — after the first message rather than before it.
+ */
+function attach(label: Desk, socket: Socket, id: number, port: number): (data: Buffer) => void {
+  {
+    // Four desks speak the GS protocol; the chat one speaks IRC in a wrapper.
     const session =
-      label === 'Router' || label === 'RouterLauncher'
+      label === 'Router'
         ? router.session('router')
-        : label === 'Proxy' || label === 'ProxyLauncher'
+        : label === 'Proxy'
           ? router.session('proxy')
           : label === 'Lobby'
             ? router.session('lobby')
@@ -355,7 +416,12 @@ function openTcpDesk(label: string, port: number): void {
         irc.drop(chat);
       });
     }
-    socket.on('data', (data: Buffer) => {
+    socket.on('close', () => {
+      const gone = session?.close();
+      if (gone) log(`RTR  #${id} ${gone}`);
+      log(`TCP  #${id} ${label}:${port} closed`);
+    });
+    return (data: Buffer) => {
       log(`TCP  #${id} ${label}:${port} <- ${data.length} bytes\n${hexDump(data)}`);
       if (chat) {
         for (const event of chat.receive(data)) {
@@ -394,16 +460,8 @@ function openTcpDesk(label: string, port: number): void {
           log(`TCP  #${id} ${label}:${port} -> ${answer.length} bytes\n${hexDump(answer)}`);
         }
       }
-    });
-    socket.on('close', () => {
-      const gone = session?.close();
-      if (gone) log(`RTR  #${id} ${gone}`);
-      log(`TCP  #${id} ${label}:${port} closed`);
-    });
-    socket.on('error', (err: Error) => log(`TCP  #${id} ${label}:${port} error: ${err.message}`));
-  })
-    .on('error', (err: Error) => log(`TCP  ${label}:${port} listen failed: ${err.message}`))
-    .listen(port, bind, () => log(`tcp  ${label} on ${bind}:${port}`));
+    };
+  }
 }
 
 /** One UDP desk: the NAT mirror or the CD-key window, each keeping its own state. */
@@ -452,16 +510,20 @@ function openUdpDesk(label: string, port: number): void {
 // CD-key window, UDP on the router and on the launchers — are gone, and closing them is
 // how it gets proved they were dead. A client that turns up at one now hears a refusal
 // instead of a silence, which is the loudest way there is of being told.
+//
+// And the TCP desks share a number now (step 3), so this is one listener however many
+// desks name it. `Set` on the numbers, not on the desks: if a desk is ever moved back to
+// one of its own, this loop opens a second listener for it and nothing else changes.
+const tcpPorts = new Set<number>();
 for (const service of [...SERVICES, PROXY, LOBBY]) {
-  // A `Set`, because a launcher that shares its desk's number is one socket and one
-  // label, not two of each. When they differ this is still two sockets, as it was.
   const ports = [...new Set([service.port, service.launcher].filter((p): p is number => p !== null))];
   for (const port of ports) {
-    const label = port === service.port ? service.prefix : `${service.prefix}Launcher`;
-    if (service.listens.includes('tcp')) openTcpDesk(label, port);
-    if (service.listens.includes('udp')) openUdpDesk(label, port);
+    if (service.listens.includes('tcp')) tcpPorts.add(port);
+    if (service.listens.includes('udp'))
+      openUdpDesk(port === service.port ? service.prefix : `${service.prefix}Launcher`, port);
   }
 }
+for (const port of tcpPorts) openDeskListener(port);
 
 log(`chat goes through the core at ${settings.coreUrl} — game clients here still hear each other if it is away`);
 log(`logging to ${log.session} — and to ${log.latest}, which is always this run`);

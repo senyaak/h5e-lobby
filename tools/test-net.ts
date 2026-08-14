@@ -24,6 +24,7 @@ import { Accounts } from '../services/core/rules/accounts.ts';
 import { Friends } from '../services/core/rules/friends.ts';
 import { openDatabase } from '../services/core/rules/database.ts';
 import { IrcService, chatLine, frame, unframe } from '../services/gateway/irc.ts';
+import { classifyDesk } from '../services/gateway/desk.ts';
 import { lobbyChannel } from '../shared/channels.ts';
 import { readFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -260,6 +261,41 @@ console.log('\nRSA key blobs, against the key a real client sent');
   check('our key round trips through the blob', parsePublicKey(publicKeyBlob(pair.publicKey)).modulus === pair.publicKey.modulus);
   const secret = Buffer.from('0123456789abcdef', 'utf8');
   check('a session key encrypted to us comes back', decryptWith(pair.privateKey, encryptTo(pair.publicKey, secret)).equals(secret));
+}
+
+console.log('\nWhich desk a connection is, from what it says first');
+{
+  // The four TCP desks share one port now (SLICE §2.3), so this is what decides which of
+  // them a connection wants. The router's case is the recorded packet itself; the others
+  // are built from the type each desk was measured opening with, which is the only part
+  // of the message the classifier is allowed to look at.
+  const opener = (type: number): Buffer =>
+    build({ property: Property.GS, priority: 0, type, sender: 8, receiver: 2, body: ['senyaak', 'secret'] });
+
+  check('the recorded KEY_EXCHANGE is the router', classifyDesk(ROUTER_KEY_EXCHANGE).desk === 'Router', classifyDesk(ROUTER_KEY_EXCHANGE).note);
+  check('a LOGIN is the proxy', classifyDesk(opener(MessageType.LOGIN)).desk === 'Proxy');
+  check('and so is a LOGINWAITMODULE', classifyDesk(opener(MessageType.LOGINWAITMODULE)).desk === 'Proxy');
+  check('a LOBBYSERVERLOGIN is the lobby', classifyDesk(opener(MessageType.LOBBYSERVERLOGIN)).desk === 'Lobby');
+  check('the ini fetch is HTTP', classifyDesk(Buffer.from('GET http://ubi.com/servers.ini HTTP/1.1\r\n', 'latin1')).desk === 'HTTP');
+
+  // Chat is what is left, and it has to survive being read as a GS header: the frame's
+  // u16 length in the top two bytes makes a size far bigger than the bytes that arrived.
+  const nick = frame('NICK Senyaak');
+  check('a wrapped IRC line is chat', classifyDesk(nick).desk === 'IRC', classifyDesk(nick).note);
+  check('and it is not mistaken for a size that fits', ((nick[0]! << 16) | (nick[1]! << 8) | nick[2]!) > nick.length);
+
+  // Half a header decides nothing, and neither does half a message.
+  check('two bytes are not enough to say', classifyDesk(ROUTER_KEY_EXCHANGE.subarray(0, 2)).wait);
+  check('a GET still arriving is not chat', classifyDesk(Buffer.from('GE', 'latin1')).wait);
+  const half = ROUTER_KEY_EXCHANGE.subarray(0, 20);
+  check('a message still arriving waits rather than falls through', classifyDesk(half).wait, classifyDesk(half).note);
+  check('and the wait says how much is still to come', classifyDesk(half).note.includes('20 here so far'), classifyDesk(half).note);
+
+  // The one thing it refuses: a message that IS a GS message but opens no desk. Guessing
+  // would put it in somebody's conversation and the log would not say which.
+  const alive = classifyDesk(Buffer.from('000006003a41', 'hex'));
+  check('a STILLALIVE opens no desk and is refused, not guessed at', alive.desk === null && !alive.wait, alive.note);
+  check('and the refusal names the type, for whoever reads the log', alive.note.includes('STILLALIVE'), alive.note);
 }
 
 console.log('\nRouter, driven by the recorded packet');

@@ -219,7 +219,7 @@ const HISTORY_COLOUR = 0x9a9a9a;
 /** Light blue: somebody who is in the browser and not in the game. */
 const WEB_COLOUR = 0x66ccff;
 
-const core = new CoreClient({ url: settings.coreUrl, token: settings.coreToken, service: 'gateway', log });
+const core = new CoreClient({ url: settings.coreUrl, service: 'gateway', log });
 
 core.onChat = (message, sender) => {
   if (sender === GATEWAY_ID) return; // already drawn, by the fan-out below

@@ -41,7 +41,6 @@ async function until(ready: () => boolean, ms = 3000): Promise<boolean> {
 /** The real list, the one the core publishes — not a copy of it that can drift. */
 const CHANNELS: ChannelInfo[] = gameChannels();
 const RANKED = lobbyChannel(2);
-const TOKEN = 'test-token';
 
 // ---------------------------------------------------------------------------------
 console.log('\nchat storage');
@@ -94,15 +93,15 @@ async function openBrowser(url: string, cookie = ''): Promise<Browser> {
 }
 
 const { db } = openDatabase(':memory:');
-const core = await startCore({ bind: '127.0.0.1', port: 0, db, token: TOKEN, channels: CHANNELS });
+const core = await startCore({ bind: '127.0.0.1', port: 0, db, channels: CHANNELS });
 
 // ---------------------------------------------------------------------------------
 console.log('\nthe core stays on loopback');
 // ---------------------------------------------------------------------------------
 {
   // `H5E_BIND` moved the other three off loopback so a second machine can reach them
-  // (SLICE §2.1). The core must not have come along: a token is what stands in front of
-  // it, and a token is a seatbelt, not a lock.
+  // (SLICE §2.1). The core must not have come along — nothing stands in front of it, so
+  // this bind IS the whole of its defence.
   const bound = core.server.address() as { address: string };
   check('the running core listens on loopback', bound.address === '127.0.0.1', bound.address);
 
@@ -114,7 +113,7 @@ console.log('\nthe core stays on loopback');
     // where it stands — a synchronous throw would go straight past a `.catch` on the
     // returned promise.
     const listening = Promise.resolve()
-      .then(() => startCore({ bind, port: 0, db, token: TOKEN, channels: CHANNELS }))
+      .then(() => startCore({ bind, port: 0, db, channels: CHANNELS }))
       .then(async (stray) => {
         await stray.close();
         return 'listened';
@@ -137,13 +136,13 @@ console.log('\nthe core stays on loopback');
 // object services/gateway/main.ts holds.
 const heard: { message: ChatMessage; sender?: string }[] = [];
 let presenceSeen: PresenceEntry[] = [];
-const gateway = new CoreClient({ url: core.url(), token: TOKEN, service: 'gateway' });
+const gateway = new CoreClient({ url: core.url(), service: 'gateway' });
 gateway.onChat = (message, sender) => heard.push(sender === undefined ? { message } : { message, sender });
 gateway.onPresence = (entries) => (presenceSeen = entries);
 gateway.start();
 check('the gateway reaches the core', await until(() => gateway.connected));
 
-const web = await startWeb({ bind: '127.0.0.1', port: 0, coreUrl: core.url(), coreToken: TOKEN });
+const web = await startWeb({ bind: '127.0.0.1', port: 0, coreUrl: core.url() });
 const pageUrl = `http://127.0.0.1:${web.port()}`;
 
 const page = await fetch(pageUrl);
@@ -317,20 +316,10 @@ check(
   `${duringThrottle.status} ${duringThrottle.reason}`,
 );
 
-// The token.
-const impostor = new CoreClient({ url: core.url(), token: 'not-the-token', service: 'gateway' });
-let welcomed = false;
-impostor.onConnected = () => (welcomed = true);
-impostor.start();
-await until(() => false, 300);
-impostor.post({ channel: RANKED, nick: 'nobody', text: 'let me in', origin: 'web' });
-await until(() => false, 200);
-check('a wrong token is not welcomed', !welcomed);
-check(
-  'and nothing it says is stored',
-  core.core.chat.history(RANKED).every((message) => message.nick !== 'nobody'),
-);
-impostor.stop();
+// There was a shared token here and a check that a wrong one was refused. Both went on
+// 15.08.2026: the token's default was written in this repository, so the test proved only
+// that a lock whose key everybody has can be locked. What guards the core is that it will
+// not listen anywhere but loopback, and THAT is checked above, with its sabotage half.
 
 // ---------------------------------------------------------------------------------
 console.log('\nsessions that run out, and sockets that hold them open');
@@ -344,7 +333,6 @@ console.log('\nsessions that run out, and sockets that hold them open');
     bind: '127.0.0.1',
     port: 0,
     coreUrl: core.url(),
-    coreToken: TOKEN,
     sessionIdleMs: IDLE,
     sessionTouchMs: 150,
   });
@@ -411,7 +399,7 @@ gateway.replaceRooms([
 ]);
 await until(() => false, 100);
 
-const relay = await startRelay({ bind: '127.0.0.1', port: 0, coreUrl: core.url(), coreToken: TOKEN });
+const relay = await startRelay({ bind: '127.0.0.1', port: 0, coreUrl: core.url() });
 
 interface Agent {
   got: Buffer[];
@@ -477,6 +465,23 @@ check('and never joins a room', Object.values(relay.rooms()).flat().length === 3
 // separates two players behind one NAT, so it has to be part of the match.
 const wrongPort = await openAgentOn(relay.port(), '192.168.178.27', 9999);
 check('and so is the right address on the wrong port', await until(() => wrongPort.closed()));
+
+// Nothing in the handshake says who a connection is, so a connection that says nothing at
+// all cannot be waited on for ever. This is the door the old `?token=` used to shut.
+{
+  const quiet = await startRelay({
+    bind: '127.0.0.1',
+    port: 0,
+    coreUrl: core.url(),
+    identifyMs: 150,
+  });
+  const socket = new WebSocket(`ws://127.0.0.1:${quiet.port()}/agent`);
+  let closed = false;
+  socket.addEventListener('close', () => (closed = true));
+  await new Promise<void>((resolve) => socket.addEventListener('open', () => resolve()));
+  check('a connection that never says where it plays is dropped', await until(() => closed, 3000));
+  await quiet.close();
+}
 
 // A datagram frame is seven bytes too when it carries nothing, and it must not be mistaken
 // for the frame that identifies. These seven say 0x01 and then an endpoint that IS a real
@@ -554,7 +559,7 @@ console.log('\nthree in a room, each datagram to the one it names');
   ]);
   await until(() => false, 100);
 
-  const three = await startRelay({ bind: '127.0.0.1', port: 0, coreUrl: core.url(), coreToken: TOKEN });
+  const three = await startRelay({ bind: '127.0.0.1', port: 0, coreUrl: core.url() });
   const a = await openAgentOn(three.port(), '192.168.178.27', 8888);
   const b = await openAgentOn(three.port(), '192.168.178.27', 8889);
   const c = await openAgentOn(three.port(), '192.168.178.27', 8890);
@@ -598,8 +603,8 @@ console.log('\nthe relay with the core away');
   // The property the whole design turns on: everything else may restart, and a game in
   // progress must not notice. Its own core and its own relay, because this one is going
   // to be killed — with its connections cut, or "away" would mean "still answering".
-  const spare = await startCore({ bind: '127.0.0.1', port: 0, db, token: TOKEN, channels: CHANNELS });
-  const feed = new CoreClient({ url: spare.url(), token: TOKEN, service: 'gateway' });
+  const spare = await startCore({ bind: '127.0.0.1', port: 0, db, channels: CHANNELS });
+  const feed = new CoreClient({ url: spare.url(), service: 'gateway' });
   feed.start();
   await until(() => feed.connected);
   feed.replaceRooms([
@@ -616,7 +621,7 @@ console.log('\nthe relay with the core away');
   ]);
   await until(() => false, 100);
 
-  const spareRelay = await startRelay({ bind: '127.0.0.1', port: 0, coreUrl: spare.url(), coreToken: TOKEN });
+  const spareRelay = await startRelay({ bind: '127.0.0.1', port: 0, coreUrl: spare.url() });
   const before = await openAgentOn(spareRelay.port(), '192.168.178.27', 8888);
   check('an agent is admitted while the core is up', await until(() => Object.values(spareRelay.rooms()).flat().length === 1));
   before.close();

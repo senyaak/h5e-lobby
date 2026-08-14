@@ -67,7 +67,6 @@ export interface WebOptions {
   bind: string;
   port: number;
   coreUrl: string;
-  coreToken: string;
   log?: (line: string) => void;
   /** Both are here so a test can watch a session expire without waiting an hour. */
   sessionIdleMs?: number;
@@ -157,7 +156,7 @@ export function startWeb(options: WebOptions): Promise<RunningWeb> {
   const failures = new Map<string, number[]>();
   let channels: ChannelInfo[] = [];
 
-  const core = new CoreClient({ url: options.coreUrl, token: options.coreToken, service: 'web', log });
+  const core = new CoreClient({ url: options.coreUrl, service: 'web', log });
 
   const send = (browser: Browser, message: ToBrowser): void => browser.peer.sendText(JSON.stringify(message));
   const tellEveryone = (message: ToBrowser, where?: string): void => {

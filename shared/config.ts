@@ -41,8 +41,6 @@ export interface Config {
   corePort: number;
   /** How the other services reach the core. */
   coreUrl: string;
-  /** The shared secret they present. Loopback makes it a seatbelt, not a lock. */
-  coreToken: string;
   /** The browser lobby. */
   webPort: number;
   /** Where agents connect to have their datagrams carried. */
@@ -59,7 +57,6 @@ const DEFAULTS: Config = {
   httpPort: 8080,
   corePort: 40100,
   coreUrl: 'ws://127.0.0.1:40100/core',
-  coreToken: 'local-development',
   webPort: 8081,
   relayPort: 40200,
   database: 'data/lobby.db',
@@ -73,7 +70,6 @@ const FROM_ENV: Record<keyof Config, string> = {
   httpPort: 'H5E_HTTP_PORT',
   corePort: 'H5E_CORE_PORT',
   coreUrl: 'H5E_CORE_URL',
-  coreToken: 'H5E_CORE_TOKEN',
   webPort: 'H5E_WEB_PORT',
   relayPort: 'H5E_RELAY_PORT',
   database: 'H5E_DATABASE',

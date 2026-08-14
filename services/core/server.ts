@@ -17,12 +17,11 @@ export interface CoreServerOptions {
   /**
    * The address to bind, and it may only be a loopback one — see `LOOPBACK` below. There
    * is deliberately no environment variable behind this: a core reachable from off the
-   * host is a core with nothing but a shared token in front of it.
+   * host is a core with nothing in front of it.
    */
   bind: string;
   port: number;
   db: DatabaseSync;
-  token: string;
   channels: ChannelInfo[];
   log?: (line: string) => void;
 }
@@ -54,14 +53,13 @@ const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1']);
 export function startCore(options: CoreServerOptions): Promise<RunningCore> {
   if (!LOOPBACK.has(options.bind)) {
     throw new Error(
-      `core: refusing to listen on ${options.bind} — the core is loopback only, and a token is not a lock. ` +
+      `core: refusing to listen on ${options.bind} — the core is loopback only, and that bind is its whole defence. ` +
         `If it truly has to move, it needs a way in of its own, not a share of H5E_BIND.`,
     );
   }
 
   const core = new CoreService({
     db: options.db,
-    token: options.token,
     channels: options.channels,
     ...(options.log ? { log: options.log } : {}),
   });

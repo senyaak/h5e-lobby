@@ -27,7 +27,8 @@ export interface RelayOptions {
   bind: string;
   port: number;
   coreUrl: string;
-  coreToken: string;
+  /** How long a connection may say nothing before it is dropped. Tests make it short. */
+  identifyMs?: number;
   log?: (line: string) => void;
 }
 
@@ -106,12 +107,22 @@ function readFrame(bytes: Buffer): { address: string; port: number; payload: Buf
 /** How long an identity stays good enough to re-admit on without asking again. */
 const GRACE_MS = 60_000;
 
+/**
+ * And how long a connection may go without saying where it plays.
+ *
+ * The handshake decides nothing here — there is no token on the URL any more — so this is
+ * the only thing standing between the relay and a client that connects and then says
+ * nothing at all, forever. An agent speaks as soon as its game has a socket, which is
+ * before it has a peer to send to, so ten seconds is not a race anybody can lose.
+ */
+const IDENTIFY_MS = 10_000;
+
 export function startRelay(options: RelayOptions): Promise<RunningRelay> {
   const log = options.log ?? ((): void => {});
   const agents = new Set<Agent>();
   const recent = new Map<string, { nick: string; room: string; roster: PeerEndpoint[]; at: number }>();
 
-  const core = new CoreClient({ url: options.coreUrl, token: options.coreToken, service: 'relay', log });
+  const core = new CoreClient({ url: options.coreUrl, service: 'relay', log });
   core.start();
 
   const server = createServer((request, response) => {
@@ -153,6 +164,13 @@ export function startRelay(options: RelayOptions): Promise<RunningRelay> {
       log(`relay refused a connection: ${why}`);
       peer.close();
     };
+
+    // Nothing about the handshake says who this is, so silence cannot be waited on
+    // indefinitely.
+    const mute = setTimeout(() => {
+      if (!agent && !asked) refuse('it never said where it plays');
+    }, options.identifyMs ?? IDENTIFY_MS);
+    mute.unref?.();
 
     /**
      * An agent has said where its game is. Now the lobby decides whether that is anybody.
@@ -201,6 +219,7 @@ export function startRelay(options: RelayOptions): Promise<RunningRelay> {
     });
 
     peer.onClose(() => {
+      clearTimeout(mute);
       if (!agent) return;
       agents.delete(agent);
       log(`relay ${agent.nick} left room ${agent.room}`);

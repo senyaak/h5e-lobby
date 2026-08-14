@@ -34,7 +34,6 @@ export interface CoreConnection {
 
 export interface CoreOptions {
   db: DatabaseSync;
-  token: string;
   channels: ChannelInfo[];
   log?: (line: string) => void;
 }
@@ -55,14 +54,12 @@ export class CoreService {
   readonly accounts: Accounts;
   readonly channels: ChannelInfo[];
   private readonly clients = new Set<Client>();
-  private readonly token: string;
   private readonly log: (line: string) => void;
 
   constructor(options: CoreOptions) {
     this.chat = new ChatStore(options.db);
     this.accounts = new Accounts(options.db);
     this.channels = options.channels;
-    this.token = options.token;
     this.log = options.log ?? ((): void => {});
   }
 
@@ -130,11 +127,10 @@ export class CoreService {
     }
 
     if (message.kind === 'hello') {
-      if (message.token !== this.token) {
-        this.log(`core  ${message.service} presented the wrong token — refused`);
-        client.send(encode({ kind: 'reply', id: 0, ok: false, error: 'wrong token' }));
-        return;
-      }
+      // Nothing is checked. Being able to open this socket at all is the whole of the
+      // permission, and what limits that is the loopback bind in `startCore` — see the
+      // note at the top of `shared/core-protocol.ts` for why a token in the repository was
+      // no better than none.
       client.service = message.service;
       client.authenticated = true;
       this.log(`core  ${client.service} connected`);

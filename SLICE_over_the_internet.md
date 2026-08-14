@@ -81,7 +81,7 @@ are wrong for a second machine, in opposite directions:
 - left at `127.0.0.1`, the relay and the browser are loopback-only, so an agent on
   another box cannot reach them at all;
 - set to the LAN address, **the core stops being loopback-only** and starts listening
-  where anyone can reach it, with nothing but `H5E_CORE_TOKEN` in front — exactly what
+  where anyone can reach it, with nothing in front of it at all — exactly what
   `shared/config.ts` and `deploy/README.md` promise it never does.
 
 The fix is a variable each, and it is small:
@@ -381,7 +381,16 @@ below cheaper — but it is still an address that has to exist. Three ways, and 
 not equivalent:
 
 - **A small VPS running the fleet** — the only one that works for people who are not
-  us. It is also where the tunnel stops being needed for the relay.
+  us. It is also where the tunnel stops being needed for the relay. **One thing must
+  change before that move:** nothing authenticates on the hop between the services and the
+  core. There was a token, it defaulted to a value written in this repository, and it went
+  on 15.08.2026 rather than be mistaken for a defence. What guards the core today is that
+  it listens on loopback and refuses to listen anywhere else, which is exactly right for a
+  machine whose processes are all ours. On a host that runs somebody else's, any local
+  process could connect and push a room list of its own — and the room list is precisely
+  what decides whom the relay admits. The answer there is **a unix socket in a directory
+  only the service user can enter**, not a generated token: it is the operating system
+  doing the checking, and there is nothing to forget to generate.
 - **Port forwarding on the router** — cheapest way to *test* stage three, and it proves
   the protocol side without proving anything about strangers.
 - **WireGuard or Tailscale between the two machines** — works, and honestly labelled:

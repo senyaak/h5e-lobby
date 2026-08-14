@@ -22,8 +22,8 @@ loopback: everything that talks to it is on the same host.
 | `H5E_BIND` | what the gateway, the web and the relay **bind** | `0.0.0.0` |
 
 The core takes neither. It binds `127.0.0.1` and `startCore` refuses anything else
-(`services/core/server.ts`), because the only thing in front of it is `H5E_CORE_TOKEN`,
-and a token is a seatbelt, not a lock. That guard is what makes `H5E_BIND` safe to set:
+(`services/core/server.ts`), and that bind is its whole defence — nothing authenticates on
+the hop between the services and the core. That guard is what makes `H5E_BIND` safe to set:
 one variable moves the three services that are meant to be reachable, and there is no
 value of it that publishes the core. `tools/test-services.ts` checks both halves — the
 running core is on loopback, and a core handed `0.0.0.0` or a LAN address is refused.
@@ -36,7 +36,7 @@ sudo git clone <this repo> /opt/h5e-lobby
 sudo chown -R h5e:h5e /opt/h5e-lobby
 
 sudo cp /opt/h5e-lobby/deploy/h5e-lobby.env.example /etc/h5e-lobby.env
-sudo editor /etc/h5e-lobby.env          # at least H5E_HOST and H5E_CORE_TOKEN
+sudo editor /etc/h5e-lobby.env          # at least H5E_HOST
 
 sudo cp /opt/h5e-lobby/deploy/systemd/*.service /opt/h5e-lobby/deploy/systemd/h5e.target /etc/systemd/system/
 sudo systemctl daemon-reload
@@ -72,8 +72,8 @@ journalctl --user -u senyaak-h5e-gateway -f
 `Restart=always` on every one of them, and `loginctl enable-linger` is already on, so
 they come back after a crash and after a reboot without anyone logging in. The units are
 files in `~/Projects/tunnels/systemd/`, symlinked into `~/.config/systemd/user/`;
-`H5E_HOST`, `H5E_BIND` and `H5E_CORE_TOKEN` live in `~/.config/h5e-lobby.env`, which is in
-neither repository.
+`H5E_HOST` and `H5E_BIND` live in `~/.config/h5e-lobby.env`, which is in neither
+repository.
 
 **The tunnel carries the lobby and the relay, and cannot carry the game.** cloudflared
 speaks HTTP and WebSocket; the game's desks are raw TCP and UDP, and its one HTTP request

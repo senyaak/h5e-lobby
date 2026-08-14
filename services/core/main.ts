@@ -34,7 +34,6 @@ const running = await startCore({
   bind: '127.0.0.1',
   port: settings.corePort,
   db,
-  token: settings.coreToken,
   channels,
   log,
 });

@@ -17,7 +17,6 @@ const running = await startWeb({
   bind: settings.bind,
   port: settings.webPort,
   coreUrl: settings.coreUrl,
-  coreToken: settings.coreToken,
   log,
 });
 

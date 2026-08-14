@@ -9,8 +9,14 @@
 //   a message without one is told and not asked, and anything the core wants to say on
 //   its own arrives the same way.
 //
-// The token is checked on the first frame. It is a seatbelt, not a lock: the core listens
-// on loopback and is reached from outside through the services in front of it.
+// NOTHING AUTHENTICATES ON THIS HOP, and that is the honest state of it. There was a
+// shared token until 15.08.2026, defaulting to a value written in this repository — a lock
+// whose key everybody has is not one, and pretending otherwise is worse than saying so.
+// What actually keeps the core to ourselves is that it listens on loopback and refuses to
+// listen anywhere else (`startCore` throws), so reaching it means already being on the
+// host. The day the host has other people's processes on it, the answer is a unix socket
+// in a directory only the service user can enter — checked by the operating system rather
+// than by us, and impossible to forget to generate.
 //
 // Exports:
 //   ChatMessage, PresenceEntry, ChannelInfo   what travels
@@ -85,7 +91,8 @@ export interface ChannelInfo {
 }
 
 export type ToCore =
-  | { kind: 'hello'; service: string; token: string }
+  /** Who is connecting, for the log. It decides nothing — see the note at the top. */
+  | { kind: 'hello'; service: string }
   /**
    * `sender` is the connection the line came in on, echoed back in the broadcast so the
    * service can skip it: the game draws its own message locally and would show it twice.

@@ -19,8 +19,7 @@ import { decode, encode } from './core-protocol.ts';
 
 export interface CoreClientOptions {
   url: string;
-  token: string;
-  /** Which service this is, for the core's log. */
+  /** Which service this is, for the core's log. Nothing is decided by it. */
   service: string;
   log?: (line: string) => void;
 }
@@ -85,7 +84,7 @@ export class CoreClient {
 
     socket.onopen = (): void => {
       this.retry = RETRY_MIN_MS;
-      socket.send(encode({ kind: 'hello', service: this.options.service, token: this.options.token }));
+      socket.send(encode({ kind: 'hello', service: this.options.service }));
       // The backlog goes out before anything new, and before the welcome comes back:
       // ordering on the core is the order it receives, and the hello is already ahead.
       for (const held of this.backlog.splice(0)) socket.send(held);

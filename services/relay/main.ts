@@ -19,7 +19,6 @@ const running = await startRelay({
   bind: settings.bind,
   port: settings.relayPort,
   coreUrl: settings.coreUrl,
-  coreToken: settings.coreToken,
   log,
 });
 

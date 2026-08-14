@@ -1260,16 +1260,34 @@ A full duel played through it: **1114 packets, 38 kB both ways over 455 seconds,
 bytes in one second, nothing direct between the clients.** For eight players and a real
 server that is still small enough not to think about.
 
+### A generated map is a recipe, not a file
+
+A game on an RMG map was played twice and the map appeared in both installs each time —
+187411 bytes against 187366, and 202864 against 202780, differing hashes, seven to
+nineteen seconds apart. Nothing of that size crossed anything: with a capture running the
+whole session the largest conversation on the machine was 10 kB, and the relay's busiest
+five seconds was 3 kB. **Each client builds the map itself, and the gap is how long that
+takes.**
+
+The recipe travels in the same blob whose player records we already patch. In the
+871-byte description of that game:
+
+```
+/Maps/RMG/154B0BEB-E9FD-4033-8086-46709A27A9E9/map.xdb#xpointer(/AdvMapDesc)
+04 08 5a e5 7e 6a                     the seed, 1786701146, at offset 570
+"154B0BEB-E9FD-4033-8086-46709A27A9E9"
+/RMG/Templates/S1P2Z2M1.xdb#xpointer(/RMGTemplate)
+```
+
+and the map's own properties agree: `sRMGProps.RMGmap true`, `RMGstartseed 1786701146`,
+`RMGguid 154B0BEB-…`, with the template, size, water, monster level and each player's race
+under `InitialParams`. A generated map therefore costs a relay nothing at all — which
+removes the case the throttling worry was mostly about.
+
 ### Still open
 
-1. **What a generated map costs, and by what road.** A game on an RMG map was played and
-   the map appeared in both installs — 187411 bytes in one, 187366 in the other, different
-   hashes, 19 seconds apart. Those bytes did NOT cross the relay (peak 3 kB in any
-   five-second window) and did not cross the lobby (34 kB in the whole two minutes). Either
-   both clients generated it from a shared seed, which the differing sizes suggest, or it
-   travelled by a road we were not watching — that run had no capture running. **Repeat it
-   with `tshark` on before believing either.** Until then nothing is known about the peak
-   this feature has to survive, which is the whole reason throttling is on the list.
+1. **A hand-made map that the other player does not have.** The generated ones are
+   settled — see below — and this is the last candidate for a burst worth throttling.
 2. **An adventure map, and more than two players.** Everything above is a duel between two
    clients. A third install is ready at `C:\Projects\homm5-game-net3` (port 8890,
    `run-net3.bat`) and will say whether the peers form a mesh or a star, and whether
@@ -1285,3 +1303,10 @@ server that is still small enough not to think about.
    alone, which works because each copy here plays on a port of its own. Two players
    behind one relay both on 8888 need either a distinct address each or the port rewritten
    too — and the port is two bytes in the same record, under tag 2.
+6. **A finished game stays on the other players' screens.** Not a transport question, but
+   it will be constant online, where connections drop rather than say goodbye. The server
+   does its part: on the host's socket closing it removed the room and told the channel
+   (`Senyaak2 left — dropped "Сервер — Senyaak", 2 player(s) told`, 14.08.2026). The
+   client adds a game row and never takes one away — leaving the channel and coming back
+   clears it. So there is a message the client reads as "this game is gone" that we do not
+   send, and it has not been looked for.

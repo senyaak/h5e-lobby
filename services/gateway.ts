@@ -1,36 +1,34 @@
-// Our own online services for the game, at the stage where they only listen.
+// The game gateway: the desks the game itself connects to.
 //
-// The game decides where to play by fetching one URL (docs/NETWORK.md), and its
-// libcurl 7.14 honours the `http_proxy` environment variable — so a game started
-// with `http_proxy=http://127.0.0.1:8080` asks US for its server list, with no
-// patch to the exe and no hosts file. We answer with an ini that points every
-// service at this machine, then accept those connections and write down every
-// byte the client sends.
+//   node services/gateway.ts [--host 127.0.0.1] [--http 8080] [--ghosts] [--quiet-bot]
 //
-// The NAT service answers for real (src/net/nat-service.ts) — it is the step the
-// game refuses to start without. The router, CD-key and IRC ports still only
-// record: there is no live Ubisoft service left to copy, so what the client says
-// first is how each of them gets written. Run it, let the game reach the online
-// menu, read the log.
+// This was `tools/net-server.ts`, the one process that was everything. What left it is
+// chat, which now belongs to the core so that a browser can be in the same conversation;
+// what stayed is every byte of the game's own protocol — the server list, NAT, the CD-key
+// desk, the router and its wait modules, the proxy and the lobby.
 //
-//   node tools/net-server.ts [--host 127.0.0.1] [--http 8080]
+// The game decides where to play by fetching one URL (docs/NETWORK.md), and its libcurl
+// 7.14 honours the `http_proxy` environment variable — so a game started with
+// `http_proxy=http://127.0.0.1:8080` asks US for its server list, with no patch to the exe
+// and no hosts file. We answer with an ini that points every service at this machine.
 //
-// The log goes to logs/ as well as the console, in full — a truncated dump of an
-// unknown protocol is worth nothing. logs/latest.log is whichever run is current.
+// The log goes to logs/gateway-latest.log AND, unchanged, to logs/latest.log — see
+// src/log.ts for why the old name is kept.
 
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createServer as createTcpServer, type Socket } from 'node:net';
 import { createSocket } from 'node:dgram';
-import { mkdirSync, createWriteStream } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { config } from '../src/config.ts';
+import { hexDump, openLog } from '../src/log.ts';
+import { CoreClient } from '../src/core/client.ts';
+import type { PresenceEntry } from '../src/core/protocol.ts';
 import { NatService } from '../src/net/nat-service.ts';
 import { GUEST, GUEST_LOBBY, RouterService } from '../src/net/router-service.ts';
 import { CdKeyService } from '../src/net/cdkey-service.ts';
-import { IrcConnection, IrcService, chatLine, lobbyChannel } from '../src/net/irc.ts';
-import { probePeerAddress, probeRoomFields } from '../src/net/lobby.ts';
+import { IrcConnection, IrcService, chatLine, frame, fromGameText, lobbyChannel, toGameText } from '../src/net/irc.ts';
+import { DEFAULT_LOBBIES, probePeerAddress, probeRoomFields } from '../src/net/lobby.ts';
 
-const repo = join(dirname(fileURLToPath(import.meta.url)), '..');
+const settings = config();
 
 function arg(name: string, fallback: string): string {
   const at = process.argv.indexOf(`--${name}`);
@@ -38,8 +36,8 @@ function arg(name: string, fallback: string): string {
 }
 
 /** The address the game will be told to connect to — itself, by default. */
-const host = arg('host', '127.0.0.1');
-const httpPort = Number(arg('http', '8080'));
+const host = arg('host', settings.host);
+const httpPort = Number(arg('http', String(settings.httpPort)));
 
 /**
  * What the ini advertises. `launcher` is only read for Router and CDKeyServer
@@ -60,7 +58,7 @@ const SERVICES: Service[] = [
 ];
 
 // Not in the ini: the client is told where this one lives when it asks for a
-// module (PROXY_HANDLER). It is where persistent data and, later, the ladder sit.
+// module (PROXY_HANDLER). It is where persistent data and the ladder sit.
 const PROXY: Service = { prefix: 'Proxy', port: 40030, launcher: 40031, kind: 'tcp' };
 
 // Also not in the ini: where the lobby itself lives, handed over when the client
@@ -77,42 +75,7 @@ function serversIni(): string {
   return `${lines.join('\r\n')}\r\n`;
 }
 
-// Where the log goes: `logs/`, which is where this server's first version put it and
-// where Сеня looks. It moved to `_tmp/net/` at some point and the only thing that
-// announced the move was a line in this file's own header — so the obvious place kept
-// a log from the day before and every run after that looked like a server that had
-// stopped writing. Sessions before 13.08.2026 are still in `_tmp/net/`.
-//
-// TWO files, always: `session-<stamp>.log` keeps every run, and `latest.log` is the
-// run happening now — a name that can be tailed without looking up a timestamp first,
-// and the reason is that this server is usually started by somebody else's hand.
-const logDir = join(repo, 'logs');
-mkdirSync(logDir, { recursive: true });
-const started = new Date();
-const stamp = started.toISOString().replace(/[:.]/g, '-');
-const sessionPath = join(logDir, `session-${stamp}.log`);
-const logFile = createWriteStream(sessionPath);
-const latest = createWriteStream(join(logDir, 'latest.log'));
-
-function log(line: string): void {
-  const at = new Date().toISOString().slice(11, 23);
-  const text = `${at}  ${line}`;
-  console.log(text);
-  logFile.write(`${text}\n`);
-  latest.write(`${text}\n`);
-}
-
-/** Hex and text, 16 bytes to a line, however long the buffer is. */
-function hexDump(buf: Buffer, indent = '    '): string {
-  const out: string[] = [];
-  for (let i = 0; i < buf.length; i += 16) {
-    const slice = buf.subarray(i, i + 16);
-    const hex = [...slice].map((b) => b.toString(16).padStart(2, '0')).join(' ').padEnd(47);
-    const text = [...slice].map((b) => (b >= 0x20 && b <= 0x7e ? String.fromCharCode(b) : '.')).join('');
-    out.push(`${indent}${i.toString(16).padStart(4, '0')}  ${hex}  ${text}`);
-  }
-  return out.join('\n');
-}
+const log = openLog('gateway', { alsoPlainLatest: true });
 
 function serve(res: ServerResponse, body: string): void {
   res.writeHead(200, { 'Content-Type': 'text/plain', 'Content-Length': Buffer.byteLength(body) });
@@ -138,6 +101,7 @@ const router = new RouterService(
   { address: host, port: PROXY.port },
   { address: host, port: PROXY.launcher ?? PROXY.port },
   { address: host, port: LOBBY.port },
+  settings.database,
 );
 
 // `--ghosts` seats three synthetic players in every channel, each announced a different
@@ -150,7 +114,8 @@ if (router.ghosts) log('ghosts on — GhostList, GhostBlob and GhostJoin will be
 // number, so the extension's dump of the record says where each of them landed. Games
 // are not joinable while it is on — the version field is deliberately nonsense.
 probeRoomFields.on = process.argv.includes('--probe-room-fields');
-if (probeRoomFields.on) log('probe-room-fields on — room fields 3,4,5,6,11,14,15 go out as 8003…8015; nothing will be joinable');
+if (probeRoomFields.on)
+  log('probe-room-fields on — room fields 3,4,5,6,11,14,15 go out as 8003…8015; nothing will be joinable');
 
 // A diagnostic for one launch: every player is announced to the OTHERS at an address of
 // ours, so that `tools/peer-probe.ts` can say whether the peer a client dials comes from
@@ -158,20 +123,14 @@ if (probeRoomFields.on) log('probe-room-fields on — room fields 3,4,5,6,11,14,
 // addresses — a game started while this is on will not connect.
 probePeerAddress.on = process.argv.includes('--probe-peer-address');
 if (probePeerAddress.on)
-  log(`probe-peer-address on — players are announced at ${probePeerAddress.pool.join(', ')}; run tools/peer-probe.ts and expect no game to connect`);
+  log(
+    `probe-peer-address on — players are announced at ${probePeerAddress.pool.join(', ')}; run tools/peer-probe.ts and expect no game to connect`,
+  );
 
-// The guest is not a ghost: he is a player with a name, a blob and a ladder row, and
-// he is here so that the things needing SOMEBODY ELSE — a profile read about another
-// player, a friend to add, a rating that is not one's own — can be tried with one
-// copy of the game. He sits in the Ranked channel — one channel, because a player is
-// in one channel at a time and so is he.
-// `--seed-profile` was here and is now what always happens: a player with no profile of
-// his own is handed a minimal one, because refusing is a profile screen that stays shut.
-
-// One database now holds accounts, profiles, ratings and friendships (src/net/database.ts).
+// One database holds accounts, profiles, ratings and friendships (src/net/database.ts).
+// The core has it open too, for chat — see docs/ARCHITECTURE.md for where that seam is.
 if (router.imported.length) log(`brought across from the old JSON files: ${router.imported.join(', ')}`);
 log(`accounts: ${router.accounts.size} — a name is created by its first login, and the password is checked from then on`);
-
 log(`${GUEST} is seated in channel ${GUEST_LOBBY} — rating ${router.ladder.row(GUEST)['RATING']}`);
 
 // Every key the player types is accepted; see src/net/cdkey-service.ts for why
@@ -186,8 +145,72 @@ const irc = new IrcService();
 // and a name that talks without being in this one looks like nobody.
 irc.residents = [GUEST];
 
+/** Which socket carries which chat connection, so a line can be relayed on. */
+const chatSockets = new Map<IrcConnection, Socket>();
+
+// ---------------------------------------------------------------------------------
+// Chat through the core
+//
+// Every line a player types is still fanned out here, to the other game clients on this
+// process, exactly as before — so two players in one channel keep talking to each other
+// whatever the core is doing. It is ALSO posted to the core, which stores it and hands it
+// to the browser.
+//
+// The other direction is the core's echo. Our own lines come back with `sender` set to
+// this process and are dropped on arrival; anything else — a line typed in the browser —
+// is written to every game client sitting in that channel.
+// ---------------------------------------------------------------------------------
+
+/** Who this process is, so its own echo is recognisable. Two gateways will not collide. */
+const GATEWAY_ID = `gateway-${process.pid}`;
+
+/** Grey, so a line replayed out of history does not look like something just said. */
+const HISTORY_COLOUR = 0x9a9a9a;
+/** Light blue: somebody who is in the browser and not in the game. */
+const WEB_COLOUR = 0x66ccff;
+
+const core = new CoreClient({ url: settings.coreUrl, token: settings.coreToken, service: 'gateway', log });
+
+core.onChat = (message, sender) => {
+  if (sender === GATEWAY_ID) return; // already drawn, by the fan-out below
+  const colour = message.origin === 'web' ? WEB_COLOUR : 0xffffff;
+  // Into the client's codepage on the way out; it draws bytes, not UTF-8.
+  const nick = toGameText(message.nick);
+  const line = frame(`:${nick} PRIVMSG ${message.channel} :${chatLine(nick, toGameText(message.text), colour)}`);
+  let seen = 0;
+  for (const listener of irc.everyone(message.channel)) {
+    chatSockets.get(listener)?.write(line);
+    seen++;
+  }
+  if (seen) log(`IRC  ${message.origin} ${message.nick} -> ${message.channel}: ${message.text} (to ${seen} client(s))`);
+};
+
+core.start();
+
 /**
- * And he says something, on a timer.
+ * What the browser is shown about who is here.
+ *
+ * There is no event for it: presence lives inside the router's own state and nothing
+ * announces a change. Two seconds of polling costs nothing next to reaching into the
+ * session machinery for a hook, and a channel list that is two seconds stale is a channel
+ * list nobody can tell from a fresh one.
+ */
+let lastPresence = '';
+setInterval(() => {
+  const entries: PresenceEntry[] = [];
+  for (const lobby of DEFAULT_LOBBIES) {
+    for (const nick of router.presence.inLobby(lobby.id)) {
+      entries.push({ nick, channel: lobbyChannel(lobby.id), origin: 'game' });
+    }
+  }
+  const shape = JSON.stringify(entries);
+  if (shape === lastPresence) return;
+  lastPresence = shape;
+  core.replacePresence('game', entries);
+}, 2000).unref();
+
+/**
+ * And the guest says something, on a timer.
  *
  * Not a joke, or not only: nothing has ever tested that a line reaches a client from
  * anyone other than himself, and the whole of "two players" rests on that. A message
@@ -196,23 +219,16 @@ irc.residents = [GUEST];
  * happening — whether the session is still alive after five minutes of sitting in a
  * channel doing nothing.
  *
+ * It goes through the core now, like everything else said in a channel, which means it
+ * lands in the history and in the browser as well.
+ *
  * `--quiet-bot` turns it off for a run where it would be in the way.
  */
 const BOT_SAYS = "I'M THE BEST!";
 const BOT_EVERY = 2 * 60 * 1000;
 if (!process.argv.includes('--quiet-bot')) {
   setInterval(() => {
-    // Only where he actually is: his channel, named the way the client spells it —
-    // `#LobbyGrp<server>.<group>`, server FIRST. Written the other way round the first
-    // time, and he then talked into a channel that does not exist, which is why the
-    // first run of this bot was silent. The other half of that silence was the text:
-    // a chat line carries the client's own presentation inside it (`chatLine`), and a
-    // bare sentence is not something it knows how to draw.
-    for (const channel of irc.channels.filter((name) => name === lobbyChannel(GUEST_LOBBY))) {
-      const { line, to } = irc.say(GUEST, channel, chatLine(GUEST, BOT_SAYS));
-      for (const listener of to) chatSockets.get(listener)?.write(line);
-      if (to.length) log(`IRC  ${GUEST} -> ${channel}: ${BOT_SAYS} (to ${to.length} listener(s))`);
-    }
+    core.post({ channel: lobbyChannel(GUEST_LOBBY), nick: GUEST, text: BOT_SAYS, origin: 'server' });
   }, BOT_EVERY).unref();
   log(
     `${GUEST} sits in channel ${GUEST_LOBBY} and will say "${BOT_SAYS}" there every ${BOT_EVERY / 1000}s` +
@@ -220,8 +236,22 @@ if (!process.argv.includes('--quiet-bot')) {
   );
 }
 
-/** Which socket carries which chat connection, so a line can be relayed on. */
-const chatSockets = new Map<IrcConnection, Socket>();
+/** What a client is owed the moment it joins a channel: what was said while it was away. */
+async function replayHistory(channel: string, socket: Socket): Promise<void> {
+  if (!core.connected) return;
+  try {
+    const messages = await core.history(channel, 20);
+    for (const message of messages) {
+      const when = new Date(message.at).toISOString().slice(11, 16);
+      const nick = toGameText(message.nick);
+      const text = chatLine(nick, toGameText(`[${when}] ${message.text}`), HISTORY_COLOUR);
+      socket.write(frame(`:${nick} PRIVMSG ${channel} :${text}`));
+    }
+    if (messages.length) log(`IRC  replayed ${messages.length} line(s) of ${channel}`);
+  } catch (error) {
+    log(`IRC  no history for ${channel}: ${(error as Error).message}`);
+  }
+}
 
 for (const service of [...SERVICES, PROXY, LOBBY]) {
   for (const port of [service.port, service.launcher].filter((p): p is number => p !== null)) {
@@ -242,7 +272,7 @@ for (const service of [...SERVICES, PROXY, LOBBY]) {
               : null;
       // Which desk this socket is, so a reply can go out on a connection other than
       // the one that asked. Only the newest socket per desk is kept: with one player
-              // there is only ever one of each.
+      // there is only ever one of each.
       if (session) {
         // How to write on THIS connection — which is what a second player needs and the
         // desks map cannot give: it holds one socket per desk name, so two players'
@@ -278,6 +308,17 @@ for (const service of [...SERVICES, PROXY, LOBBY]) {
             for (const out of event.broadcast) {
               for (const other of irc.others(out.channel, chat)) chatSockets.get(other)?.write(out.line);
             }
+            // And it reaches the core, which keeps it and passes it to the browser.
+            if (event.said) {
+              core.post({
+                channel: event.said.channel,
+                nick: fromGameText(event.said.nick),
+                text: fromGameText(event.said.text),
+                origin: 'game',
+                sender: GATEWAY_ID,
+              });
+            }
+            if (event.joined) void replayHistory(event.joined, socket);
           }
           return;
         }
@@ -349,5 +390,6 @@ for (const service of [...SERVICES, PROXY, LOBBY]) {
   }
 }
 
-log(`logging to ${sessionPath} — and to ${join(logDir, 'latest.log')}, which is always this run`);
+log(`chat goes through the core at ${settings.coreUrl} — game clients here still hear each other if it is away`);
+log(`logging to ${log.session} — and to ${log.latest}, which is always this run`);
 log(`serving this list:\n${serversIni().replace(/\r\n/g, '\n')}`);

@@ -1,0 +1,27 @@
+[Unit]
+Description=h5e-lobby web — the browser lobby, on the same chat as the game
+Documentation=file:/opt/h5e-lobby/docs/ARCHITECTURE.md
+After=network-online.target h5e-core.service
+Wants=network-online.target h5e-core.service
+PartOf=h5e.target
+
+[Service]
+Type=simple
+User=h5e
+Group=h5e
+WorkingDirectory=/opt/h5e-lobby
+EnvironmentFile=-/etc/h5e-lobby.env
+ExecStart=/usr/bin/node services/web.ts
+Restart=on-failure
+RestartSec=2
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+# It writes a log and nothing else: the service that must never reach the database is
+# also the one that is allowed nowhere near it on disk.
+ReadWritePaths=/opt/h5e-lobby/logs
+
+[Install]
+WantedBy=h5e.target

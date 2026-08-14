@@ -6,3 +6,6 @@ _tmp/
 logs/
 # The ladder. Players' ratings belong to whoever runs the server, not to the repo.
 data/
+# This host's settings, which include its token. deploy/h5e-lobby.env.example is the
+# one that is checked in, because it has nothing real in it.
+config.json

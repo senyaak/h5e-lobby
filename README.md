@@ -4,26 +4,42 @@ Our own Ubi.com for **Heroes of Might and Magic V: Tribes of the East**.
 
 Ubisoft's Game Service was switched off years ago, and the game's whole online menu
 hangs from one HTTP request to a host that no longer answers. This is the other end
-of that request: one Node process playing every service the client asks for — the
-server list, NAT traversal, the CD-key desk, the router and its wait modules, the
-proxy, the lobby, and chat. A player can log in with any name, enter a channel and
-host a game.
+of that request: everything the client asks for — the server list, NAT traversal, the
+CD-key desk, the router and its wait modules, the proxy, the lobby, and chat — plus a
+browser lobby sitting in the same chat, because finding an opponent should not require
+the game to be running. A player can log in with any name, enter a channel and host a
+game.
 
 Nothing here patches the game. The redirect is one environment variable: the game's
 libcurl honours `http_proxy` and the exe never overrides it, so a game started with
 `http_proxy=http://127.0.0.1:8080` asks us for its server list and we point every
 service at this machine.
 
+## Four services
+
+| | what it is | where |
+|---|---|---|
+| **core** | accounts, ladder, friends, presence, chat and its history | `services/core.ts`, loopback `40100` |
+| **gateway** | the desks the game itself connects to | `services/gateway.ts`, `8080` + the game's ports |
+| **web** | the browser lobby | `services/web.ts`, `8081` |
+| **relay** | game datagrams between agents | `services/relay.ts`, `40200` |
+
+One repository, four entry points, one systemd unit each — `deploy/README.md`. The core is
+the only one that touches the database, except for the game handlers that still reach it
+directly; that seam is named in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 ```bash
-npm install
-npm start                             # every service, one process, logs to logs/latest.log
-npm test                              # 260+ checks against bytes a real client sent
+npm start                             # all four, output prefixed, logs to logs/<service>-latest.log
+npm run gateway                       # just the game side (--ghosts, --quiet-bot, --probe-… as before)
+npm test                              # 300+ checks: the protocol, and the services against each other
 npm run typecheck
 node tools/net-decode.ts --file dump.txt   # a hex dump from the log, back into a message
 ```
 
-Then start the game — `run-net.bat` in the game copy sets the variable and nothing
-else.
+There is nothing to install: no dependencies outside Node itself, and Node 24 runs the
+TypeScript straight off disk. Then start the game — `run-net.bat` in the game copy sets the
+variable and nothing else — and open <http://127.0.0.1:8081> beside it: the same channels,
+the same messages, and what was said while nobody was playing is still there.
 
 ## Where everything is written down
 

@@ -59,12 +59,59 @@ export function unframe(buf: Buffer): { lines: string[]; rest: Buffer } {
 
 const SERVER = 'homm5.local';
 
+/**
+ * The codepage the game's chat is in.
+ *
+ * IRC here is bytes, one per character, and the client writes whatever its Windows ANSI
+ * codepage is — 1251 on a Russian machine. Read as latin1 (which is what `unframe` does,
+ * because that is the only way to get the bytes back unharmed) a Russian sentence comes
+ * out as `:B>-=81C4L`, and stored that way it is lost. So the gateway converts at its own
+ * edge: bytes in, UTF-8 out, and back again for anything it sends.
+ *
+ * `H5E_GAME_CODEPAGE` changes it for a client running under a different one.
+ */
+const GAME_CODEPAGE = process.env['H5E_GAME_CODEPAGE'] ?? 'windows-1251';
+
+/** Byte value -> the character it means, for all 256 of them. */
+const FROM_BYTE = new TextDecoder(GAME_CODEPAGE).decode(Uint8Array.from({ length: 256 }, (_, i) => i));
+const TO_BYTE = new Map([...FROM_BYTE].map((char, byte) => [char, byte]));
+
+/** What the client typed, as text: the bytes off the wire read in its codepage. */
+export function fromGameText(wire: string): string {
+  let out = '';
+  for (let i = 0; i < wire.length; i += 1) out += FROM_BYTE[wire.charCodeAt(i) & 0xff] ?? '?';
+  return out;
+}
+
+/**
+ * And back: text into the bytes the client can draw.
+ *
+ * A character the codepage has no room for becomes a question mark rather than nothing —
+ * the game would draw the raw byte as a random letter, and a message with a hole in it is
+ * harder to understand than one with a `?` where somebody's emoji was.
+ */
+export function toGameText(text: string): string {
+  let out = '';
+  for (const char of text) out += String.fromCharCode(TO_BYTE.get(char) ?? 0x3f);
+  return out;
+}
+
 export interface IrcEvent {
   note: string;
   /** Lines for this client. */
   replies: Buffer[];
   /** Lines for everyone else in a channel: [channel, line]. */
   broadcast: Array<{ channel: string; line: Buffer }>;
+  /**
+   * What was said, unwrapped — the channel and the bare sentence.
+   *
+   * `broadcast` carries the line as bytes for the other clients in this process; this is
+   * the same thing as something a person wrote, which is what the core stores and what a
+   * browser can show. Present only for a PRIVMSG.
+   */
+  said?: { channel: string; nick: string; text: string };
+  /** The channel this client just joined, which is when its history is owed to it. */
+  joined?: string;
 }
 
 /**
@@ -103,6 +150,19 @@ export function lobbyChannel(group: number, server = 1): string {
  */
 export function chatLine(nick: string, text: string, colour = 0xffffff, size = 9, font = 'Arial'): string {
   return `${nick}%${colour}%${size}%0%0%${font}%${text}`;
+}
+
+/**
+ * The same thing read back: the nick and the sentence, with the presentation dropped.
+ *
+ * Six separators, then the text — which may itself contain a `%`, so the split has a
+ * limit and the tail is joined back rather than taken as one field. A line that is not in
+ * this shape is not something the client produced, and its whole text is the sentence.
+ */
+export function parseChatLine(raw: string): { nick: string; text: string } {
+  const parts = raw.split('%');
+  if (parts.length >= 7) return { nick: parts[0]!, text: parts.slice(6).join('%') };
+  return { nick: '', text: raw };
 }
 
 export class IrcConnection {
@@ -158,6 +218,7 @@ export class IrcConnection {
             frame(`:${SERVER} 366 ${this.nick} ${channel} :End of /NAMES list`),
           );
           event.broadcast.push({ channel, line: frame(`:${this.nick} JOIN ${channel}`) });
+          event.joined = channel;
           event.note = `IRC ${this.nick} joined ${channel}`;
         }
         break;
@@ -178,7 +239,11 @@ export class IrcConnection {
         const target = channelName(rest[0] ?? '');
         const text = rest.slice(1).join(' ');
         const said = frame(`:${this.nick} PRIVMSG ${target} ${text}`);
-        if (target.startsWith('#')) event.broadcast.push({ channel: target, line: said });
+        if (target.startsWith('#')) {
+          event.broadcast.push({ channel: target, line: said });
+          const spoken = parseChatLine(text.replace(/^:/, ''));
+          event.said = { channel: target, nick: spoken.nick || this.nick, text: spoken.text };
+        }
         event.note = `IRC ${this.nick} -> ${target}: ${text.replace(/^:/, '')}`;
         break;
       }

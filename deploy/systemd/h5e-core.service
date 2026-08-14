@@ -1,0 +1,29 @@
+[Unit]
+Description=h5e-lobby core — accounts, profiles, ladder, friends, presence, chat
+Documentation=file:/opt/h5e-lobby/docs/ARCHITECTURE.md
+After=network-online.target
+Wants=network-online.target
+PartOf=h5e.target
+
+[Service]
+Type=simple
+User=h5e
+Group=h5e
+WorkingDirectory=/opt/h5e-lobby
+# The dash means "start anyway if it is not there" — a laptop may configure by file
+# instead, or by nothing at all and take the defaults in src/config.ts.
+EnvironmentFile=-/etc/h5e-lobby.env
+ExecStart=/usr/bin/node services/core.ts
+Restart=on-failure
+RestartSec=2
+# The core going away must not end a game in progress; the other three reconnect on
+# their own, so there is nothing to notify here.
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/h5e-lobby/data /opt/h5e-lobby/logs
+
+[Install]
+WantedBy=h5e.target

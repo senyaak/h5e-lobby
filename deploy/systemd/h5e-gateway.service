@@ -1,0 +1,29 @@
+[Unit]
+Description=h5e-lobby game gateway — the desks the game itself connects to
+Documentation=file:/opt/h5e-lobby/docs/ARCHITECTURE.md
+After=network-online.target h5e-core.service
+Wants=network-online.target
+# Wants, NOT Requires: the gateway is useful with the core away — the game logs in,
+# enters a channel and hosts, and two players in one channel still hear each other.
+# What it loses is history and the browser.
+Wants=h5e-core.service
+PartOf=h5e.target
+
+[Service]
+Type=simple
+User=h5e
+Group=h5e
+WorkingDirectory=/opt/h5e-lobby
+EnvironmentFile=-/etc/h5e-lobby.env
+ExecStart=/usr/bin/node services/gateway.ts
+Restart=on-failure
+RestartSec=2
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/h5e-lobby/data /opt/h5e-lobby/logs
+
+[Install]
+WantedBy=h5e.target

@@ -1,0 +1,10 @@
+[Unit]
+Description=h5e-lobby — the whole fleet
+Documentation=file:/opt/h5e-lobby/docs/ARCHITECTURE.md
+# One handle for all four: `systemctl start h5e.target` brings them up, and
+# `systemctl restart h5e.target` takes them round together. Each unit is still its own,
+# so restarting one of them is still one of them.
+Wants=h5e-core.service h5e-gateway.service h5e-web.service h5e-relay.service
+
+[Install]
+WantedBy=multi-user.target

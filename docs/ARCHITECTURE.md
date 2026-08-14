@@ -19,11 +19,37 @@ own server, including behind CGNAT, and can find each other without keeping the 
 Plus the **agent**, which is not a service: it runs on the player's machine, one per
 player, and is the only thing that talks to the outside from there.
 
-Today core and the game gateway are **one process** — there is one consumer of the rules,
-so there is nothing to split yet. The seam is kept visible instead: `ladder.ts`,
-`accounts.ts`, `friends.ts`, `lobby.ts` hold rules and know nothing about the protocol,
-and `router-service.ts` holds protocol and no rules. When the web lands there are two
-consumers and the split pays for itself.
+## Where the seam actually runs (14.08.2026)
+
+The web has landed, so there are four processes: `services/core.ts`, `services/gateway.ts`,
+`services/web.ts`, `services/relay.ts`, one systemd unit each (`deploy/`), and `npm start`
+runs all four locally through `tools/fleet.ts`. They talk to the core over one WebSocket
+carrying JSON — `src/core/protocol.ts` for what it says, `src/core/client.ts` for how a
+service says it.
+
+What actually moved into the core is **chat, its history, presence and the agent
+registry**. The rest of the rules — accounts, ladder, friends, profiles — are still called
+straight out of `router-service.ts`, which holds the database open beside the core: those
+handlers answer the client synchronously, and a remote call cannot. Two processes on one
+SQLite file in WAL mode with `busy_timeout` is what makes that safe, and it is the one
+place where the drawing above is ahead of the code.
+
+Moving them across is a contained job — about eighteen call sites, all inside message
+handlers — and it needs `RouterSession.receive` to become async. Until somebody wants it,
+nothing is paid for it: the seam is still visible, `ladder.ts` / `accounts.ts` /
+`friends.ts` / `lobby.ts` hold rules and know nothing about the protocol, and
+`router-service.ts` holds protocol and no rules.
+
+**Chat is not fanned out by the core alone.** The gateway still delivers a player's line to
+the other game clients on its own process, and posts the same line to the core for storing
+and for the browser. So two players in one channel keep talking with the core stopped;
+what they lose is the history and the browser. The core's echo carries the id of the
+gateway that sent it, which is how the gateway knows not to draw its own line twice.
+
+**The wire is a codepage, not UTF-8.** The game's IRC is one byte per character in the
+client's Windows ANSI page (1251 here), so the gateway converts at its own edge —
+`fromGameText` / `toGameText` in `src/net/irc.ts`. Read as latin1 and stored, a Russian
+sentence becomes `:B>-=81C4L` and is lost; that is what the first live run did.
 
 ## Why the relay is not in the middle
 
@@ -116,17 +142,28 @@ same page in an Electron shell.
 ## Deployment
 
 One repository, four entry points, all on one host to begin with, started from the root by
-**systemd units** (fleet-style: one unit per service, `Requires`/`After` where they
-actually depend, restart on failure). Сеня adjusts and tests these on the Linux laptop.
+**systemd units** — `deploy/systemd/`, one unit per service plus `h5e.target`, and
+`deploy/README.md` for installing them. `Wants=` rather than `Requires=` on the core
+everywhere: it is allowed to restart. Сеня adjusts and tests these on the Linux laptop.
 
-Configuration is environment first, file second: a container is fed variables, a laptop is
-fed a file. Nothing that matters is compiled in.
+Configuration is environment first, file second (`src/config.ts`,
+`deploy/h5e-lobby.env.example`): a container is fed variables, a laptop is fed a file.
+Nothing that matters is compiled in.
+
+On a machine without systemd, `npm start` runs `tools/fleet.ts`, which spawns the same four
+and prefixes their output. Each service also writes `logs/<service>-latest.log`; the
+gateway keeps writing `logs/latest.log` as well, because that is the file that gets tailed.
 
 ## What to build first
 
-1. **A light core + web, enough to see it work**: the game logs in and chats as it does
-   today, a browser page shows the same channel and the same messages, both directions,
-   **with history**. This is the milestone that proves the split is real rather than drawn.
+1. ~~**A light core + web, enough to see it work**~~ — **done 14.08.2026.** The game logs in
+   and chats as it did; a browser page shows the same channel and the same messages, both
+   directions, with history. Checked with the fleet running: a line typed in the browser
+   was replayed to a client joining the game's chat port afterwards, and a line said on
+   that port appeared in the browser as it was said. `tools/test-services.ts` holds the
+   same journey as thirty-odd checks. What is NOT done: a browser player does not appear in
+   the game's own player panel — that list is `GROUP_INFO`, which only the lobby fills — and
+   the browser has no account behind its name yet.
 2. **The agent and the relay, locally**: three copies of the game, three agents, one
    relay, everything on `127.0.0.1`, no tunnel and no 443. Per-recipient blob patching
    turns the debug `--probe-peer-address` into the real thing.

@@ -17,6 +17,7 @@
 
 import { createHash } from 'node:crypto';
 import type { IncomingMessage, Server } from 'node:http';
+import type { Socket } from 'node:net';
 import type { Duplex } from 'node:stream';
 
 /** RFC 6455's magic, appended to the client key before the hash. */
@@ -97,15 +98,23 @@ export interface WebSocketPeer {
   readonly url: string;
   readonly remoteAddress: string;
   send(bytes: Uint8Array): void;
+  /**
+   * The same, as a text frame.
+   *
+   * The datagrams this was written for are binary and always will be, but the core and
+   * the browser talk JSON to each other, and a browser handed a binary frame gets a Blob
+   * it has to unwrap before it can read a line of chat. One opcode saves that everywhere.
+   */
+  sendText(text: string): void;
   close(): void;
   onMessage(handler: (bytes: Buffer) => void): void;
   onClose(handler: () => void): void;
 }
 
-function attach(socket: Duplex, url: string): WebSocketPeer {
+function attach(socket: Socket, url: string): WebSocketPeer {
   const messageHandlers: ((bytes: Buffer) => void)[] = [];
   const closeHandlers: (() => void)[] = [];
-  let buffered = Buffer.alloc(0);
+  let buffered: Buffer = Buffer.alloc(0);
   // A message split across frames is reassembled; the game's datagrams are far too small
   // for a client to fragment one, but a client we did not write is free to.
   let partial: { opcode: number; chunks: Buffer[] } | null = null;
@@ -166,6 +175,10 @@ function attach(socket: Duplex, url: string): WebSocketPeer {
       if (closed) return;
       socket.write(writeFrame(OPCODE.binary, Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)));
     },
+    sendText(text) {
+      if (closed) return;
+      socket.write(writeFrame(OPCODE.text, Buffer.from(text, 'utf8')));
+    },
     close() {
       if (closed) return;
       socket.end(writeFrame(OPCODE.close, Buffer.alloc(0)));
@@ -200,7 +213,10 @@ export function serveWebSocket(server: Server, onPeer: (peer: WebSocketPeer) => 
         'Connection: Upgrade\r\n' +
         `Sec-WebSocket-Accept: ${acceptKey(key)}\r\n\r\n`,
     );
-    socket.setNoDelay(true);
-    onPeer(attach(socket, request.url ?? '/'));
+    // The upgrade event types this as a Duplex; it is a TCP socket, and the two things
+    // wanted here — no Nagle delay, and who is at the other end — belong to that.
+    const connection = socket as Socket;
+    connection.setNoDelay(true);
+    onPeer(attach(connection, request.url ?? '/'));
   });
 }

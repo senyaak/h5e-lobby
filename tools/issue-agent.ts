@@ -24,8 +24,16 @@ core.start();
 
 try {
   const secret = await core.issueAgent(name);
-  console.log(`\nagent secret for ${name} — put it in that copy's extension config, not in the game:\n`);
-  console.log(`  net_agent_secret ${secret}\n`);
+  // The two lines as the agent reads them. `relay` and `secret` are the words
+  // `relay_read_config` in the editor's `native/net/relay.c` looks for, and the file is
+  // the one its Network tab writes — so what is printed here can be pasted whole. It used
+  // to print `net_agent_secret`, which nothing has ever read.
+  console.log(`\nagent secret for ${name} — for that copy's bin/homm5-editor-net.txt, not the game:\n`);
+  console.log(`  relay ws://${settings.host}:${settings.relayPort}/agent`);
+  console.log(`  secret ${secret}\n`);
+  console.log('Behind a tunnel the first line is that hostname instead, with no query string:');
+  console.log('  relay wss://relay.example.com/agent\n');
+  console.log('The editor writes this file from its Network tab; that is the way to do it.');
   console.log('Anything issued for this name before now has stopped working.\n');
 } catch (error) {
   console.error(`could not reach the core at ${settings.coreUrl}: ${(error as Error).message}`);

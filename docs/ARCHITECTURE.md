@@ -251,9 +251,20 @@ gateway keeps writing `logs/latest.log` as well, because that is the file that g
      kept as a hash (`services/core/rules/agents.ts`, `npm run issue-agent -- <name>`),
      and WHICH ROOM from what the gateway last said. An agent whose player is in no room
      is refused, and so is one whose game has ended.
-   - **the agent**, in C, in `homm5-editor-net/native/net/` — WinHTTP for the WebSocket,
-     a hook on the socket the game plays on;
-   - **then three copies**, and only then whatever the addressing turns out to need.
+   - ~~**the agent**, in C~~ — **done 14.08.2026, and a duel was played through the relay.**
+     `homm5-editor-net/native/net/agent.c` and `relay.c`: WinHTTP for the WebSocket, hooks on
+     `sendto`/`recvfrom`/`select` (imported from WSOCK32 **by ordinal**), and the datagram
+     handed back to the game by answering its own `recvfrom`. Measured, both sides: 667 sent,
+     665 carried by the relay, 665 handed back, and exactly **one** datagram arriving directly
+     — the first handshake, before the relay was up. So no stand-in addresses and no
+     per-recipient patching: that question is closed by there being no address to rewrite.
+   - **three copies** — first attempt lagged and dropped a connection, for two reasons of
+     ours: the fleet was still running a build whose room list carried no endpoints, so the
+     relay sent every datagram to everybody in the room; and `roomEndpoints` walked the
+     description as fields, which does not survive a real one. Both fixed, **the run has not
+     been repeated yet**.
+   - what is still missing for a real game between strangers: a hole punch (today EVERY peer
+     datagram goes through the relay), and the tunnel.
 3. **The tunnel**: cloudflared in front, the agent's URL changes and nothing else does.
 4. **Two machines**, then a phone hotspot for a real CGNAT path.
 

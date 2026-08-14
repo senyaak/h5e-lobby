@@ -14,6 +14,20 @@ and prefixes their output.
 Only the gateway, the web and the relay are ever reached from outside. The core is
 loopback: everything that talks to it is on the same host.
 
+## Two addresses, and why they are not one
+
+| variable | what it does | default |
+|---|---|---|
+| `H5E_HOST` | **advertised only** — the host inside the `[Servers]` ini and the endpoints a room hands out. No socket is bound to it, so it must be an address the game can dial. | `127.0.0.1` |
+| `H5E_BIND` | what the gateway, the web and the relay **bind** | `0.0.0.0` |
+
+The core takes neither. It binds `127.0.0.1` and `startCore` refuses anything else
+(`services/core/server.ts`), because the only thing in front of it is `H5E_CORE_TOKEN`,
+and a token is a seatbelt, not a lock. That guard is what makes `H5E_BIND` safe to set:
+one variable moves the three services that are meant to be reachable, and there is no
+value of it that publishes the core. `tools/test-services.ts` checks both halves — the
+running core is on loopback, and a core handed `0.0.0.0` or a LAN address is refused.
+
 ## Install
 
 ```bash
@@ -33,6 +47,40 @@ Node 24 or newer, because the services run their TypeScript straight off disk. T
 nothing to build and nothing to `npm install` — this repository has no dependencies
 outside Node itself.
 
+## On this machine: the same four inside senyaak's fleet
+
+The `/opt` install above is for a host of its own. Here the four run as **user** units,
+next to the MCP servers and their tunnels in `~/Projects/tunnels` — same repository
+checkout, no root, and `./fleet` manages them like everything else:
+
+| unit | what it runs |
+|---|---|
+| `senyaak-h5e-core` | `services/core/main.ts` |
+| `senyaak-h5e-gateway` | `services/gateway/main.ts` |
+| `senyaak-h5e-web` | `services/web/main.ts` |
+| `senyaak-h5e-relay` | `services/relay/main.ts` |
+| `senyaak-h5e-tunnel` | cloudflared: `h5e-lobby.example.com` → `:8081`, `relay-h5e.example.com` → `:40200` |
+
+```bash
+systemctl --user start   senyaak-h5e.target    # the five, one command
+systemctl --user restart senyaak-h5e.target    # take them round together
+systemctl --user restart senyaak-h5e-gateway   # or just one of them
+journalctl --user -u senyaak-h5e-gateway -f
+~/Projects/tunnels/fleet                       # 0 = tree + health, local and public
+```
+
+`Restart=always` on every one of them, and `loginctl enable-linger` is already on, so
+they come back after a crash and after a reboot without anyone logging in. The units are
+files in `~/Projects/tunnels/systemd/`, symlinked into `~/.config/systemd/user/`;
+`H5E_HOST`, `H5E_BIND` and `H5E_CORE_TOKEN` live in `~/.config/h5e-lobby.env`, which is in
+neither repository.
+
+**The tunnel carries the lobby and the relay, and cannot carry the game.** cloudflared
+speaks HTTP and WebSocket; the game's ten desks are raw TCP and UDP, and its one HTTP
+request goes through `http_proxy`, which has to be a routable address. So the relay
+reaches the internet as `wss://relay-h5e.example.com/agent` while the game still dials
+`H5E_HOST` directly — SLICE §1.
+
 ## Day to day
 
 ```bash
@@ -40,9 +88,15 @@ systemctl status h5e-core h5e-gateway h5e-web h5e-relay
 journalctl -u h5e-gateway -f            # or tail logs/gateway-latest.log
 systemctl restart h5e-core              # the other three reconnect; a running game does not notice
 systemctl restart h5e.target            # all four
-curl -s localhost:40100/health          # core
-curl -s localhost:8081/health           # web
-curl -s localhost:40200/health          # relay
+```
+
+The health checks, from **on the host** — from anywhere else the first two are the
+tunnel's hostnames and the third is nobody's business:
+
+```bash
+curl -s localhost:8081/health           # web    — also https://h5e-lobby.example.com/health
+curl -s localhost:40200/health          # relay  — also https://relay-h5e.example.com/health
+curl -s localhost:40100/health          # core   — loopback, and only ever loopback
 ```
 
 **`Wants=`, not `Requires=`.** The gateway, the web and the relay all want the core and

@@ -9,9 +9,13 @@ to be recovered from memory.
 ## How to run it
 
 ```bash
-node tools/net-server.ts            # all our services, one process, logs to logs/
-node tools/net-server.ts --ghosts   # plus synthetic players in every channel
+npm start                                   # all four services, one terminal, logs to logs/
+node services/gateway/main.ts               # the game's desks alone (this was tools/net-server.ts)
+node services/gateway/main.ts --ghosts      # plus synthetic players in every channel
 ```
+
+On this machine they normally run as the fleet instead — `systemctl --user start
+senyaak-h5e.target`, see [deploy/README.md](../deploy/README.md).
 
 `--seed-profile` was a flag here and is now simply what happens: a player with no profile
 of his own is handed a minimal one, because refusing is a profile screen that stays shut.

@@ -1,12 +1,20 @@
 # SLICE — The lobby off this machine, and then onto the internet
 
-> **Status:** none of this is built. What IS built and measured is the local half —
-> four services, three copies of the game, every peer datagram carried by our own
-> relay ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), step 2). This file is the order
-> of work from there, written so it can be picked up on the laptop without recovering
-> anything from memory. When a stage is done, mark it here and fold the lasting part
-> into `docs/ARCHITECTURE.md` and `deploy/README.md`; when the list is empty, retire
-> this file.
+> **Status, 14.08.2026:** §2.1 done, §2.2 done on this machine, §3 done ahead of its
+> turn because the tunnel came with the install. The four services plus a cloudflared
+> tunnel run as `senyaak-h5e-*` user units in the `~/Projects/tunnels` fleet
+> (`systemctl --user start senyaak-h5e.target`, `deploy/README.md`);
+> `https://h5e-lobby.example.com` is the lobby and `wss://relay-h5e.example.com/agent`
+> is the relay, both answering `/health` over a real certificate. **Not** done: §2.3, and
+> no game has played through any of it yet — the two client-side files (§2.4) still point
+> nowhere, §2.5 has not been read off, and stage three is untouched.
+>
+> What IS built and measured is the local half — four services, three copies of the game,
+> every peer datagram carried by our own relay ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
+> step 2). This file is the order of work from there, written so it can be picked up on
+> the laptop without recovering anything from memory. When a stage is done, mark it here
+> and fold the lasting part into `docs/ARCHITECTURE.md` and `deploy/README.md`; when the
+> list is empty, retire this file.
 
 Reading first: [deploy/README.md](deploy/README.md) (how the fleet installs),
 [shared/config.ts](shared/config.ts) (where every address comes from),
@@ -58,7 +66,7 @@ the `http_proxy` that redirects the game deliberately does not leak into the age
 No tunnel, nothing public. This is the stage that finds the deployment bugs while
 every address is still one you can read off `ip addr`.
 
-### 2.1. Split the one address variable in two — do this FIRST
+### 2.1. Split the one address variable in two — DONE (14.08.2026)
 
 `H5E_HOST` is doing two contradictory jobs. It is **advertised** (it is the host inside
 the `[Servers]` ini, and the endpoints the room hands out) and it is also what the core,
@@ -87,12 +95,38 @@ While in there: the gateway logs `start the game with http_proxy=http://127.0.0.
 no matter what host it was given (`services/gateway/main.ts:94`). It should print the
 address it is actually advertising — that line is what gets copied into the bat file.
 
-### 2.2. Install, as `deploy/README.md` already describes
+**How it came out.** `H5E_BIND` (default `0.0.0.0`) is what the gateway, the web and the
+relay bind; `H5E_HOST` is advertised and bound to nothing. The core takes neither — it
+binds `127.0.0.1` and `startCore` throws on anything else, so no value of `H5E_BIND` can
+publish it, and `H5E_CORE_BIND` was not needed after all. `tools/test-services.ts` has
+the check and its sabotage half: with the guard commented out, `every interface is
+refused` goes red. The gateway's http line now prints the host it advertises, every
+listen line names the address it bound, and `--bind` joined `--host` on the command line.
+
+### 2.2. Install — DONE on this machine, as user units (14.08.2026)
 
 Node 24 or newer (the services run TypeScript straight off disk; there is nothing to
 build and nothing to install). Units and `h5e.target` from `deploy/systemd/`, env from
 `deploy/h5e-lobby.env.example`, and the firewall opened for the ports in §2.3 plus
 `8081` and `40200` — but **not** `40100`.
+
+Not that way here. `deploy/systemd/` is for a host of its own (`/opt`, a `h5e` user,
+root); this machine already has a fleet, so the four went into it as `senyaak-h5e-*`
+**user** units in `~/Projects/tunnels/systemd/`, running the working copy at
+`~/Projects/h5e-lobby`, with a `senyaak-h5e.target` that starts the five as one command
+and `Restart=always` on each — a killed relay was back in seconds without the tunnel
+noticing. `deploy/systemd/` stays as it is: it is what a VPS will use (§4.1), and the two
+must not drift.
+
+Two corrections to the paragraph above, learnt by doing it:
+
+- **`8081` and `40200` do NOT need opening.** cloudflared dials them from inside the
+  host; nothing arrives at them from outside. The only firewall question is the gateway's
+  ports — which is exactly why §2.3 is worth doing before anything is opened at all.
+- The firewall here is untouched and closed: `ufw` is active with
+  `DEFAULT_INPUT_POLICY="DROP"` and **no** user rules, so no desk is reachable from
+  another machine yet. A game on this same box is unaffected — its traffic to this box's
+  own LAN address goes over `lo`, which ufw lets through.
 
 ### 2.3. Nine listening ports become one
 
@@ -206,6 +240,18 @@ Per game copy, and neither of them is in a repository:
   unchanged. The editor's **Network** tab writes this file; use it rather than an
   editor.
 
+As the fleet stands today, those two lines are:
+
+```
+http_proxy=http://192.168.178.23:8080
+relay wss://relay-h5e.example.com/agent
+```
+
+The first is `H5E_HOST` from `~/.config/h5e-lobby.env` and has to be an address the game
+can dial — it changes here and in the bat file together, and its port changes again if
+§2.3's last step folds HTTP in. The second is already the internet one, so the relay half
+of this stage needs no LAN at all.
+
 ### 2.5. How to know the stage worked
 
 Same three readings as the local runs, and they are all in logs we already write:
@@ -219,7 +265,7 @@ Same three readings as the local runs, and they are all in logs we already write
 
 ---
 
-## 3. Stage two — TLS for the relay and the browser
+## 3. Stage two — TLS for the relay and the browser — DONE (14.08.2026)
 
 Cloudflared in front of `40200` and `8081`; the fleet unchanged behind it. The agent
 needs one line changed, `relay wss://relay.<domain>/agent`, and nothing else — that is
@@ -237,6 +283,19 @@ Two things worth knowing before it is tried:
 What this proves, and it is worth keeping isolated: the relay works across the internet
 while the lobby is still on the LAN. If a game breaks at this stage the tunnel is the
 only thing that changed.
+
+**As built.** One named tunnel, `h5e`, run by `senyaak-h5e-tunnel.service` from
+`~/.cloudflared/h5e.yml`, two ingresses: `https://h5e-lobby.example.com` → `:8081` and
+`wss://relay-h5e.example.com/agent` → `:40200`. Both answer `/health` over Cloudflare's
+certificate, and a WebSocket handshake to the relay's URL returns `101` — the tunnel
+carries the upgrade, which was the one thing worth proving before a game is pointed at
+it. The half only a game can do is still open: §2.4, and then a datagram out the far end.
+
+**Why `relay-h5e` and not `relay.h5e-lobby`.** Cloudflare's free certificate covers
+`example.com` and `*.example.com`, one level and no deeper. A two-level name would be
+served a certificate that does not match it, and the agent leaves WinHTTP's checks at the
+Windows defaults — the same reason a self-signed one is no good. Advanced Certificate
+Manager buys the second level; a hyphen is free.
 
 ---
 
@@ -305,7 +364,10 @@ already in both logs.
 
 ## 7. Small things to fix while passing through
 
-- `docs/NETWORK_STATE.md` still tells the reader to run `node tools/net-server.ts`;
-  that became `services/gateway/main.ts` when the fleet was split.
-- `deploy/README.md`'s health checks are written against `localhost`, which is right on
-  the host and misleading everywhere else.
+- ~~`docs/NETWORK_STATE.md` still tells the reader to run `node tools/net-server.ts`~~ —
+  fixed 14.08.2026; it names `services/gateway/main.ts` and the fleet target.
+- ~~`deploy/README.md`'s health checks are written against `localhost`~~ — fixed
+  14.08.2026; they say "from on the host", with the two public URLs beside them.
+- `startCore` now rejects instead of dying when it cannot have its socket. The other
+  three still let a `listen` error reach Node uncaught, which is a stack trace where a
+  sentence would do — and §2.3 will make one of them bind rather more.

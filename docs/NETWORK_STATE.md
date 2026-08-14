@@ -1366,15 +1366,31 @@ before looking at mods.
    complete `<game>\DuelPresets\<name>.h5p` — a zip holding `Maps/DuelPresets/<name>/`
    with `preset.xdb` (an `AdvMapHero`: hero, experience, army slots, artifacts),
    `name.txt` and three `HeroIcon_*` textures. Exactly the four pieces a list entry needs.
-   But the list the duel screen draws is a **fixed data table**,
-   `UI/MPDMLobby/presets.(DuelPresets).xdb` in `a2p1-data.pak`, 24 `<Item>`s each naming a
-   shipped hero and shipped icons. Nothing enumerates `.h5p`, so a saved preset is never
-   listed however it is mounted — putting the archive in the scanned mod folder changed
-   nothing, which was tried. An override of that table with a 25th Item pointing into the
-   saved archive was built (`H5E\homm5-editor-presets.h5u`, valid XML, 25 items) and did
-   not bring it up either, so the screen is not simply reading the packed table. Not
-   chased further. Сеня wants a preset editor in the game and presets carried to the other
-   player for a duel — a later feature, recorded here because the pieces are known.
+   The list is built at **0x5c33d0** from two sources merged: the shipped table
+   `SUIGameRoot+0x19C` → `UI/MPDMLobby/presets.(DuelPresets).xdb` (24 `<Item>`s), **and a
+   VFS scan for `Maps/DuelPresets/*/preset.xdb#xpointer(/AdvMapHero)`** — the same helper
+   that finds `Maps/SingleMissions/*/map-tag.xdb` and the RMG templates, so the archive is
+   exactly the right shape and the enumeration side should work.
+
+   It is the caller that blocks it. `GetDuelPresets` (0x5c2af0) consults the merged list
+   only when its flag is set, and the one caller (0x924be0) sets it **only if a minimum or
+   maximum price is non-zero** — otherwise it returns the built-in table and the scan is
+   never run. The prices come from `Maps/DuelPresets/dpcoeff.xdb` and the `DuelPresetsPrices`
+   table, and **neither exists in this installation**, in any pak or loose. No prices → the
+   selector offers no range → both stay 0 → custom presets are unreachable by construction.
+   Inference from the disassembly plus the missing files, not confirmed by instrumenting;
+   the discriminating test is a log at 0x5c33d0 — never entered means it is this, entered
+   and empty means the mount, entered and full means the price filter (0x5c2e4c) or the
+   validator (0x5c2ff7, which would leave `" Error in preset %ws: %s"` in the log).
+
+   Two more facts worth keeping. **The game never writes a preset** — the editor does, to
+   `DuelPresets\`, and retail scans `DuelPresets/*.h5p` while our build has that pattern
+   overwritten with `H5E/*.h5p` (0xf4f7f4), so on our exe the editor writes where the game
+   no longer looks. And a preset is validated before it is listed: attributes ≤ 19,
+   skills+perks ≤ 18, plus spell and prerequisite checks (0xa64620).
+
+   Сеня wants a preset editor in the game and presets carried to the other player for a
+   duel — a later feature, recorded here because the pieces are now known.
 3. **An adventure map, and more than two players.** Everything above is a duel between two
    clients. A third install is ready at `C:\Projects\homm5-game-net3` (port 8890,
    `run-net3.bat`) and will say whether the peers form a mesh or a star, and whether

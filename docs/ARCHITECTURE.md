@@ -116,10 +116,20 @@ The path choice is invisible to the game and to the core, so the agent may chang
 mid-game. The core's part is to hand out the materials for the choice — the peers' public
 endpoints, which its NAT desk already observes, and the relay's address.
 
-**Identity.** The agent holds a long-lived secret, issued once by the launcher logging in
-with the player's account, and kept in the extension's own config rather than anywhere the
-game can read. The game then logs in *inside* that tunnel, which gives the core a free
-consistency check: a login under a different name than the tunnel's owner is refused.
+**Identity.** The agent holds a secret, kept in the extension's own config
+(`bin/homm5-editor-net.txt`) rather than anywhere the game can read, and the relay turns it
+into a name by asking the core.
+
+**Where that secret comes from is OPEN, and there is no launcher.** An earlier version of
+this section had one — "the same page in an Electron shell" — issuing the secret at login
+and starting the game. There is no such thing and none is planned; Сеня cut it on
+14.08.2026, here and in `NETWORK_STATE.md`. What exists is a hand crank:
+`npm run issue-agent -- <name>` writes the hash, and the editor's **Network** tab writes
+the secret into the config. That is enough for our own copies and answers nothing for
+anybody else, so this is a decision still to be taken. The two candidates on the table are
+a secret handed out by the web lobby after the login it already performs, and the signed
+ticket above — and note that the ticket does not dodge the question, because a ticket has
+to reach the agent by exactly the same road a secret does.
 
 **The agent is C, inside the game** — a module of the existing native extension
 (`homm5-editor`, worktree `homm5-editor-net`, `native/net/`), not a process beside it.
@@ -213,8 +223,8 @@ Consequences worth knowing:
 - the browser is a chat participant, not a player: it is in the web presence list and in
   the channel, but not in the game's own player panel, which only `GROUP_INFO` fills.
 
-The launcher we need anyway — it issues the agent's secret and starts the game — is the
-same page in an Electron shell, and it logs in the same way.
+There is no launcher, and this page is not going to become one — see the identity section
+above for what that leaves open.
 
 ## Deployment
 

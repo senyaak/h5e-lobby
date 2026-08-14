@@ -1354,8 +1354,8 @@ unrelated hand-made map (`PandoraProbe.h5m`) was deleted from the joiner alone:
 
 And the path is in the blob we hold, in plain text:
 `/Maps/Multiplayer/test1/map.xdb#xpointer(/AdvMapDesc)` (676 bytes for that room). So this
-server can see which map every room needs, which is everything a launcher needs to fetch
-one before the player enters.
+server can see which map every room needs, which is everything needed to fetch one before
+the player enters — from inside the game, since there is no launcher to do it.
 
 **A trap for this server.** The host computes the value into `SGameInfo+0xC4` while
 composing his room description, so it rides in the settings blob we forward. That blob is
@@ -1369,9 +1369,10 @@ before looking at mods.
 
 1. **Getting a hand-made map to the other player.** Not a transport question after all:
    the game never sends one, it refuses the join instead (see the checksum section). So
-   distribution is ours to do — the lobby knows which map a room is for, and the launcher
-   could fetch it before the player enters. Nothing of this is written. Сеня wants it
-   eventually done **inside the game** rather than by a launcher (14.08.2026).
+   distribution is ours to do — the lobby knows which map a room is for, so something has
+   to fetch it before the player enters. Nothing of this is written, and it will not be a
+   launcher: there is no launcher and none is coming (14.08.2026). Сеня wants it done
+   **inside the game**.
 2. **Duel presets, which the game saves and then cannot show.** Saving one writes a
    complete `<game>\DuelPresets\<name>.h5p` — a zip holding `Maps/DuelPresets/<name>/`
    with `preset.xdb` (an `AdvMapHero`: hero, experience, army slots, artifacts),

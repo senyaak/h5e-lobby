@@ -1,6 +1,6 @@
 // The game gateway: the desks the game itself connects to.
 //
-//   node services/gateway.ts [--host 127.0.0.1] [--http 8080] [--ghosts] [--quiet-bot]
+//   node services/gateway/main.ts [--host 127.0.0.1] [--http 8080] [--ghosts] [--quiet-bot]
 //
 // This was `tools/net-server.ts`, the one process that was everything. What left it is
 // chat, which now belongs to the core so that a browser can be in the same conversation;
@@ -13,20 +13,21 @@
 // and no hosts file. We answer with an ini that points every service at this machine.
 //
 // The log goes to logs/gateway-latest.log AND, unchanged, to logs/latest.log — see
-// src/log.ts for why the old name is kept.
+// shared/log.ts for why the old name is kept.
 
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createServer as createTcpServer, type Socket } from 'node:net';
 import { createSocket } from 'node:dgram';
-import { config } from '../src/config.ts';
-import { hexDump, openLog } from '../src/log.ts';
-import { CoreClient } from '../src/core/client.ts';
-import type { PresenceEntry } from '../src/core/protocol.ts';
-import { NatService } from '../src/net/nat-service.ts';
-import { GUEST, GUEST_LOBBY, RouterService } from '../src/net/router-service.ts';
-import { CdKeyService } from '../src/net/cdkey-service.ts';
-import { IrcConnection, IrcService, chatLine, frame, fromGameText, lobbyChannel, toGameText } from '../src/net/irc.ts';
-import { DEFAULT_LOBBIES, probePeerAddress, probeRoomFields } from '../src/net/lobby.ts';
+import { config } from '../../shared/config.ts';
+import { hexDump, openLog } from '../../shared/log.ts';
+import { CoreClient } from '../../shared/core-client.ts';
+import type { PresenceEntry } from '../../shared/core-protocol.ts';
+import { NatService } from './nat-service.ts';
+import { GUEST, GUEST_LOBBY, RouterService } from './router-service.ts';
+import { CdKeyService } from './cdkey-service.ts';
+import { IrcConnection, IrcService, chatLine, frame, fromGameText, toGameText } from './irc.ts';
+import { probePeerAddress, probeRoomFields } from './lobby.ts';
+import { DEFAULT_LOBBIES, lobbyChannel } from '../../shared/channels.ts';
 
 const settings = config();
 
@@ -127,18 +128,18 @@ if (probePeerAddress.on)
     `probe-peer-address on — players are announced at ${probePeerAddress.pool.join(', ')}; run tools/peer-probe.ts and expect no game to connect`,
   );
 
-// One database holds accounts, profiles, ratings and friendships (src/net/database.ts).
+// One database holds accounts, profiles, ratings and friendships (services/core/rules/database.ts).
 // The core has it open too, for chat — see docs/ARCHITECTURE.md for where that seam is.
 if (router.imported.length) log(`brought across from the old JSON files: ${router.imported.join(', ')}`);
 log(`accounts: ${router.accounts.size} — a name is created by its first login, and the password is checked from then on`);
 log(`${GUEST} is seated in channel ${GUEST_LOBBY} — rating ${router.ladder.row(GUEST)['RATING']}`);
 
-// Every key the player types is accepted; see src/net/cdkey-service.ts for why
+// Every key the player types is accepted; see services/gateway/cdkey-service.ts for why
 // that is the honest answer rather than a shortcut.
 const cdkey = new CdKeyService();
 
 // Chat — and the reason a lobby channel can be entered at all: joining a lobby
-// makes the client join an IRC channel. See src/net/irc.ts.
+// makes the client join an IRC channel. See services/gateway/irc.ts.
 const irc = new IrcService();
 // The guest is in the chat's name list too. The player panel and the chat are two
 // different lists — the panel comes from GROUP_INFO, this one from the 353 numeric —
@@ -375,7 +376,7 @@ for (const service of [...SERVICES, PROXY, LOBBY]) {
           log(`UDP  ${label}:${port} -> ${from.address}:${from.port}, ${reply.length} bytes\n${hexDump(reply)}`);
         }
         // Some answers go out a second time a moment later — see `againAfterMs`
-        // in src/net/nat-service.ts for the race that makes that necessary.
+        // in services/gateway/nat-service.ts for the race that makes that necessary.
         const again = (result as { againAfterMs?: number }).againAfterMs;
         if (again) {
           setTimeout(() => {

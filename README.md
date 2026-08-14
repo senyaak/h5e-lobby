@@ -19,14 +19,26 @@ service at this machine.
 
 | | what it is | where |
 |---|---|---|
-| **core** | accounts, ladder, friends, presence, chat and its history | `services/core.ts`, loopback `40100` |
-| **gateway** | the desks the game itself connects to | `services/gateway.ts`, `8080` + the game's ports |
-| **web** | the browser lobby | `services/web.ts`, `8081` |
-| **relay** | game datagrams between agents | `services/relay.ts`, `40200` |
+| **core** | accounts, ladder, friends, presence, chat and its history | `services/core/main.ts`, loopback `40100` |
+| **gateway** | the desks the game itself connects to | `services/gateway/main.ts`, `8080` + the game's ports |
+| **web** | the browser lobby | `services/web/main.ts`, `8081` |
+| **relay** | game datagrams between agents | `services/relay/main.ts`, `40200` |
 
-One repository, four entry points, one systemd unit each — `deploy/README.md`. The core is
-the only one that touches the database, except for the game handlers that still reach it
-directly; that seam is named in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+One repository, four entry points, one systemd unit each — `deploy/README.md`. Each service
+keeps all of its own code in its own folder, and `shared/` holds only what genuinely
+crosses between them:
+
+```
+services/core/      main.ts server.ts core-service.ts chat.ts  rules/{accounts,ladder,friends,profiles,database}.ts
+services/gateway/   main.ts router-service.ts lobby.ts irc.ts gs-*.ts srp.ts blowfish.ts nat-service.ts …
+services/web/       main.ts web-service.ts index.html
+services/relay/     main.ts relay-service.ts
+shared/             config.ts log.ts websocket.ts core-protocol.ts core-client.ts channels.ts
+```
+
+The core is the only one that touches the database, except for the game handlers that still
+reach it directly — the gateway importing `../core/rules/` is that seam, left visible on
+purpose and named in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ```bash
 npm start                             # all four, output prefixed, logs to logs/<service>-latest.log
@@ -53,8 +65,8 @@ the same messages, and what was said while nobody was playing is still there.
   `net/multiplayer`): `docs/NETWORK.md` for how the exe finds its services,
   `native/net/ubi-log.c` for the detour that makes the client narrate what it is
   doing, `tools/net-probe.ts` for the disassembly. That is the split — the editor
-  does things *to* the game, this repo only listens. Comments in `src/net/` that
-  point at `docs/NETWORK.md` mean that one.
+  does things *to* the game, this repo only listens. Comments in `services/gateway/`
+  that point at `docs/NETWORK.md` mean that one.
 
 A player logs in with any name and the first login CREATES his account, with the
 password he typed; everything he leaves behind — that account, his profile, his

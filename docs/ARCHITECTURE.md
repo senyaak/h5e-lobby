@@ -21,11 +21,33 @@ player, and is the only thing that talks to the outside from there.
 
 ## Where the seam actually runs (14.08.2026)
 
-The web has landed, so there are four processes: `services/core.ts`, `services/gateway.ts`,
-`services/web.ts`, `services/relay.ts`, one systemd unit each (`deploy/`), and `npm start`
-runs all four locally through `tools/fleet.ts`. They talk to the core over one WebSocket
-carrying JSON — `src/core/protocol.ts` for what it says, `src/core/client.ts` for how a
-service says it.
+The web has landed, so there are four processes, one systemd unit each (`deploy/`), and
+`npm start` runs all four locally through `tools/fleet.ts`. They talk to the core over one
+WebSocket carrying JSON — `shared/core-protocol.ts` for what it says, `shared/core-client.ts`
+for how a service says it.
+
+**A service is a folder, not a file.** Everything only that service uses lives inside it,
+which is what makes "the web must not reach the database" something you can see rather
+than something written down:
+
+```
+services/core/      main.ts server.ts core-service.ts chat.ts
+                    rules/{accounts,ladder,friends,profiles,database}.ts
+services/gateway/   main.ts router-service.ts lobby.ts irc.ts gs-{data,message,xor}.ts
+                    srp.ts blowfish{,-tables}.ts nat-service.ts cdkey-service.ts pkc.ts
+                    address.ts structure.ts rules-wire.ts
+services/web/       main.ts web-service.ts index.html
+services/relay/     main.ts relay-service.ts
+shared/             config.ts log.ts websocket.ts core-protocol.ts core-client.ts channels.ts
+```
+
+Two of those need saying. `shared/channels.ts` holds the three lobbies and the
+`#LobbyGrp<server>.<group>` name because the core publishes that list to the browser and
+the gateway serves it to the game — neither may own it. `services/gateway/rules-wire.ts`
+holds `ladderPayload`, `matchResult` and `friendUpdate`: they are the client's shapes, so
+they sit on the protocol side, and with them gone `services/core/rules/` imports nothing
+of the game at all — which is what this document had been claiming while `ladder.ts` still
+imported `GSValue`.
 
 What actually moved into the core is **chat, its history, presence and the agent
 registry**. The rest of the rules — accounts, ladder, friends, profiles — are still called
@@ -48,7 +70,7 @@ gateway that sent it, which is how the gateway knows not to draw its own line tw
 
 **The wire is a codepage, not UTF-8.** The game's IRC is one byte per character in the
 client's Windows ANSI page (1251 here), so the gateway converts at its own edge —
-`fromGameText` / `toGameText` in `src/net/irc.ts`. Read as latin1 and stored, a Russian
+`fromGameText` / `toGameText` in `services/gateway/irc.ts`. Read as latin1 and stored, a Russian
 sentence becomes `:B>-=81C4L` and is lost; that is what the first live run did.
 
 ## Why the relay is not in the middle
@@ -146,7 +168,7 @@ One repository, four entry points, all on one host to begin with, started from t
 `deploy/README.md` for installing them. `Wants=` rather than `Requires=` on the core
 everywhere: it is allowed to restart. Сеня adjusts and tests these on the Linux laptop.
 
-Configuration is environment first, file second (`src/config.ts`,
+Configuration is environment first, file second (`shared/config.ts`,
 `deploy/h5e-lobby.env.example`): a container is fed variables, a laptop is fed a file.
 Nothing that matters is compiled in.
 
@@ -170,6 +192,6 @@ gateway keeps writing `logs/latest.log` as well, because that is the file that g
 3. **The tunnel**: cloudflared in front, the agent's URL changes and nothing else does.
 4. **Two machines**, then a phone hotspot for a real CGNAT path.
 
-Done already: the WebSocket layer (`src/net/websocket.ts`, ours, no dependency — messages
+Done already: the WebSocket layer (`shared/websocket.ts`, ours, no dependency — messages
 of any size arrive whole in both directions, verified) and the stand-in relay that carried
 real games (`tools/peer-probe.ts`).

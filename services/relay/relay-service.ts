@@ -18,8 +18,8 @@
 //   startRelay(options)   the http/ws server, listening, with close()
 
 import { createServer, type Server } from 'node:http';
-import { CoreClient } from '../core/client.ts';
-import { serveWebSocket, type WebSocketPeer } from '../net/websocket.ts';
+import { CoreClient } from '../../shared/core-client.ts';
+import { serveWebSocket, type WebSocketPeer } from '../../shared/websocket.ts';
 
 export interface RelayOptions {
   host: string;

@@ -58,7 +58,7 @@ profiles, ladder, friends, chat — but the gateway's game handlers still read a
 those tables directly, because they answer the client synchronously and a remote call
 cannot. SQLite in WAL mode, with `busy_timeout`, is what makes that safe today; moving
 those calls behind the core's API is what removes the question, and it changes nothing
-outside `src/net/router-service.ts`.
+outside `services/gateway/router-service.ts`.
 
 That is why `ReadWritePaths` gives `data/` to the core and the gateway, and to neither of
 the other two.

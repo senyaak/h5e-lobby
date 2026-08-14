@@ -30,7 +30,7 @@
  *   node tools/peer-probe.ts --listen-only    answer nothing, only say who dialled
  */
 import { createSocket, type Socket } from 'node:dgram';
-import { probePeerAddress } from '../src/net/lobby.ts';
+import { probePeerAddress } from '../services/gateway/lobby.ts';
 
 /** The game ports the copies of the game on this machine play on. */
 const PORTS = [8888, 8889, 8890];

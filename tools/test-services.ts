@@ -11,14 +11,15 @@
 //
 // Usage: `node tools/test-services.ts`
 
-import { openDatabase } from '../src/net/database.ts';
-import { startCore } from '../src/core/core-server.ts';
-import { CoreClient } from '../src/core/client.ts';
-import { ChatStore } from '../src/core/chat.ts';
-import type { ChannelInfo, ChatMessage, PresenceEntry } from '../src/core/protocol.ts';
-import { startWeb } from '../src/web/web-service.ts';
-import { startRelay } from '../src/relay/relay-service.ts';
-import { IrcConnection, chatLine, frame, fromGameText, lobbyChannel, parseChatLine, toGameText } from '../src/net/irc.ts';
+import { openDatabase } from '../services/core/rules/database.ts';
+import { startCore } from '../services/core/server.ts';
+import { CoreClient } from '../shared/core-client.ts';
+import { ChatStore } from '../services/core/chat.ts';
+import type { ChannelInfo, ChatMessage, PresenceEntry } from '../shared/core-protocol.ts';
+import { startWeb } from '../services/web/web-service.ts';
+import { startRelay } from '../services/relay/relay-service.ts';
+import { IrcConnection, chatLine, frame, fromGameText, parseChatLine, toGameText } from '../services/gateway/irc.ts';
+import { gameChannels, lobbyChannel } from '../shared/channels.ts';
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = ''): void {
@@ -36,11 +37,8 @@ async function until(ready: () => boolean, ms = 3000): Promise<boolean> {
   return ready();
 }
 
-const CHANNELS: ChannelInfo[] = [
-  { key: lobbyChannel(1), id: 1, name: 'Casual' },
-  { key: lobbyChannel(2), id: 2, name: 'Ranked' },
-  { key: lobbyChannel(3), id: 3, name: '1v1' },
-];
+/** The real list, the one the core publishes — not a copy of it that can drift. */
+const CHANNELS: ChannelInfo[] = gameChannels();
 const RANKED = lobbyChannel(2);
 const TOKEN = 'test-token';
 
@@ -96,7 +94,7 @@ const { db } = openDatabase(':memory:');
 const core = await startCore({ host: '127.0.0.1', port: 0, db, token: TOKEN, channels: CHANNELS });
 
 // The gateway's side of the wire, which is a CoreClient and nothing else — the same
-// object services/gateway.ts holds.
+// object services/gateway/main.ts holds.
 const heard: { message: ChatMessage; sender?: string }[] = [];
 let presenceSeen: PresenceEntry[] = [];
 const gateway = new CoreClient({ url: core.url(), token: TOKEN, service: 'gateway' });

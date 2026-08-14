@@ -14,7 +14,7 @@
 // Accounts are ours to define: the client shows a name and a password, and what
 // they mean is a decision on this side. The first login of a name CREATES it, with
 // the password that came with it, and every login after that is checked against it —
-// `src/net/accounts.ts`, kept in the one database (`src/net/database.ts`).
+// `services/core/rules/accounts.ts`, kept in the one database (`services/core/rules/database.ts`).
 //
 // Messages arrive over a TCP stream and can be bundled, so a session buffers and
 // walks whole messages by their size field.
@@ -23,14 +23,14 @@
 //   RouterService     new(waitModule) -> session(); session.receive(buf) -> Buffer[]
 
 import { hostU32String } from './address.ts';
-import { Accounts, type LoginVerdict } from './accounts.ts';
-import { openDatabase } from './database.ts';
-import { Friends, friendUpdate, type FriendState } from './friends.ts';
-import { Ladder, STARTING_RATING, ladderPayload, matchResult, settleMatch } from './ladder.ts';
-import { GET_DATA, PersistentStore, SET_DATA, recordKeyOf } from './persistent-store.ts';
+import { Accounts, type LoginVerdict } from '../core/rules/accounts.ts';
+import { openDatabase } from '../core/rules/database.ts';
+import { Friends, type FriendState } from '../core/rules/friends.ts';
+import { Ladder, STARTING_RATING, settleMatch } from '../core/rules/ladder.ts';
+import { GET_DATA, PersistentStore, SET_DATA, recordKeyOf } from '../core/rules/profiles.ts';
+import { friendUpdate, ladderPayload, matchResult } from './rules-wire.ts';
+import { DEFAULT_LOBBIES, GameMode } from '../../shared/channels.ts';
 import {
-  DEFAULT_LOBBIES,
-  GameMode,
   GroupType,
   LobbyMsg,
   Lsm,
@@ -761,7 +761,7 @@ export class RouterSession {
       case MessageType.JOINWAITMODULE: {
         // A decimal u32 in HOST order. Both other forms were tried and watched:
         // dotted sent the client to 0.0.0.127, and inet_addr's number sent it to
-        // 1.0.0.127. See src/net/address.ts.
+        // 1.0.0.127. See services/gateway/address.ts.
         const where = hostU32String(this.waitModule.address);
         // The proxy's own hand-off carries the user and spells the port out;
         // the router's carries four raw bytes. Both come from the client.

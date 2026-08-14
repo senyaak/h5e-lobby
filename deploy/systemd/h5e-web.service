@@ -11,7 +11,7 @@ User=h5e
 Group=h5e
 WorkingDirectory=/opt/h5e-lobby
 EnvironmentFile=-/etc/h5e-lobby.env
-ExecStart=/usr/bin/node services/web.ts
+ExecStart=/usr/bin/node services/web/main.ts
 Restart=on-failure
 RestartSec=2
 

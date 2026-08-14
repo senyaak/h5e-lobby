@@ -22,7 +22,6 @@
 //   FriendState   what we say about him beside his name
 
 import type { DatabaseSync } from 'node:sqlite';
-import type { GSValue } from './gs-data.ts';
 
 /**
  * What is said about a friend beside his name.
@@ -40,44 +39,6 @@ export interface FriendState {
   groupId: number;
   /** His rating, because it is what the panel draws beside a name everywhere else. */
   rating: number;
-}
-
-/** A four-byte little-endian number, which is how the reader below takes one. */
-function u32(value: number): GSValue {
-  const out = Buffer.alloc(4);
-  out.writeUInt32LE(value >>> 0, 0);
-  return new Uint8Array(out);
-}
-
-/**
- * One friend, as message 74 — the body its parser takes, field by field.
- *
- * 74 is a PUSH and not a reply, and the difference is in the parser: 0x428f40 hands
- * the body to 0x428d90, which matches the message and then insists `[eax+4] == 0x4A`
- * — the message's own type byte, where a reply would carry the 38/39 envelope with
- * the key repeated inside it. So this goes out unasked, with type 74, and the client
- * takes it.
- *
- * The six fields, and the getter that reads each (a getter refuses the wrong KIND
- * outright and the whole message is then dropped without a word — the same silence
- * that hid the ladder for a day):
- *
- *   0  string    0x4426c0   the friend's name
- *   1  4 bytes   0x442620
- *   2  string    0x4426c0
- *   3  4 bytes   0x442620
- *   4  4 bytes   0x442620
- *   5  string    0x443400   the only optional one: when it is missing the client
- *                           copies a 132-byte default of its own in its place
- *
- * WHAT they mean is not read anywhere — no reading of the exe says which number is a
- * status and which string is a place. So they are filled in the way a friends row
- * plausibly wants, with no two numbers alike, and the client itself will say: it
- * prints all six into the game's log (0xdf45e0) before packing them into a struct,
- * so one launch shows what arrived, and the panel shows which of them it draws.
- */
-export function friendUpdate(name: string, state: FriendState): GSValue[] {
-  return [name, u32(state.online ? 1 : 0), state.place, u32(state.groupId), u32(state.rating), ''];
 }
 
 export class Friends {

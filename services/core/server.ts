@@ -2,7 +2,7 @@
 //
 // `CoreService` answers; this puts it behind a WebSocket and a health check. It is its own
 // file so that the tests can raise a whole core on an ephemeral port with a database that
-// lives in memory, and be testing the same thing `services/core.ts` runs.
+// lives in memory, and be testing the same thing `services/core/main.ts` runs.
 //
 // Exports:
 //   startCore(options)   listening, with close()
@@ -10,8 +10,8 @@
 import { createServer, type Server } from 'node:http';
 import type { DatabaseSync } from 'node:sqlite';
 import { CoreService } from './core-service.ts';
-import type { ChannelInfo } from './protocol.ts';
-import { serveWebSocket } from '../net/websocket.ts';
+import type { ChannelInfo } from '../../shared/core-protocol.ts';
+import { serveWebSocket } from '../../shared/websocket.ts';
 
 export interface CoreServerOptions {
   host: string;

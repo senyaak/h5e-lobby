@@ -14,9 +14,12 @@
 // Exports:
 //   LobbyMsg              the subtypes we answer
 //   GroupType, Lsm        what a group is, and what it asks for
-//   DEFAULT_LOBBIES       the three we offer
 //   lobbyEntry(lobby)     one lobby as the client reads it
+//
+// The three lobbies themselves are NOT here: the core publishes the same list to the
+// browser, so it lives in shared/channels.ts where neither service owns it.
 
+import type { Lobby } from '../../shared/channels.ts';
 import { type GSValue } from './gs-data.ts';
 import { readFields, writeFields } from './structure.ts';
 
@@ -131,9 +134,6 @@ export const PlayerStatus = {
   MATCHPLAYING: 16,
 } as const;
 
-/** Game modes, as the client counts them. */
-export const GameMode = { STANDARD: 0, RATED: 1, DUEL: 2 } as const;
-
 /**
  * The port the game itself plays on, as opposed to the ports this server listens on.
  *
@@ -143,21 +143,6 @@ export const GameMode = { STANDARD: 0, RATED: 1, DUEL: 2 } as const;
  * the announcement that the game has started.
  */
 export const GAME_PORT = 8888;
-
-export interface Lobby {
-  id: number;
-  name: string;
-  mode: number;
-  maxMembers: number;
-  members: number;
-}
-
-/** What we offer on the lobby screen. Ours to choose; the client only lists them. */
-export const DEFAULT_LOBBIES: Lobby[] = [
-  { id: 1, name: 'Casual', mode: GameMode.STANDARD, maxMembers: 8, members: 0 },
-  { id: 2, name: 'Ranked', mode: GameMode.RATED, maxMembers: 8, members: 0 },
-  { id: 3, name: '1v1', mode: GameMode.DUEL, maxMembers: 8, members: 0 },
-];
 
 /**
  * A game somebody is hosting.

@@ -1,14 +1,14 @@
 // The web lobby, as a process.
 //
-//   node services/web.ts
+//   node services/web/main.ts
 //
 // A page and a WebSocket, and nothing else — the service that must never reach the
 // database (docs/ARCHITECTURE.md). It is the one of the four that a person points a
 // browser at, so it is also the one that will eventually stand behind the tunnel.
 
-import { config } from '../src/config.ts';
-import { openLog } from '../src/log.ts';
-import { startWeb } from '../src/web/web-service.ts';
+import { config } from '../../shared/config.ts';
+import { openLog } from '../../shared/log.ts';
+import { startWeb } from './web-service.ts';
 
 const settings = config();
 const log = openLog('web');

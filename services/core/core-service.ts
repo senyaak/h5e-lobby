@@ -3,7 +3,7 @@
 //
 // This file is the part that answers. It knows nothing about sockets: it is handed a way
 // to write text and gives back something to feed the text that arrives, so the same code
-// serves a WebSocket in `services/core.ts` and a pair of function calls in the tests.
+// serves a WebSocket in `services/core/main.ts` and a pair of function calls in the tests.
 //
 // What it carries today is chat with its history, the presence the services push into it,
 // and the agent registry the relay asks. The rest of the rules still live in the gateway's
@@ -23,7 +23,7 @@ import {
   type FromCore,
   type PresenceEntry,
   type ToCore,
-} from './protocol.ts';
+} from '../../shared/core-protocol.ts';
 
 export interface CoreConnection {
   receive(frame: Buffer | string): void;

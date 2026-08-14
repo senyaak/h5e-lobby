@@ -11,7 +11,7 @@ User=h5e
 Group=h5e
 WorkingDirectory=/opt/h5e-lobby
 EnvironmentFile=-/etc/h5e-lobby.env
-ExecStart=/usr/bin/node services/relay.ts
+ExecStart=/usr/bin/node services/relay/main.ts
 Restart=on-failure
 RestartSec=2
 

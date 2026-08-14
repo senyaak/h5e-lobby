@@ -14,12 +14,12 @@
 //   node tools/net-decode.ts --file dump.txt
 
 import { readFileSync } from 'node:fs';
-import { decodeBody, type GSValue } from '../src/net/gs-data.ts';
-import { decrypt } from '../src/net/gs-xor.ts';
-import { HEADER_SIZE as GS_HEADER, MessageType, Property, parse } from '../src/net/gs-message.ts';
-import { HEADER_SIZE as SRP_HEADER, flagNames, parseSegment, verify } from '../src/net/srp.ts';
-import { IRC_KEY } from '../src/net/irc.ts';
-import { Blowfish } from '../src/net/blowfish.ts';
+import { decodeBody, type GSValue } from '../services/gateway/gs-data.ts';
+import { decrypt } from '../services/gateway/gs-xor.ts';
+import { HEADER_SIZE as GS_HEADER, MessageType, Property, parse } from '../services/gateway/gs-message.ts';
+import { HEADER_SIZE as SRP_HEADER, flagNames, parseSegment, verify } from '../services/gateway/srp.ts';
+import { IRC_KEY } from '../services/gateway/irc.ts';
+import { Blowfish } from '../services/gateway/blowfish.ts';
 
 const args = process.argv.slice(2);
 const srpMode = args.includes('--srp');

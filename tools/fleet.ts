@@ -12,7 +12,7 @@
 // Each service still writes its own file in logs/ — this only makes them visible at once.
 
 import { spawn, type ChildProcess } from 'node:child_process';
-import { repoRoot } from '../src/config.ts';
+import { repoRoot } from '../shared/config.ts';
 
 interface Unit {
   name: string;
@@ -25,10 +25,10 @@ interface Unit {
 const gatewayFlags = process.argv.slice(2);
 
 const FLEET: Unit[] = [
-  { name: 'core   ', script: 'services/core.ts', colour: '\u001b[33m' },
-  { name: 'gateway', script: 'services/gateway.ts', colour: '\u001b[36m', args: gatewayFlags },
-  { name: 'web    ', script: 'services/web.ts', colour: '\u001b[32m' },
-  { name: 'relay  ', script: 'services/relay.ts', colour: '\u001b[35m' },
+  { name: 'core   ', script: 'services/core/main.ts', colour: '\u001b[33m' },
+  { name: 'gateway', script: 'services/gateway/main.ts', colour: '\u001b[36m', args: gatewayFlags },
+  { name: 'web    ', script: 'services/web/main.ts', colour: '\u001b[32m' },
+  { name: 'relay  ', script: 'services/relay/main.ts', colour: '\u001b[35m' },
 ];
 
 const RESET = '\u001b[0m';

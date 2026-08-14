@@ -23,6 +23,6 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src/**/*.ts", "tools/**/*.ts", "services/**/*.ts"],
+  "include": ["shared/**/*.ts", "services/**/*.ts", "tools/**/*.ts"],
   "exclude": ["node_modules", "logs"]
 }

@@ -17,11 +17,11 @@
 
 import { createServer, type Server } from 'node:http';
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { repoRoot } from '../config.ts';
-import { CoreClient } from '../core/client.ts';
-import type { ChannelInfo, ChatMessage, PresenceEntry } from '../core/protocol.ts';
-import { serveWebSocket, type WebSocketPeer } from '../net/websocket.ts';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { CoreClient } from '../../shared/core-client.ts';
+import type { ChannelInfo, ChatMessage, PresenceEntry } from '../../shared/core-protocol.ts';
+import { serveWebSocket, type WebSocketPeer } from '../../shared/websocket.ts';
 
 /** What a page sends us. */
 type FromBrowser =
@@ -58,7 +58,9 @@ export interface RunningWeb {
   close(): Promise<void>;
 }
 
-const PAGE = join(repoRoot, 'src', 'web', 'index.html');
+/** Beside this file, not somewhere under the repository root: moving the folder should
+ *  not be able to turn the page into a 500, which is exactly what it did once. */
+const PAGE = join(dirname(fileURLToPath(import.meta.url)), 'index.html');
 
 export function startWeb(options: WebOptions): Promise<RunningWeb> {
   const log = options.log ?? ((): void => {});

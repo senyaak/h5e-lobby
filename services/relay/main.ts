@@ -1,6 +1,6 @@
 // The relay, as a process.
 //
-//   node services/relay.ts
+//   node services/relay/main.ts
 //
 // Nothing plays through it yet: the agent that would dial it is the next step
 // (docs/ARCHITECTURE.md, "What to build first", step 2), and until it exists this listens
@@ -8,9 +8,9 @@
 // about what it does NOT depend on, and that is only true if it is separate from the
 // start.
 
-import { config } from '../src/config.ts';
-import { openLog } from '../src/log.ts';
-import { startRelay } from '../src/relay/relay-service.ts';
+import { config } from '../../shared/config.ts';
+import { openLog } from '../../shared/log.ts';
+import { startRelay } from './relay-service.ts';
 
 const settings = config();
 const log = openLog('relay');

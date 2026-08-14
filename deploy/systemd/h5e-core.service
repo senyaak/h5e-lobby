@@ -11,9 +11,9 @@ User=h5e
 Group=h5e
 WorkingDirectory=/opt/h5e-lobby
 # The dash means "start anyway if it is not there" — a laptop may configure by file
-# instead, or by nothing at all and take the defaults in src/config.ts.
+# instead, or by nothing at all and take the defaults in shared/config.ts.
 EnvironmentFile=-/etc/h5e-lobby.env
-ExecStart=/usr/bin/node services/core.ts
+ExecStart=/usr/bin/node services/core/main.ts
 Restart=on-failure
 RestartSec=2
 # The core going away must not end a game in progress; the other three reconnect on

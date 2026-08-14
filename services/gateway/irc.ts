@@ -128,18 +128,6 @@ function channelName(raw: string): string {
 }
 
 /**
- * The channel of a lobby, as the client spells it: `#LobbyGrp<server>.<group>`.
- *
- * Server FIRST, group second — off the wire, where entering channel 2 on lobby server
- * 1 joins `#LobbyGrp1.2`. Read the other way round (which is how it was written the
- * first time) the guest talked into a channel that does not exist and nobody heard a
- * thing.
- */
-export function lobbyChannel(group: number, server = 1): string {
-  return `#LobbyGrp${server}.${group}`;
-}
-
-/**
  * One line of chat, in the wrapper the client puts round its own.
  *
  * Verbatim from a message Сеня typed: `Senyaak%16777215%9%0%0%Arial%123` — the nick,

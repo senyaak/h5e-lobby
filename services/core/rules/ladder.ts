@@ -19,7 +19,6 @@
 //   ladderPayload(...)  the whole result table, as the reply carries it
 
 import type { DatabaseSync } from 'node:sqlite';
-import { type GSValue } from './gs-data.ts';
 
 /** The eight factions, in the order the exe lists them. */
 export const FACTIONS = [
@@ -157,29 +156,6 @@ export interface MatchResult {
 }
 
 /**
- * Read a submitted results row into the fields above.
- *
- * A row is `[name, highestStatId, howMany, mask, [values…]]`. The mask is which stat ids
- * are present and the values are in id order; every match so far has sent ids 0…21 whole,
- * so the values are indexed directly and a missing cell reads as zero.
- */
-export function matchResult(row: readonly GSValue[]): MatchResult | null {
-  const name = typeof row[0] === 'string' ? row[0] : '';
-  const values = Array.isArray(row[4]) ? row[4] : [];
-  if (!name || !values.length) return null;
-  const at = (id: number): number => Number(typeof values[id] === 'string' ? values[id] : 0) || 0;
-  return {
-    name,
-    won: at(Stat.WON) !== 0,
-    faction: at(Stat.FACTION),
-    seconds: at(Stat.SECONDS),
-    heroesLost: at(Stat.HEROES_LOST),
-    heroesDefeated: at(Stat.HEROES_DEFEATED),
-    averageHeroLevel: at(Stat.AVERAGE_HERO_LEVEL),
-  };
-}
-
-/**
  * Write a finished rated game into the ladder, for both players at once.
  *
  * Everything here feeds a screen the player can actually look at — the profile draws
@@ -314,58 +290,4 @@ export class Ladder {
   get size(): number {
     return (this.db.prepare('SELECT COUNT(*) AS n FROM ladder').get() as { n: number }).n;
   }
-}
-
-/**
- * The result table, in the shape the client's own parser takes it apart in.
- *
- * Read at 0x432c80, which is the whole of what a successful ladder answer has to be.
- * Every step of it refuses in silence, so each one is worth naming:
- *
- *   payload[0]  a decimal string that must read as **1** (0x443740 is atoi on a
- *               string field); anything else and the parser returns 7, which the
- *               caller turns into "failed, reason 63"
- *   payload[1]  the table, a list of four:
- *     [0]       **the request's own id**, and getting this wrong cost a day. It is
- *               kept at result+8, and the reader (0x42c7f0) — having already resolved
- *               the right id out of its pending map — OVERWRITES it with this one at
- *               0x42c987 before handing it to the game. The game compares it with what
- *               it is waiting for and drops the reply as "not waiting reply with
- *               RequestId=N" when they differ. So it is not ours to choose: it is the
- *               number the query carried, `body[2][1][0]`, which counts 1, 2, 3 …
- *               across a session while the module's own id counts 1, 3, 5, 7
- *     [1]       another number, kept at result+0xC. The client prints both in
- *               `StartResultEntryEnumeration(id,N)`; 0 works and nothing has needed
- *               more — the one guess left in this file
- *     [2]       the COLUMNS: a list of pairs of strings, each at most 32 characters.
- *               Element 0 is the column's name and it is pushed onto the result's own
- *               ordered vector; element 1 goes into a second map and nothing we have
- *               read ever looks at it — "1" is ours, and a guess
- *     [3]       the ROWS: a list of lists of strings, at most 128 characters each
- *
- * The rule that makes or breaks it: 0x432b10 compares a row's cell count with the
- * column count and returns error 3 if they differ — so every row is exactly as long
- * as the column list, no shortcuts for absent stats. Each row becomes a map from
- * column name to cell, and `LadderQuery_GetCurrentEntryField` runs the cell through
- * `strtol` and insists the WHOLE cell was consumed (0x431f20). So every value here is
- * a plain decimal number: no names, no empty cells, no units.
- *
- * The verdict is one line in the game's log — `LadderQueryRcv_RequestReply: (38,…)`
- * and `LadderQuery_StartResultEntryEnumeration(…) succeeded` against "ladder query
- * request failed,reason=…", where 63 is a bad tag and 64 a table the parser gave up on.
- */
-export function ladderPayload(
-  requestId: string,
-  rows: readonly LadderStats[],
-  keys: readonly string[] = LADDER_KEYS,
-): GSValue[] {
-  return [
-    '1',
-    [
-      requestId,
-      '0',
-      keys.map((key) => [key, '1']),
-      rows.map((row) => keys.map((key) => String(Math.trunc(row[key] ?? 0)))),
-    ],
-  ];
 }

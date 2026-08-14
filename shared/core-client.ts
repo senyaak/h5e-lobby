@@ -2,7 +2,7 @@
 //
 // Node has had a WebSocket client of its own since 22, so this is the one place in the
 // repository that does not write its own protocol: the server side is ours because the
-// game's datagrams travel through it (src/net/websocket.ts), the client side carries JSON
+// game's datagrams travel through it (shared/websocket.ts), the client side carries JSON
 // between our own processes and has nothing to prove.
 //
 // It reconnects. The core is allowed to restart — that is the point of the split — so a
@@ -14,8 +14,8 @@
 // Exports:
 //   CoreClient   start(), post(), history(), replacePresence(), identifyAgent()
 
-import type { ChannelInfo, ChatMessage, FromCore, Origin, PresenceEntry, ToCore } from './protocol.ts';
-import { decode, encode } from './protocol.ts';
+import type { ChannelInfo, ChatMessage, FromCore, Origin, PresenceEntry, ToCore } from './core-protocol.ts';
+import { decode, encode } from './core-protocol.ts';
 
 export interface CoreClientOptions {
   url: string;

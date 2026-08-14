@@ -7,14 +7,14 @@
 // database on its way through, whoever typed it and wherever it came from.
 //
 // The text stored is the bare sentence, not the game's presentation wrapper
-// (`nick%colour%size%0%0%font%text`, see src/net/irc.ts). The wrapper is how one client
+// (`nick%colour%size%0%0%font%text`, see services/gateway/irc.ts). The wrapper is how one client
 // draws a line; it is not what was said, and a browser must not have to strip it.
 //
 // Exports:
 //   ChatStore   post(line) -> the stored message, history(channel, limit)
 
 import type { DatabaseSync } from 'node:sqlite';
-import type { ChatMessage, Origin } from './protocol.ts';
+import type { ChatMessage, Origin } from '../../shared/core-protocol.ts';
 
 interface Row {
   id: number;

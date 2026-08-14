@@ -1,6 +1,6 @@
 // The core, as a process.
 //
-//   node services/core.ts
+//   node services/core/main.ts
 //
 // It owns the database and answers the other three over one WebSocket on loopback. It
 // speaks nothing of the game's protocol and never will: that is the gateway's job, and
@@ -10,13 +10,11 @@
 // game already in progress does not notice — nothing in a running match passes through
 // here (docs/ARCHITECTURE.md, "Why the relay is not in the middle").
 
-import { config } from '../src/config.ts';
-import { openLog } from '../src/log.ts';
-import { startCore } from '../src/core/core-server.ts';
-import type { ChannelInfo } from '../src/core/protocol.ts';
-import { openDatabase } from '../src/net/database.ts';
-import { DEFAULT_LOBBIES } from '../src/net/lobby.ts';
-import { lobbyChannel } from '../src/net/irc.ts';
+import { config } from '../../shared/config.ts';
+import { openLog } from '../../shared/log.ts';
+import { startCore } from './server.ts';
+import { gameChannels } from '../../shared/channels.ts';
+import { openDatabase } from './rules/database.ts';
 
 const settings = config();
 const log = openLog('core');
@@ -24,17 +22,11 @@ const log = openLog('core');
 const { db, imported } = openDatabase(settings.database);
 if (imported.length) log(`brought across from the old JSON files: ${imported.join(', ')}`);
 
-/**
- * The channels, which are the game's lobbies seen from the other side.
- *
- * The game knows them by number and the browser by name; the key both of them end up
- * using is the IRC channel, because that is the one name that already exists on the wire.
- */
-const channels: ChannelInfo[] = DEFAULT_LOBBIES.map((lobby) => ({
-  key: lobbyChannel(lobby.id),
-  id: lobby.id,
-  name: lobby.name,
-}));
+// The channels are the game's lobbies seen from the other side: the game knows them by
+// number, the browser by name, and the key both end up using is the IRC channel, because
+// that is the one name that already exists on the wire. The list is in shared/ so that
+// this service does not have to import the game's protocol to know it.
+const channels = gameChannels();
 
 const running = await startCore({
   host: settings.host,

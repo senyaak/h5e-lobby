@@ -8,22 +8,23 @@
 //
 // Usage: `node tools/test-net.ts`
 
-import { decode, decodeBody, encode, encodeBody, type GSValue } from '../src/net/gs-data.ts';
-import { decrypt, encrypt } from '../src/net/gs-xor.ts';
-import { HEADER_SIZE, Flags, buildSegment, checksum, parseSegment, verify } from '../src/net/srp.ts';
-import { MessageType, Property, build, parse } from '../src/net/gs-message.ts';
-import { NatService, inetU32 } from '../src/net/nat-service.ts';
-import { KEY_BLOB_SIZE, decryptWith, encryptTo, generateKeyPair, parsePublicKey, publicKeyBlob } from '../src/net/pkc.ts';
-import { GUEST, GUEST_LOBBY, RouterService, type RouterSession } from '../src/net/router-service.ts';
-import { Blowfish } from '../src/net/blowfish.ts';
-import { CdKeyRequest, CdKeyService } from '../src/net/cdkey-service.ts';
-import { GAME_PORT, LobbyMsg, Lsm, RoomUpdate, playerInfo, withRating } from '../src/net/lobby.ts';
-import { findField, readFields, writeFields } from '../src/net/structure.ts';
-import { FACTIONS, LADDER_KEYS, Ladder, STARTING_RATING } from '../src/net/ladder.ts';
-import { Accounts } from '../src/net/accounts.ts';
-import { Friends } from '../src/net/friends.ts';
-import { openDatabase } from '../src/net/database.ts';
-import { IrcService, chatLine, frame, lobbyChannel, unframe } from '../src/net/irc.ts';
+import { decode, decodeBody, encode, encodeBody, type GSValue } from '../services/gateway/gs-data.ts';
+import { decrypt, encrypt } from '../services/gateway/gs-xor.ts';
+import { HEADER_SIZE, Flags, buildSegment, checksum, parseSegment, verify } from '../services/gateway/srp.ts';
+import { MessageType, Property, build, parse } from '../services/gateway/gs-message.ts';
+import { NatService, inetU32 } from '../services/gateway/nat-service.ts';
+import { KEY_BLOB_SIZE, decryptWith, encryptTo, generateKeyPair, parsePublicKey, publicKeyBlob } from '../services/gateway/pkc.ts';
+import { GUEST, GUEST_LOBBY, RouterService, type RouterSession } from '../services/gateway/router-service.ts';
+import { Blowfish } from '../services/gateway/blowfish.ts';
+import { CdKeyRequest, CdKeyService } from '../services/gateway/cdkey-service.ts';
+import { GAME_PORT, LobbyMsg, Lsm, RoomUpdate, playerInfo, withRating } from '../services/gateway/lobby.ts';
+import { findField, readFields, writeFields } from '../services/gateway/structure.ts';
+import { FACTIONS, LADDER_KEYS, Ladder, STARTING_RATING } from '../services/core/rules/ladder.ts';
+import { Accounts } from '../services/core/rules/accounts.ts';
+import { Friends } from '../services/core/rules/friends.ts';
+import { openDatabase } from '../services/core/rules/database.ts';
+import { IrcService, chatLine, frame, unframe } from '../services/gateway/irc.ts';
+import { lobbyChannel } from '../shared/channels.ts';
 import { readFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';

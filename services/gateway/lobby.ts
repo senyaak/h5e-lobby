@@ -440,49 +440,57 @@ export const probePeerAddress = {
  * dialled, so somebody has to hold "this address is that player", and this is
  * where the game itself says so.
  *
- * Read as fields rather than scanned for bytes, and recursively, because the
- * records sit inside the description rather than at its top; a payload that is
- * not a run of fields is a leaf and is left alone.
+ * FOUND BY ITS SHAPE, not by walking the document as fields — which was tried
+ * first and does not survive real bytes: the description holds parts this does
+ * not understand, a field walk stops at the first of them, and on a captured
+ * two-player room it lost the second player. `probeEndpoints` below has been
+ * finding the same record by its bytes for as long as it has existed, against
+ * live clients, so this reads it the same way and each hit carries the same
+ * guard: tag 3 with sixteen bytes right behind the port, or it is a
+ * coincidence somewhere else in the document.
  */
 export function roomEndpoints(info: Uint8Array): Array<{ nick: string; address: string; port: number }> {
+  const buf = Buffer.from(info);
   const found: Array<{ nick: string; address: string; port: number }> = [];
+  const shape = Buffer.from([0x04, 0x2c, 0x02, 0x04]);
+  const seen = new Set<string>();
 
-  const walk = (buf: Buffer): void => {
-    let fields: Field[];
-    try {
-      fields = readFields(buf);
-    } catch {
-      return; // not a document; a leaf that happens to start like one
+  let at = 0;
+  for (;;) {
+    at = buf.indexOf(shape, at);
+    if (at < 0) break;
+    const port = buf.readUInt16LE(at + 4);
+    // The same guard `probeEndpoints` writes under: tag 3 with sixteen bytes, or
+    // this is a coincidence somewhere else in the document.
+    if (buf[at + 6] !== 0x03 || buf[at + 7] !== 0x20 || at + 12 > buf.length) {
+      at += shape.length;
+      continue;
     }
+    const address = [...buf.subarray(at + 8, at + 12)].join('.');
+
+    // The name, backwards from here: a `02 <len>` whose text ends exactly where
+    // this player's record begins. Exactly, not nearly — that is what makes it a
+    // reading rather than a guess, and a record whose name does not line up is
+    // reported without one instead of with somebody else's.
     let nick = '';
-    for (const field of fields) {
-      if (field.tag === 2 && field.value.length && field.value.length < 64) {
-        const text = field.value.toString('latin1');
-        // A name is text; the same tag carries numbers elsewhere in this format.
-        if (/^[\x20-\x7e\xa0-\xff]+$/.test(text)) nick = text;
-      }
-      if (field.tag === 4 && field.value.length >= 22) {
-        try {
-          const inner = readFields(field.value);
-          const port = inner.find((one) => one.tag === 2);
-          const address = inner.find((one) => one.tag === 3);
-          if (port?.value.length === 2 && address?.value.length === 16) {
-            found.push({
-              nick,
-              address: [...address.value.subarray(0, 4)].join('.'),
-              port: port.value.readUInt16LE(0),
-            });
-            continue;
-          }
-        } catch {
-          /* not the record we are after */
-        }
-      }
-      if (field.value.length > 2 && looksLikeFields(field.value)) walk(field.value);
+    const sockaddr = at - 20; /* 03 24 02 20 + sixteen bytes */
+    for (let back = 2; back <= 64 && sockaddr - back >= 0; back += 1) {
+      const p = sockaddr - back - 2;
+      if (p < 0 || buf[p] !== 0x02) continue;
+      const size = buf[p + 1]! >>> 1;
+      if ((buf[p + 1]! & 1) !== 0 || p + 2 + size !== sockaddr) continue;
+      const text = buf.subarray(p + 2, p + 2 + size).toString('latin1');
+      if (/^[ -~ -ÿ]+$/.test(text)) nick = text;
+      break;
     }
-  };
 
-  walk(Buffer.from(info));
+    const key = `${nick}@${address}:${String(port)}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      found.push({ nick, address, port });
+    }
+    at += shape.length;
+  }
   return found;
 }
 

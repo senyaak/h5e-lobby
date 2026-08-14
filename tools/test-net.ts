@@ -17,7 +17,7 @@ import { KEY_BLOB_SIZE, decryptWith, encryptTo, generateKeyPair, parsePublicKey,
 import { GUEST, GUEST_LOBBY, RouterService, type RouterSession } from '../services/gateway/router-service.ts';
 import { Blowfish } from '../services/gateway/blowfish.ts';
 import { CdKeyRequest, CdKeyService } from '../services/gateway/cdkey-service.ts';
-import { GAME_PORT, LobbyMsg, Lsm, RoomUpdate, playerInfo, withRating } from '../services/gateway/lobby.ts';
+import { GAME_PORT, LobbyMsg, Lsm, RoomUpdate, playerInfo, roomEndpoints, withRating } from '../services/gateway/lobby.ts';
 import { findField, readFields, writeFields } from '../services/gateway/structure.ts';
 import { FACTIONS, LADDER_KEYS, Ladder, STARTING_RATING } from '../services/core/rules/ladder.ts';
 import { Accounts } from '../services/core/rules/accounts.ts';
@@ -39,6 +39,18 @@ function check(name: string, ok: boolean, detail = ''): void {
 function capturedCreateRoom(): Buffer {
   return Buffer.from(
     readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'net', 'create-room.hex'), 'utf8')
+      .split(/\r?\n/)
+      .filter((line) => !line.startsWith('#'))
+      .join('')
+      .replace(/[^0-9a-f]/gi, ''),
+    'hex',
+  );
+}
+
+/** The host's description of a room with two players in it, off disk. */
+function capturedRoomPlayers(): Buffer {
+  return Buffer.from(
+    readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'net', 'room-players.hex'), 'utf8')
       .split(/\r?\n/)
       .filter((line) => !line.startsWith('#'))
       .join('')
@@ -1963,6 +1975,36 @@ console.log('\nThe login on the wire, which is where an account is made');
   );
   check('the proxy login is not a second password check', parse(onProxy[0]!.replies[0]!)?.type === MessageType.GSSUCCESS, onProxy[0]?.note);
   check('and it says so', onProxy[0]!.note.includes('not the credential desk'), onProxy[0]?.note);
+}
+
+// ---------------------------------------------------------------------------------
+console.log('\nwhere the players are, out of the room description');
+// ---------------------------------------------------------------------------------
+{
+  // Captured from the run of three copies on 14.08.2026. This is the one thing
+  // the relay cannot work out for itself: an agent knows the address its game
+  // dialled, and only the room description says which player is at it.
+  const players = roomEndpoints(capturedRoomPlayers());
+  check('both players are found', players.length === 2, JSON.stringify(players));
+  // In whatever order the host wrote them — he put the guest first in this
+  // capture, and nothing anywhere depends on which came out of the description
+  // first, so the test does not either.
+  const said = players.map((one) => `${one.nick}:${String(one.port)}`).sort().join(' ');
+  check('each with the name the client wrote and the port that copy plays on',
+    said === 'Senyaak2:8889 Senyaak:8888', said);
+  check(
+    'at the LAN address, which is what the peers really dial',
+    players.every((one) => one.address === '192.168.178.27'),
+    players.map((one) => one.address).join(','),
+  );
+
+  // The reader has to be TOLERANT of what it does not understand: the
+  // description does not divide into fields all the way to its end, and a
+  // reader that threw the document away over its tail found nothing at all —
+  // which is exactly what the first version did, on these very bytes.
+  const truncated = capturedRoomPlayers().subarray(0, 300);
+  check('a description cut in half still gives up what it holds', roomEndpoints(truncated).length >= 1, String(roomEndpoints(truncated).length));
+  check('and nothing is invented out of noise', roomEndpoints(Buffer.alloc(64, 0xab)).length === 0);
 }
 
 console.log(failures === 0 ? '\nall good\n' : `\n${failures} failed\n`);

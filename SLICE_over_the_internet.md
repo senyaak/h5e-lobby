@@ -1,8 +1,8 @@
 # SLICE — The lobby off this machine, and then onto the internet
 
 > **Status, 14.08.2026:** §2.1, §2.2 and §2.3 done, and §3 done ahead of its turn because
-> the tunnel came with the install. The gateway is two sockets now — `8080` TCP and
-> `40010` UDP — so the firewall question §2.2 leaves open is two lines, not fifteen. The four services plus a cloudflared
+> the tunnel came with the install. The gateway is two sockets now, both on `8080` — one
+> TCP, one UDP — so the firewall question §2.2 leaves open is one line, not fifteen. The four services plus a cloudflared
 > tunnel run as `senyaak-h5e-*` user units in the `~/Projects/tunnels` fleet
 > (`systemctl --user start senyaak-h5e.target`, `deploy/README.md`);
 > `https://h5e-lobby.example.com` is the lobby and `wss://relay-h5e.example.com/agent`
@@ -51,9 +51,9 @@ So there are two transports and they get two different answers:
 | relay (`40200`), browser lobby (`8081`) | tunnel, `wss://` and `https://` |
 | everything the game itself dials | a routable address: port forwarding, a VPS, or a private network |
 
-How many ports that second row costs is a separate question with a good answer — one in
-TCP and one in UDP since §2.3, and the ten desks below are ten protocols now rather than
-ten numbers — but it is never zero, and no tunnel of this kind changes that.
+How many ports that second row costs is a separate question with a good answer — one
+number since §2.3, `8080` in both protocols, and the ten desks below are ten protocols now
+rather than ten numbers — but it is never zero, and no tunnel of this kind changes that.
 
 The agent already supports its half: `relay.c` accepts `ws://` and `wss://`, takes the
 port from the scheme (80 / 443) unless one is given, and passes
@@ -113,11 +113,10 @@ build and nothing to install). Units and `h5e.target` from `deploy/systemd/`, en
 `deploy/h5e-lobby.env.example`, and the firewall opened for the ports in §2.3 plus
 `8081` and `40200` — but **not** `40100`.
 
-With §2.3 done that is `8080/tcp` and `40010/udp`, and nothing else:
+With §2.3 done that is `8080`, in both protocols, and nothing else:
 
 ```bash
-sudo ufw allow from 192.168.178.0/24 to any port 8080 proto tcp
-sudo ufw allow from 192.168.178.0/24 to any port 40010 proto udp
+sudo ufw allow from 192.168.178.0/24 to any port 8080
 ```
 
 Not that way here. `deploy/systemd/` is for a host of its own (`/opt`, a `h5e` user,
@@ -235,8 +234,8 @@ could share the same listener as well, told apart by path. That is what "one por
 could actually mean here — the whole product on one number, plus the same number in UDP.
 
 **How it came out.** All five steps, in that order, one commit each. Fifteen sockets are
-two: **`8080` in TCP** — the ini, the router, the proxy, the lobby and chat — and
-**`40010` in UDP** for the mirror and the CD-key window. The classifier is
+two, and both are **`8080`**: TCP carries the ini, the router, the proxy, the lobby and
+chat; UDP carries the mirror and the CD-key window. The classifier is
 `services/gateway/desk.ts`, driven in `tools/test-net.ts` by the KEY_EXCHANGE the client
 really sent, a real wrapped IRC line, the recorded SRP SYN and FIN, and the halves of the
 first two; live, a key exchange in one write and in two, a NICK, a CD-key challenge and a
@@ -248,14 +247,20 @@ Four things worth knowing, three of them departures from the plan above:
   written by hand into each copy's `run-net.bat`, every desk address is read out of the
   ini we serve — so keeping the hand-written one means the game side needs **no edit at
   all**, where the other way round wanted three bat files changed.
-- **UDP stays on `40010`** rather than moving to `8080` as well. `lobby.ts` writes the
-  mirror's port into the room description as the address others are told to dial, so
-  making the two literally equal means threading it through `playerInfo` and its callers.
-  It buys one firewall line; it is not that step's business. The literal is at least gone:
-  both files now read `NAT_PORT` from `nat-service.ts`.
+- **UDP is the same number**, which took one more turn than the five steps. `lobby.ts`
+  writes the mirror's port into the room description as the address others are told to
+  dial, so the two have to agree; they now do through `mirrorPort()` in `nat-service.ts`,
+  set once at startup by whoever binds the socket. A constant would have gone stale the
+  moment `--http` moved the gateway.
 - **`CDKeyServerLauncher` on `40021` went too**, which is the sixth dead socket — the
-  table above accounts for five. Its number became the CD-key desk's own, so the ini still
-  names a launcher and nothing answers nothing.
+  table above accounts for five. Nothing is advertised at a port that does not answer: the
+  ini names `8080` for it like everything else. That is also what settles the worry about
+  the CD-key desk being early in the sequence — it is third, after the ini and the mirror,
+  and it is **UDP**, which is answered on the number the ini gives. The TCP socket that
+  went was one the client was never measured dialling and which had no handler behind it
+  anyway; and now that every desk shares one number, even a TCP attempt at the CD-key desk
+  lands on the listener and is logged, where before it would have been a refusal we could
+  not see.
 - **The CD-key type byte does not decide.** `cdkey-service.ts` reads the request out of
   the body and has never looked at `d3`; our own recorded requests carry a different byte.
   The length that adds up is the test, with the mirror's short-datagram echo tried last.

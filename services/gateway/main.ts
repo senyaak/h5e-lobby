@@ -22,7 +22,7 @@ import { config } from '../../shared/config.ts';
 import { hexDump, openLog } from '../../shared/log.ts';
 import { CoreClient } from '../../shared/core-client.ts';
 import type { PresenceEntry, RoomInfo } from '../../shared/core-protocol.ts';
-import { NAT_PORT, NatService } from './nat-service.ts';
+import { NatService, setMirrorPort } from './nat-service.ts';
 import { GUEST, GUEST_LOBBY, RouterService } from './router-service.ts';
 import { CdKeyService } from './cdkey-service.ts';
 import { IrcConnection, IrcService, chatLine, frame, fromGameText, toGameText } from './irc.ts';
@@ -86,10 +86,14 @@ interface Service {
  */
 const DESKS = httpPort;
 
+// The mirror answers on it too, and `lobby.ts` writes that number into the room
+// description as the address the other players are told to dial. One writer, at startup.
+setMirrorPort(DESKS);
+
 const SERVICES: Service[] = [
   { prefix: 'Router', port: DESKS, launcher: DESKS, listens: ['tcp'] },
-  { prefix: 'NATServer', port: NAT_PORT, launcher: null, listens: ['udp'] },
-  { prefix: 'CDKeyServer', port: NAT_PORT, launcher: NAT_PORT, listens: ['udp'] },
+  { prefix: 'NATServer', port: DESKS, launcher: null, listens: ['udp'] },
+  { prefix: 'CDKeyServer', port: DESKS, launcher: DESKS, listens: ['udp'] },
   { prefix: 'IRC', port: DESKS, launcher: null, listens: ['tcp'] },
 ];
 

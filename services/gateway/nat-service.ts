@@ -19,12 +19,26 @@ import { MessageType, build, parse, reply } from './gs-message.ts';
 import { Flags, HEADER_SIZE, buildSegment, parseSegment, flagNames, type SrpConnection } from './srp.ts';
 
 /**
- * Where the mirror answers, and — because the client writes it into the room description
- * as the address others are told to dial him at — a number two files have to agree on
- * (`services/gateway/lobby.ts`). One constant, so a move stays a move rather than a
- * mismatch nobody sees until a game fails to connect.
+ * Where the mirror answers.
+ *
+ * Two files have to agree on this number: the mirror is bound with it, and `lobby.ts`
+ * writes it into the room description as the address others are told to dial. It is not a
+ * constant because the gateway's port is configurable (`H5E_HTTP_PORT`, `--http`), and a
+ * constant would go stale the moment either moved — which is a mismatch nobody sees until
+ * a game fails to connect.
+ *
+ * Set once, at startup, by whoever binds the socket; the default is the one the gateway
+ * takes when nothing is configured, so a test that imports this needs no setting up.
  */
-export const NAT_PORT = 40010;
+let mirror = 8080;
+
+export function setMirrorPort(port: number): void {
+  mirror = port;
+}
+
+export function mirrorPort(): number {
+  return mirror;
+}
 
 /**
  * The answer to a NAT ask, in the ONE shape that has ever been accepted.

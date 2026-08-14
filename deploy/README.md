@@ -7,7 +7,7 @@ and prefixes their output.
 | unit | what it is | listens on |
 |---|---|---|
 | `h5e-core` | accounts, ladder, friends, presence, chat and its history | `40100` (loopback) |
-| `h5e-gateway` | the desks the game connects to | `8080` TCP (the ini and every desk) and `40010` UDP (the NAT mirror and the CD-key window) |
+| `h5e-gateway` | the desks the game connects to | `8080`, TCP and UDP: the ini and every desk in one, the NAT mirror and the CD-key window in the other |
 | `h5e-web` | the browser lobby | `8081` |
 | `h5e-relay` | game datagrams between agents | `40200` |
 
@@ -79,8 +79,8 @@ neither repository.
 speaks HTTP and WebSocket; the game's desks are raw TCP and UDP, and its one HTTP request
 goes through `http_proxy`, which has to be a routable address. So the relay reaches the
 internet as `wss://relay-h5e.example.com/agent` while the game still dials `H5E_HOST`
-directly — SLICE §1. What that costs the host is two numbers now rather than fifteen:
-`8080` in TCP and `40010` in UDP, because the desks are told apart by what a connection
+directly — SLICE §1. What that costs the host is one number now rather than fifteen
+sockets: `8080`, in TCP and UDP, because the desks are told apart by what a connection
 says first (`services/gateway/desk.ts`) and not by the port it arrived on.
 
 ## Day to day

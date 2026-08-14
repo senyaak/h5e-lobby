@@ -68,6 +68,12 @@ as well: strings, references, imports, callers, `--func`, `--dword`, `--bytes`.
 6667   IRC         chat, and a precondition for entering a channel
 ```
 
+Those are Ubisoft's desks, and the numbers above are the ones they were first given here.
+**Since 14.08.2026 they are all `8080`** (SLICE §2.3): the client learns every one of them
+from the ini we serve, so which desk a connection wants is read off its first message
+(`services/gateway/desk.ts`) rather than off the port. The names stay — the log still says
+which desk — and the table above is the map of what speaks what.
+
 The four GS desks (router, its wait module, proxy, proxy's wait module) speak one
 protocol with three differences, all in `src/net/router-service.ts`; the lobby is
 a fourth role on the same code.

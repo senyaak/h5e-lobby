@@ -79,10 +79,11 @@ export class CoreService {
     return [...this.clients].flatMap((client) => client.rooms);
   }
 
-  /** The room a player is in, in the form the relay groups its agents by. */
-  private roomOf(nick: string): string {
-    const room = this.rooms().find((one) => one.members.some((member) => member.toLowerCase() === nick.toLowerCase()));
-    return room ? `room-${room.id}` : '';
+  /** The room a player is in, or null. */
+  private roomOf(nick: string): RoomInfo | null {
+    return (
+      this.rooms().find((one) => one.members.some((member) => member.toLowerCase() === nick.toLowerCase())) ?? null
+    );
   }
 
   get connections(): number {
@@ -197,7 +198,7 @@ export class CoreService {
         // halves are refused here rather than anywhere downstream — that refusal is the
         // whole of the relay's admission control.
         const nick = this.agents.resolve(message.token);
-        const room = nick ? this.roomOf(nick) : '';
+        const room = nick ? this.roomOf(nick) : null;
         if (!nick || !room) {
           this.log(`core  an agent was refused: ${nick ? `${nick} is in no room` : 'no such secret'}`);
           client.send(
@@ -205,8 +206,14 @@ export class CoreService {
           );
           return;
         }
-        this.log(`core  agent ${nick} is in ${room}`);
-        client.send(encode({ kind: 'reply', id: message.id, ok: true, agent: { nick, room } }));
+        const where = `room-${room.id}`;
+        this.log(
+          `core  agent ${nick} is in ${where}, ${room.endpoints.length} endpoint(s) known: ` +
+            (room.endpoints.map((one) => `${one.nick}@${one.address}:${one.port}`).join(', ') || '—'),
+        );
+        client.send(
+          encode({ kind: 'reply', id: message.id, ok: true, agent: { nick, room: where, roster: room.endpoints } }),
+        );
         return;
       }
       default:

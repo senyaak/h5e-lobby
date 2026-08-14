@@ -26,7 +26,7 @@ import { NatService } from './nat-service.ts';
 import { GUEST, GUEST_LOBBY, RouterService } from './router-service.ts';
 import { CdKeyService } from './cdkey-service.ts';
 import { IrcConnection, IrcService, chatLine, frame, fromGameText, toGameText } from './irc.ts';
-import { probePeerAddress, probeRoomFields } from './lobby.ts';
+import { probePeerAddress, probeRoomFields, roomEndpoints } from './lobby.ts';
 import { DEFAULT_LOBBIES, lobbyChannel } from '../../shared/channels.ts';
 
 const settings = config();
@@ -221,12 +221,27 @@ setInterval(() => {
     name: room.name,
     master: room.master,
     members: [...room.members],
+    // Where each of them is playing, out of the host's own description. Empty
+    // when it does not parse, and that is a working state: with two players the
+    // relay has only one other agent to hand a datagram to.
+    endpoints: roomEndpoints(room.info),
   }));
   const roomShape = JSON.stringify(rooms);
   if (roomShape !== lastRooms) {
     lastRooms = roomShape;
     core.replaceRooms(rooms);
-    log(`RTR  rooms -> core: ${rooms.map((room) => `${room.id} [${room.members.join(', ')}]`).join('; ') || 'none'}`);
+    log(
+      `RTR  rooms -> core: ${
+        rooms
+          .map(
+            (room) =>
+              `${room.id} [${room.members.join(', ')}] at [${room.endpoints
+                .map((one) => `${one.nick}@${one.address}:${one.port}`)
+                .join(', ')}]`,
+          )
+          .join('; ') || 'none'
+      }`,
+    );
   }
 }, 2000).unref();
 

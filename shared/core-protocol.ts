@@ -54,6 +54,25 @@ export interface RoomInfo {
   /** Who is hosting. He is in `members` too. */
   master: string;
   members: string[];
+  /**
+   * Where each player's game is, as the host's own description of the room says.
+   *
+   * The relay needs it to know which agent a datagram is FOR: an agent knows
+   * only the address its game dialled, so somebody has to hold "that address is
+   * this player", and the game itself says so in the room description
+   * (`roomEndpoints` in services/gateway/lobby.ts).
+   *
+   * Empty when the description has not been read — two players still work, by
+   * the relay handing a datagram to the only other agent in the room.
+   */
+  endpoints: PeerEndpoint[];
+}
+
+export interface PeerEndpoint {
+  nick: string;
+  /** Dotted IPv4, as the game will dial it. */
+  address: string;
+  port: number;
 }
 
 export interface ChannelInfo {
@@ -125,7 +144,12 @@ export type FromCore =
       error?: string;
       messages?: ChatMessage[];
       channels?: ChannelInfo[];
-      agent?: { nick: string; room: string };
+      /**
+       * On `agent.identify`: who he is, which room, and where everyone in that
+       * room is playing — the last so the relay can route by endpoint rather
+       * than shouting into the room.
+       */
+      agent?: { nick: string; room: string; roster: PeerEndpoint[] };
       /** On a successful `agent.issue`: the secret, said once and never again. */
       secret?: string;
       /** On a successful `auth.verify`: the account's own spelling of its name. */

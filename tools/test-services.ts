@@ -356,8 +356,17 @@ check('and each is different', new Set([secretA, secretB, secretC]).size === 3);
 
 // The rooms, as the gateway sees them: two players in one game, one in another.
 gateway.replaceRooms([
-  { id: 7, name: 'a duel', master: 'PlayerA', members: ['PlayerA', 'PlayerB'] },
-  { id: 9, name: 'somewhere else', master: 'PlayerC', members: ['PlayerC'] },
+  {
+    id: 7,
+    name: 'a duel',
+    master: 'PlayerA',
+    members: ['PlayerA', 'PlayerB'],
+    endpoints: [
+      { nick: 'PlayerA', address: '192.168.178.27', port: 8888 },
+      { nick: 'PlayerB', address: '192.168.178.27', port: 8889 },
+    ],
+  },
+  { id: 9, name: 'somewhere else', master: 'PlayerC', members: ['PlayerC'], endpoints: [] },
 ]);
 await until(() => false, 100);
 
@@ -413,7 +422,7 @@ const homeless = await openAgentOn(relay.port(), secretD);
 check('an enrolled agent whose player is in no room is refused too', await until(() => homeless.closed()));
 
 // And when the game ends, the room goes — the next connection has nothing to join.
-gateway.replaceRooms([{ id: 9, name: 'somewhere else', master: 'PlayerC', members: ['PlayerC'] }]);
+gateway.replaceRooms([{ id: 9, name: 'somewhere else', master: 'PlayerC', members: ['PlayerC'], endpoints: [] }]);
 await until(() => false, 100);
 const afterwards = await openAgentOn(relay.port(), secretB);
 check('once the room is gone, its agents are no longer admitted', await until(() => afterwards.closed()));
@@ -422,6 +431,78 @@ check(
   relay.rooms()['room-9']?.join(',') === 'PlayerC',
   JSON.stringify(relay.rooms()),
 );
+
+// ---------------------------------------------------------------------------------
+console.log('\nthree in a room, each datagram to the one it names');
+// ---------------------------------------------------------------------------------
+{
+  // What two players never needed: with three, "to the others in my room" sends
+  // every datagram to somebody it was not for. The frame carries the address the
+  // game dialled, and the relay turns that into a player — the one thing the
+  // agent cannot do, since all it ever sees is an address.
+  const HEADER = 7;
+  const framed = (address: string, port: number, payload: number[]): Uint8Array => {
+    const out = Buffer.alloc(HEADER + payload.length);
+    out[0] = 0x01;
+    for (const [i, octet] of address.split('.').map(Number).entries()) out[1 + i] = octet;
+    out.writeUInt16BE(port, 5);
+    Buffer.from(payload).copy(out, HEADER);
+    return out;
+  };
+  const stampOf = (bytes: Buffer): string =>
+    `${bytes[1]}.${bytes[2]}.${bytes[3]}.${bytes[4]}:${bytes.readUInt16BE(5)}`;
+
+  gateway.replaceRooms([
+    {
+      id: 12,
+      name: 'three of us',
+      master: 'PlayerA',
+      members: ['PlayerA', 'PlayerB', 'PlayerC'],
+      endpoints: [
+        { nick: 'PlayerA', address: '192.168.178.27', port: 8888 },
+        { nick: 'PlayerB', address: '192.168.178.27', port: 8889 },
+        { nick: 'PlayerC', address: '192.168.178.27', port: 8890 },
+      ],
+    },
+  ]);
+  await until(() => false, 100);
+
+  const three = await startRelay({ host: '127.0.0.1', port: 0, coreUrl: core.url(), coreToken: TOKEN });
+  const a = await openAgentOn(three.port(), secretA);
+  const b = await openAgentOn(three.port(), secretB);
+  const c = await openAgentOn(three.port(), secretC);
+  check('all three are in one room now', await until(() => Object.values(three.rooms()).flat().length === 3), JSON.stringify(three.rooms()));
+
+  a.send(framed('192.168.178.27', 8890, [9, 9]));
+  check('the datagram reaches the player it named', await until(() => c.got.length > 0));
+  check('and nobody else in the room', b.got.length === 0, `${b.got.length} at the wrong player`);
+  check(
+    'stamped with where it came from, so the game is answered by a peer it knows',
+    stampOf(c.got[0]!) === '192.168.178.27:8888',
+    stampOf(c.got[0]!),
+  );
+  check(
+    'and the datagram itself is untouched',
+    c.got[0]!.subarray(HEADER).equals(Buffer.from([9, 9])),
+    c.got[0]!.toString('hex'),
+  );
+
+  b.send(framed('192.168.178.27', 8890, [7]));
+  check('the other way round too', await until(() => c.got.length > 1));
+  check('from the one who sent it', stampOf(c.got[1]!) === '192.168.178.27:8889', stampOf(c.got[1]!));
+  check('and A, who was not addressed, has nothing', a.got.length === 0, `${a.got.length} at the sender`);
+
+  // An address nobody in the room is at: it cannot be dropped — with two players
+  // that is the normal case before the room description is read — so it goes to
+  // the others, and the relay says so rather than pretending it routed.
+  a.send(framed('10.0.0.1', 9999, [5]));
+  check('an address that is nobody goes to the rest of the room', await until(() => b.got.length > 0 && c.got.length > 2));
+
+  a.close();
+  b.close();
+  c.close();
+  await three.close();
+}
 
 // ---------------------------------------------------------------------------------
 console.log('\nthe relay with the core away');
@@ -434,7 +515,9 @@ console.log('\nthe relay with the core away');
   const feed = new CoreClient({ url: spare.url(), token: TOKEN, service: 'gateway' });
   feed.start();
   await until(() => feed.connected);
-  feed.replaceRooms([{ id: 5, name: 'a game in progress', master: 'PlayerA', members: ['PlayerA', 'PlayerB'] }]);
+  feed.replaceRooms([
+    { id: 5, name: 'a game in progress', master: 'PlayerA', members: ['PlayerA', 'PlayerB'], endpoints: [] },
+  ]);
   await until(() => false, 100);
 
   const spareRelay = await startRelay({ host: '127.0.0.1', port: 0, coreUrl: spare.url(), coreToken: TOKEN });

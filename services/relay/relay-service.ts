@@ -19,6 +19,7 @@
 
 import { createServer, type Server } from 'node:http';
 import { CoreClient } from '../../shared/core-client.ts';
+import type { PeerEndpoint } from '../../shared/core-protocol.ts';
 import { serveWebSocket, type WebSocketPeer } from '../../shared/websocket.ts';
 
 export interface RelayOptions {
@@ -41,6 +42,47 @@ interface Agent {
   peer: WebSocketPeer;
   nick: string;
   room: string;
+  /** Where this player's game is, if the room description said so. */
+  endpoint: PeerEndpoint | null;
+}
+
+// ---------------------------------------------------------------------------
+// The frame, which is the same seven bytes in both directions:
+//
+//   [0x01][address: 4 bytes][port: 2 bytes big-endian][the datagram]
+//
+// Going OUT of an agent the address is who the game dialled; coming BACK it is
+// who the datagram is from, so the agent can answer its game's `recvfrom` with
+// a peer the game already believes in. The relay is what turns one into the
+// other, because it is the only side that knows which player is at which
+// address — and it learns that from the core, which learns it from the host's
+// own description of the room.
+//
+// Seven bytes and no names on purpose: the agent is C inside the game, and the
+// less it has to parse the less there is to get wrong in there.
+// ---------------------------------------------------------------------------
+
+const FRAME_DATAGRAM = 0x01;
+const FRAME_HEADER = 7;
+
+function frameFor(endpoint: PeerEndpoint | null, payload: Buffer): Buffer {
+  const out = Buffer.alloc(FRAME_HEADER + payload.length);
+  out[0] = FRAME_DATAGRAM;
+  const octets = (endpoint?.address ?? '0.0.0.0').split('.').map(Number);
+  for (let i = 0; i < 4; i++) out[1 + i] = octets[i] ?? 0;
+  out.writeUInt16BE(endpoint?.port ?? 0, 5);
+  payload.copy(out, FRAME_HEADER);
+  return out;
+}
+
+/** The address a framed datagram names, and the rest of it. Null if unframed. */
+function readFrame(bytes: Buffer): { address: string; port: number; payload: Buffer } | null {
+  if (bytes.length < FRAME_HEADER || bytes[0] !== FRAME_DATAGRAM) return null;
+  return {
+    address: `${bytes[1]}.${bytes[2]}.${bytes[3]}.${bytes[4]}`,
+    port: bytes.readUInt16BE(5),
+    payload: bytes.subarray(FRAME_HEADER),
+  };
 }
 
 /** How long an identity stays good enough to re-admit on without asking again. */
@@ -49,7 +91,7 @@ const GRACE_MS = 60_000;
 export function startRelay(options: RelayOptions): Promise<RunningRelay> {
   const log = options.log ?? ((): void => {});
   const agents = new Set<Agent>();
-  const recent = new Map<string, { nick: string; room: string; at: number }>();
+  const recent = new Map<string, { nick: string; room: string; roster: PeerEndpoint[]; at: number }>();
 
   const core = new CoreClient({ url: options.coreUrl, token: options.coreToken, service: 'relay', log });
   core.start();
@@ -71,11 +113,19 @@ export function startRelay(options: RelayOptions): Promise<RunningRelay> {
     /** Datagrams that arrive while the core is still being asked. A handful, then stop. */
     const early: Buffer[] = [];
 
-    const admit = (identity: { nick: string; room: string }): void => {
-      agent = { peer, nick: identity.nick, room: identity.room };
+    const admit = (identity: { nick: string; room: string; roster?: PeerEndpoint[] }): void => {
+      // His own endpoint out of the roster, which is what every datagram he
+      // sends will be stamped with on the way to the others.
+      const mine =
+        (identity.roster ?? []).find((one) => one.nick.toLowerCase() === identity.nick.toLowerCase()) ?? null;
+      agent = { peer, nick: identity.nick, room: identity.room, endpoint: mine };
       agents.add(agent);
-      recent.set(token, { ...identity, at: Date.now() });
-      log(`relay ${identity.nick} joined room ${identity.room} (${[...agents].filter((a) => a.room === identity.room).length} there)`);
+      recent.set(token, { nick: identity.nick, room: identity.room, roster: identity.roster ?? [], at: Date.now() });
+      log(
+        `relay ${identity.nick} joined room ${identity.room} ` +
+          `(${[...agents].filter((a) => a.room === identity.room).length} there, ` +
+          `${mine ? `at ${mine.address}:${mine.port}` : 'endpoint unknown'})`,
+      );
       for (const held of early.splice(0)) forward(agent, held);
     };
 
@@ -124,9 +174,37 @@ export function startRelay(options: RelayOptions): Promise<RunningRelay> {
     });
   });
 
-  /** To the others in the room. Never anywhere the sender named. */
+  /**
+   * On to whoever it is for, stamped with who it is from.
+   *
+   * The sender names an ADDRESS, never an agent and never a connection, so this
+   * is still not a proxy anybody can bounce traffic through: the address is
+   * looked up among the players of the sender's own room, and a match outside
+   * it is not possible because the search never leaves the room.
+   *
+   * Two fallbacks, both of which keep two players working while the endpoints
+   * are not known: an unframed datagram (an older agent) goes to the others as
+   * it arrived, and a framed one whose address matches nobody goes to the
+   * others re-stamped, which with one other agent is exactly right and with two
+   * is the best a nameless datagram allows.
+   */
   function forward(from: Agent, bytes: Buffer): void {
-    for (const other of agents) if (other !== from && other.room === from.room) other.peer.send(bytes);
+    const inRoom = [...agents].filter((one) => one !== from && one.room === from.room);
+    const frame = readFrame(bytes);
+    if (!frame) {
+      for (const other of inRoom) other.peer.send(bytes);
+      return;
+    }
+    const stamped = frameFor(from.endpoint, frame.payload);
+    const wanted = inRoom.filter(
+      (one) => one.endpoint && one.endpoint.address === frame.address && one.endpoint.port === frame.port,
+    );
+    for (const other of wanted.length ? wanted : inRoom) other.peer.send(stamped);
+    if (!wanted.length && inRoom.length > 1) {
+      // Worth saying once it can actually go wrong: with three in a room and no
+      // endpoint to match, everybody gets everybody's traffic.
+      log(`relay ${from.nick} named ${frame.address}:${frame.port}, which is nobody here — sent to all ${inRoom.length}`);
+    }
   }
 
   return new Promise((resolve) => {

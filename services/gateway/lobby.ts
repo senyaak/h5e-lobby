@@ -21,7 +21,7 @@
 
 import type { Lobby } from '../../shared/channels.ts';
 import { type GSValue } from './gs-data.ts';
-import { readFields, writeFields } from './structure.ts';
+import { looksLikeFields, readFields, writeFields, type Field } from './structure.ts';
 
 /**
  * LOBBY_MSG subtypes — the whole table, not only what we answer today.
@@ -424,6 +424,68 @@ export const probePeerAddress = {
  * and every other byte the host wrote. The port is read, not changed: the probe listens
  * on the ports the copies already use.
  */
+/**
+ * Every player's game endpoint, read out of the host's description of the room.
+ *
+ * This is the same record `probeEndpoints` rewrites, read instead of written:
+ * per player, his name and then the address the OTHERS will dial him at.
+ *
+ *   02 10 "Senyaak2"                 the name
+ *   03 24 02 20 <16 bytes>           the NAT-mirrored address, port 40010
+ *   04 2c 02 04 <port> 03 20 <16>    the GAME port, then the address
+ *   05 08 <4 bytes>                  the rating
+ *
+ * Why anyone wants it: the relay carries datagrams between agents and has to
+ * know which agent a datagram is FOR. The agent knows only the address its game
+ * dialled, so somebody has to hold "this address is that player", and this is
+ * where the game itself says so.
+ *
+ * Read as fields rather than scanned for bytes, and recursively, because the
+ * records sit inside the description rather than at its top; a payload that is
+ * not a run of fields is a leaf and is left alone.
+ */
+export function roomEndpoints(info: Uint8Array): Array<{ nick: string; address: string; port: number }> {
+  const found: Array<{ nick: string; address: string; port: number }> = [];
+
+  const walk = (buf: Buffer): void => {
+    let fields: Field[];
+    try {
+      fields = readFields(buf);
+    } catch {
+      return; // not a document; a leaf that happens to start like one
+    }
+    let nick = '';
+    for (const field of fields) {
+      if (field.tag === 2 && field.value.length && field.value.length < 64) {
+        const text = field.value.toString('latin1');
+        // A name is text; the same tag carries numbers elsewhere in this format.
+        if (/^[\x20-\x7e\xa0-\xff]+$/.test(text)) nick = text;
+      }
+      if (field.tag === 4 && field.value.length >= 22) {
+        try {
+          const inner = readFields(field.value);
+          const port = inner.find((one) => one.tag === 2);
+          const address = inner.find((one) => one.tag === 3);
+          if (port?.value.length === 2 && address?.value.length === 16) {
+            found.push({
+              nick,
+              address: [...address.value.subarray(0, 4)].join('.'),
+              port: port.value.readUInt16LE(0),
+            });
+            continue;
+          }
+        } catch {
+          /* not the record we are after */
+        }
+      }
+      if (field.value.length > 2 && looksLikeFields(field.value)) walk(field.value);
+    }
+  };
+
+  walk(Buffer.from(info));
+  return found;
+}
+
 export function probeEndpoints(info: Uint8Array): Uint8Array {
   const out = Buffer.from(info);
   const shape = Buffer.from([0x04, 0x2c, 0x02, 0x04]);

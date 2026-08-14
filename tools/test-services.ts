@@ -76,8 +76,10 @@ interface Browser {
   of(kind: string): Record<string, unknown>[];
 }
 
-async function openBrowser(url: string): Promise<Browser> {
-  const socket = new WebSocket(url);
+async function openBrowser(url: string, cookie = ''): Promise<Browser> {
+  // The session travels in the handshake, the way a browser sends it — so a test that
+  // wants to be a logged-in page has to present it here and not in a message.
+  const socket = new WebSocket(url, cookie ? ({ headers: { cookie } } as unknown as string[]) : undefined);
   const seen: Record<string, unknown>[] = [];
   socket.addEventListener('message', (event: MessageEvent) => {
     seen.push(JSON.parse(String(event.data)) as Record<string, unknown>);
@@ -123,9 +125,11 @@ new Accounts(db).login('Senyaak', 'swordsman');
 interface LoginAnswer {
   status: number;
   ok?: boolean;
-  token?: string;
   name?: string;
   reason?: string;
+  /** The whole `Set-Cookie`, and the `name=value` out of it to send back. */
+  setCookie: string;
+  cookie: string;
 }
 
 async function tryLogin(name: string, password: string): Promise<LoginAnswer> {
@@ -134,19 +138,36 @@ async function tryLogin(name: string, password: string): Promise<LoginAnswer> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, password }),
   });
-  return { status: response.status, ...((await response.json()) as Record<string, unknown>) };
+  const setCookie = response.headers.getSetCookie()[0] ?? '';
+  return {
+    status: response.status,
+    setCookie,
+    cookie: setCookie.split(';')[0] ?? '',
+    ...((await response.json()) as Record<string, unknown>),
+  };
 }
 
 // Case first, because it decides which name everyone else sees him under.
 const admitted = await tryLogin('senyaak', 'swordsman');
 check('the game s password lets him into the browser', admitted.ok === true, JSON.stringify(admitted.reason));
 check('and he is named the way the account is spelled', admitted.name === 'Senyaak', String(admitted.name));
-check('with a token to come back with', typeof admitted.token === 'string' && admitted.token.length > 20);
+check('the session comes back as a cookie', admitted.cookie.startsWith('h5e_session='), admitted.setCookie);
+check('the page cannot read it', admitted.setCookie.includes('HttpOnly'), admitted.setCookie);
+check('and another site cannot spend it', admitted.setCookie.includes('SameSite=Lax'), admitted.setCookie);
+check(
+  'nothing in the body carries the session',
+  !JSON.stringify({ ok: admitted.ok, name: admitted.name }).includes('h5e_session'),
+);
+check(
+  'and it is not marked Secure over plain http, or the browser would drop it',
+  !admitted.setCookie.includes('Secure'),
+  admitted.setCookie,
+);
 
 const wrong = await tryLogin('Senyaak', 'archer');
 check('a wrong password is refused', wrong.ok !== true && wrong.status === 401, `${wrong.status} ${wrong.reason}`);
 check('and says so, rather than that there is no such name', wrong.reason === 'wrong-password', String(wrong.reason));
-check('with no token', wrong.token === undefined);
+check('with no cookie', wrong.setCookie === '', wrong.setCookie);
 
 const unknown = await tryLogin('Nobody', 'anything');
 check('a name the game never saw is refused', unknown.ok !== true, String(unknown.reason));
@@ -157,17 +178,19 @@ check(
 );
 check('the browser CANNOT create an account', !core.core.accounts.has('Nobody'));
 
-const senya = await openBrowser(`ws://127.0.0.1:${web.port()}/`);
-senya.say({ kind: 'hello', token: 'not-a-token' });
-check('a made-up token is denied', await until(() => senya.of('denied').length > 0));
-senya.say({ kind: 'say', text: 'let me through' });
+const nosession = await openBrowser(`ws://127.0.0.1:${web.port()}/`, 'h5e_session=made-up');
+nosession.say({ kind: 'hello' });
+check('a made-up cookie is denied', await until(() => nosession.of('denied').length > 0));
+nosession.say({ kind: 'say', text: 'let me through' });
 await until(() => false, 200);
 check(
-  'and nothing said without one is kept',
+  'and nothing said without a session is kept',
   core.core.chat.history(RANKED).every((message) => message.text !== 'let me through'),
 );
+nosession.close();
 
-senya.say({ kind: 'hello', token: admitted.token!, channel: RANKED });
+const senya = await openBrowser(`ws://127.0.0.1:${web.port()}/`, admitted.cookie);
+senya.say({ kind: 'hello', channel: RANKED });
 check('the browser is welcomed', await until(() => senya.of('welcome').length > 0));
 check('under the account s own name', senya.of('welcome')[0]?.['nick'] === 'Senyaak', String(senya.of('welcome')[0]?.['nick']));
 check(
@@ -209,8 +232,8 @@ new Accounts(db).login('Somebody', 'peasant');
 const second = await tryLogin('Somebody', 'peasant');
 check('a second player logs in the same way', second.ok === true, String(second.reason));
 
-const latecomer = await openBrowser(`ws://127.0.0.1:${web.port()}/`);
-latecomer.say({ kind: 'hello', token: second.token!, channel: RANKED });
+const latecomer = await openBrowser(`ws://127.0.0.1:${web.port()}/`, second.cookie);
+latecomer.say({ kind: 'hello', channel: RANKED });
 check('somebody arriving later is given the history', await until(() => latecomer.of('history').length > 0));
 const history = latecomer.of('history')[0]?.['messages'] as ChatMessage[] | undefined;
 check(
@@ -228,15 +251,17 @@ check(
   JSON.stringify(latecomer.of('history')[1]),
 );
 
-// Logging out takes the session with it, this tab and any other holding that token.
-await fetch(`${pageUrl}/logout`, {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ token: second.token }),
-});
-const returning = await openBrowser(`ws://127.0.0.1:${web.port()}/`);
-returning.say({ kind: 'hello', token: second.token!, channel: RANKED });
-check('a token that was logged out is dead', await until(() => returning.of('denied').length > 0));
+// Logging out takes the session with it — the cookie names which one, so a page cannot
+// end somebody else's by asking.
+const goodbye = await fetch(`${pageUrl}/logout`, { method: 'POST', headers: { cookie: second.cookie } });
+check(
+  'logging out clears the cookie in the browser too',
+  (goodbye.headers.getSetCookie()[0] ?? '').includes('Max-Age=0'),
+  goodbye.headers.getSetCookie()[0],
+);
+const returning = await openBrowser(`ws://127.0.0.1:${web.port()}/`, second.cookie);
+returning.say({ kind: 'hello', channel: RANKED });
+check('a session that was logged out is dead', await until(() => returning.of('denied').length > 0));
 returning.close();
 
 // Guessing. Five misses from one address and the sixth is not even asked about — which

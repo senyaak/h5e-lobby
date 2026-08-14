@@ -150,33 +150,50 @@
       const tabs = $('tabs');
 
       let socket = null;
-      let token = localStorage.getItem('h5e-token') ?? '';
       let nick = '';
       let channel = localStorage.getItem('h5e-channel') ?? '';
       let channels = [];
 
+      // What earlier versions of this page left behind: a nick, and — worse — a session
+      // token. That token is a secret, it lives in an HttpOnly cookie now, and a copy of
+      // one lying in localStorage is exactly what this change was made to stop.
+      localStorage.removeItem('h5e-token');
+      localStorage.removeItem('h5e-nick');
+
+      // Who we are is a cookie the browser holds and this script cannot read (HttpOnly).
+      // So the page never carries a session anywhere: it opens the socket, says hello, and
+      // is either welcomed or told to log in.
       connect();
 
       function connect() {
         socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/`);
         socket.addEventListener('open', () => {
           banner(false);
-          hello();
+          socket.send(JSON.stringify({ kind: 'hello', channel: channel || undefined }));
         });
         socket.addEventListener('message', (event) => handle(JSON.parse(event.data)));
         // The web service restarting must not mean reloading the page by hand.
         socket.addEventListener('close', () => {
-          banner(true);
-          setTimeout(connect, 1500);
+          if (!reconnecting) banner(true);
+          setTimeout(connect, reconnecting ? 0 : 1500);
+          reconnecting = false;
         });
       }
 
-      function hello() {
-        if (!token) {
-          gate(true);
-          return;
+      /**
+       * A fresh socket, right now — used after logging in and out.
+       *
+       * The cookie travels with the HANDSHAKE, so a socket opened before the login knows
+       * nothing about it however many times it says hello. It has to be replaced.
+       */
+      let reconnecting = false;
+      function reconnect() {
+        reconnecting = true;
+        if (socket && socket.readyState <= 1) socket.close();
+        else {
+          reconnecting = false;
+          connect();
         }
-        socket.send(JSON.stringify({ kind: 'hello', token, channel: channel || undefined }));
       }
 
       function banner(on) {
@@ -199,11 +216,11 @@
           drawTabs();
           banner(!message.core);
         } else if (message.kind === 'denied') {
-          // The session is gone — expired, or the service restarted and forgot it.
-          token = '';
-          localStorage.removeItem('h5e-token');
+          // No session, or one that is gone — expired, or the service restarted and
+          // forgot it. Either way the answer is the same form.
+          nick = '';
           log.replaceChildren();
-          gate(true, 'Please log in again.');
+          gate(true);
         } else if (message.kind === 'core') {
           banner(!message.connected);
         } else if (message.kind === 'history') {
@@ -305,6 +322,7 @@
         try {
           const response = await fetch('/login', {
             method: 'POST',
+            credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name: $('name').value.trim(), password: $('password').value }),
           });
@@ -317,32 +335,23 @@
           $('why').textContent = REFUSALS[answer.reason] ?? 'Refused.';
           return;
         }
-        token = answer.token;
-        localStorage.setItem('h5e-token', token);
+        // The cookie is set by that answer; the socket has to be opened again to carry it.
         $('password').value = '';
-        if (socket?.readyState === 1) hello();
-        else connect();
+        reconnect();
       }
 
       async function logout() {
-        const gone = token;
-        token = '';
         nick = '';
-        localStorage.removeItem('h5e-token');
         log.replaceChildren();
         tabs.replaceChildren();
         $('who').replaceChildren();
         gate(true);
         try {
-          await fetch('/logout', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token: gone }),
-          });
+          await fetch('/logout', { method: 'POST', credentials: 'same-origin' });
         } catch {
-          /* the session is already forgotten here; the service will expire its own */
+          /* the cookie is cleared by that answer; without it, its session still expires */
         }
-        socket?.close();
+        reconnect();
       }
 
       function say() {

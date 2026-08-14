@@ -16,7 +16,7 @@
 //   serveWebSocket(server) attach to a node:http server; returns the peer stream
 
 import { createHash } from 'node:crypto';
-import type { IncomingMessage, Server } from 'node:http';
+import type { IncomingHttpHeaders, IncomingMessage, Server } from 'node:http';
 import type { Socket } from 'node:net';
 import type { Duplex } from 'node:stream';
 
@@ -97,6 +97,14 @@ export interface WebSocketPeer {
   /** What the client asked for — the relay reads the room and the player out of it. */
   readonly url: string;
   readonly remoteAddress: string;
+  /**
+   * The headers of the request that became this connection.
+   *
+   * A browser's session is a cookie the page cannot read (HttpOnly), and the handshake is
+   * an ordinary HTTP request, so the cookie is here and only here — the socket that
+   * follows carries no headers at all.
+   */
+  readonly headers: IncomingHttpHeaders;
   send(bytes: Uint8Array): void;
   /**
    * The same, as a text frame.
@@ -111,7 +119,7 @@ export interface WebSocketPeer {
   onClose(handler: () => void): void;
 }
 
-function attach(socket: Socket, url: string): WebSocketPeer {
+function attach(socket: Socket, url: string, headers: IncomingHttpHeaders): WebSocketPeer {
   const messageHandlers: ((bytes: Buffer) => void)[] = [];
   const closeHandlers: (() => void)[] = [];
   let buffered: Buffer = Buffer.alloc(0);
@@ -171,6 +179,7 @@ function attach(socket: Socket, url: string): WebSocketPeer {
   return {
     url,
     remoteAddress: socket.remoteAddress ?? '',
+    headers,
     send(bytes) {
       if (closed) return;
       socket.write(writeFrame(OPCODE.binary, Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)));
@@ -217,6 +226,6 @@ export function serveWebSocket(server: Server, onPeer: (peer: WebSocketPeer) => 
     // wanted here — no Nagle delay, and who is at the other end — belong to that.
     const connection = socket as Socket;
     connection.setNoDelay(true);
-    onPeer(attach(connection, request.url ?? '/'));
+    onPeer(attach(connection, request.url ?? '/', request.headers));
   });
 }

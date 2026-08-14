@@ -174,9 +174,14 @@ Consequences worth knowing:
   already tells anyone who asks whether a name exists, by creating it or refusing it;
 - **the name shown is the account's own spelling** — the table is `NOCASE`, so `senyaak`
   in the browser and `Senyaak` in the game must not become two people in one chat;
-- **sessions live in the web service's memory**, a random token per login held by the page
-  in `localStorage`. Restarting the web service asks everybody for a password again, which
-  is the honest price of not having a session table yet;
+- **the session is a cookie the page cannot read.** A random token per login, kept in the
+  web service's memory and sent back as `HttpOnly; SameSite=Lax; Path=/` (plus `Secure`
+  when the request arrived over TLS, which behind cloudflared it will). `HttpOnly` puts it
+  out of reach of any script, ours included, so there is no copy of it anywhere in the
+  page; `SameSite=Lax` stops another site spending it, on a form post or on a WebSocket
+  handshake. The cookie travels with the HANDSHAKE, so logging in has to open a NEW socket
+  — the one already open was greeted without it. Restarting the web service asks everybody
+  for a password again, which is the honest price of not having a session table yet;
 - **five wrong passwords from one address and it stops asking the core**, for a minute,
   the right password included — a throttle that lets the real one through is not one;
 - the browser is a chat participant, not a player: it is in the web presence list and in

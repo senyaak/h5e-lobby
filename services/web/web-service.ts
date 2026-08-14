@@ -31,9 +31,15 @@ import { CoreClient } from '../../shared/core-client.ts';
 import type { ChannelInfo, ChatMessage, PresenceEntry } from '../../shared/core-protocol.ts';
 import { serveWebSocket, type WebSocketPeer } from '../../shared/websocket.ts';
 
-/** What a page sends us. */
+/**
+ * What a page sends us.
+ *
+ * No token anywhere: the session is a cookie the page cannot read and the browser attaches
+ * by itself, to the login POST and to the WebSocket handshake alike. `hello` therefore says
+ * only which channel to open, and who is asking was settled before the socket existed.
+ */
 type FromBrowser =
-  | { kind: 'hello'; token: string; channel?: string }
+  | { kind: 'hello'; channel?: string }
   | { kind: 'channel'; channel: string }
   | { kind: 'say'; text: string };
 
@@ -80,6 +86,39 @@ const PAGE = join(dirname(fileURLToPath(import.meta.url)), 'index.html');
  * injury.
  */
 const SESSION_IDLE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** The cookie the session lives in. The page never sees it — that is the point. */
+const COOKIE = 'h5e_session';
+
+/** One cookie out of a `Cookie:` header, without a parser for a format this simple. */
+function cookieValue(header: string | undefined, name: string): string {
+  for (const part of (header ?? '').split(';')) {
+    const at = part.indexOf('=');
+    if (at > 0 && part.slice(0, at).trim() === name) return decodeURIComponent(part.slice(at + 1).trim());
+  }
+  return '';
+}
+
+/**
+ * How the session cookie is set.
+ *
+ * `HttpOnly` so no script can read it, ours or anyone else's — that is the whole reason
+ * this is a cookie and not a token in localStorage. `SameSite=Lax` so another site cannot
+ * make the browser spend it, on a form post or on a WebSocket handshake. `Secure` only
+ * when the request actually arrived over TLS: set unconditionally it would be dropped on
+ * `http://127.0.0.1`, which is where all of this is developed.
+ */
+function sessionCookie(token: string, secure: boolean, seconds: number): string {
+  const bits = [`${COOKIE}=${token}`, 'HttpOnly', 'SameSite=Lax', 'Path=/', `Max-Age=${seconds}`];
+  if (secure) bits.push('Secure');
+  return bits.join('; ');
+}
+
+/** Whether the request reached us over TLS — directly, or through a tunnel that says so. */
+function overTls(request: IncomingMessage): boolean {
+  const forwarded = String(request.headers['x-forwarded-proto'] ?? '').split(',')[0]?.trim();
+  return forwarded === 'https' || 'encrypted' in request.socket;
+}
 
 /** A wrong password costs the next one: five misses from an address and it waits. */
 const MAX_FAILURES = 5;
@@ -152,9 +191,14 @@ export function startWeb(options: WebOptions): Promise<RunningWeb> {
     });
   }
 
-  function answer(response: ServerResponse, status: number, value: unknown): void {
+  function answer(response: ServerResponse, status: number, value: unknown, cookie?: string): void {
     const body = JSON.stringify(value);
-    response.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) });
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'Content-Length': String(Buffer.byteLength(body)),
+    };
+    if (cookie) headers['Set-Cookie'] = cookie;
+    response.writeHead(status, headers);
     response.end(body);
   }
 
@@ -165,6 +209,9 @@ export function startWeb(options: WebOptions): Promise<RunningWeb> {
    * never written to the log, never kept, and never put in a URL — which is the whole
    * reason this is a POST with a body rather than the query string it would be easier to
    * test with.
+   *
+   * What comes back is a cookie, not a token in the body: the page has no use for the
+   * session's value, and what a page cannot read cannot be stolen out of it.
    */
   async function login(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const from = request.socket.remoteAddress ?? '?';
@@ -201,7 +248,12 @@ export function startWeb(options: WebOptions): Promise<RunningWeb> {
     const token = randomBytes(24).toString('base64url');
     sessions.set(token, { name: verdict.name, usedAt: Date.now() });
     log(`web  ${verdict.name} logged in`);
-    answer(response, 200, { ok: true, token, name: verdict.name });
+    answer(
+      response,
+      200,
+      { ok: true, name: verdict.name },
+      sessionCookie(token, overTls(request), Math.floor(SESSION_IDLE_MS / 1000)),
+    );
   }
 
   const server = createServer((request, response) => {
@@ -213,13 +265,15 @@ export function startWeb(options: WebOptions): Promise<RunningWeb> {
       return;
     }
     if (request.method === 'POST' && request.url === '/logout') {
-      void readBody(request)
-        .then((body) => {
-          const token = String((JSON.parse(body || '{}') as { token?: unknown }).token ?? '');
-          sessions.delete(token);
-          answer(response, 200, { ok: true });
-        })
-        .catch(() => answer(response, 400, { ok: false }));
+      // Whichever session the cookie names — the page cannot name one itself, and that is
+      // the point of it: nothing here takes a session id from a body it was handed.
+      const token = cookieValue(request.headers.cookie, COOKIE);
+      if (token) {
+        const gone = sessions.get(token);
+        sessions.delete(token);
+        if (gone) log(`web  ${gone.name} logged out`);
+      }
+      answer(response, 200, { ok: true }, sessionCookie('', overTls(request), 0));
       return;
     }
     if (request.url === '/health') {
@@ -266,8 +320,9 @@ export function startWeb(options: WebOptions): Promise<RunningWeb> {
       }
       if (message.kind === 'hello') {
         // A name is not something the page gets to choose: it is whichever account the
-        // token was issued for, spelled the way the account spells it.
-        const nick = sessionOf(String(message.token ?? ''));
+        // session cookie belongs to, spelled the way the account spells it. The cookie
+        // came with the handshake, so it is read from there and not from this frame.
+        const nick = sessionOf(cookieValue(peer.headers.cookie, COOKIE));
         if (!nick) {
           send(browser, { kind: 'denied' });
           return;

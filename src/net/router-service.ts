@@ -44,6 +44,7 @@ import {
   matchStartedEntry,
   memberEntry,
   playerInfo,
+  probePeerAddress,
   roomEntry,
   withRating,
   stampRoomIds,
@@ -1073,9 +1074,15 @@ export class RouterSession {
         if (typeof name === 'string' && name) this.username = name;
         if (typeof message.body?.[2] === 'string') this.localAddress = message.body[2];
         if (typeof message.body?.[3] === 'string') this.localNetmask = message.body[3];
-        this.presence.livesAt(this.username, this.localAddress);
+        // Where everyone ELSE will be told he lives. His own record still comes from
+        // `this.localAddress` (addressOf), so the probe never lies to a player about
+        // himself — see probePeerAddress.
+        const livesAt = probePeerAddress.on ? probePeerAddress.for(this.username) : this.localAddress;
+        this.presence.livesAt(this.username, livesAt);
         return {
-          note: `LOBBYSERVERLOGIN "${this.username}" on server ${String(serverId)}, from ${this.localAddress}/${this.localNetmask}`,
+          note:
+            `LOBBYSERVERLOGIN "${this.username}" on server ${String(serverId)}, from ${this.localAddress}/${this.localNetmask}` +
+            (probePeerAddress.on ? ` — others will be told ${livesAt}` : ''),
           replies: [
             build(
               reply(
@@ -1458,7 +1465,11 @@ export class RouterSession {
           const settings = Buffer.from(room.info).toString('hex');
           return {
             note:
-              `GAME_READY — "${room.name}" (${room.id}) starts, announced to him and ${told} other(s)\n` +
+              `GAME_READY — "${room.name}" (${room.id}) starts, announced to him and ${told} other(s)` +
+              // Silence on the probe must not be readable as "the game ignored our
+              // address" when it could just as well be "the shape was never found".
+              (probePeerAddress.on ? `\n             probe rewrote the endpoints: ${probePeerAddress.lastPatch}` : '') +
+              '\n' +
               `             the game as its host described it, ${room.info.length} bytes, for dump-struct --hex:\n` +
               `             ${settings}`,
             replies: [this.lobbyYes(message, subtype, room), build(reply(message, announcement))],

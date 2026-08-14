@@ -28,7 +28,7 @@ import { NatService } from '../src/net/nat-service.ts';
 import { GUEST, GUEST_LOBBY, RouterService } from '../src/net/router-service.ts';
 import { CdKeyService } from '../src/net/cdkey-service.ts';
 import { IrcConnection, IrcService, chatLine, lobbyChannel } from '../src/net/irc.ts';
-import { probeRoomFields } from '../src/net/lobby.ts';
+import { probePeerAddress, probeRoomFields } from '../src/net/lobby.ts';
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -151,6 +151,14 @@ if (router.ghosts) log('ghosts on — GhostList, GhostBlob and GhostJoin will be
 // are not joinable while it is on — the version field is deliberately nonsense.
 probeRoomFields.on = process.argv.includes('--probe-room-fields');
 if (probeRoomFields.on) log('probe-room-fields on — room fields 3,4,5,6,11,14,15 go out as 8003…8015; nothing will be joinable');
+
+// A diagnostic for one launch: every player is announced to the OTHERS at an address of
+// ours, so that `tools/peer-probe.ts` can say whether the peer a client dials comes from
+// the fields we fill in or from the blob he wrote himself. Nothing answers on those
+// addresses — a game started while this is on will not connect.
+probePeerAddress.on = process.argv.includes('--probe-peer-address');
+if (probePeerAddress.on)
+  log(`probe-peer-address on — players are announced at ${probePeerAddress.pool.join(', ')}; run tools/peer-probe.ts and expect no game to connect`);
 
 // The guest is not a ghost: he is a player with a name, a blob and a ladder row, and
 // he is here so that the things needing SOMEBODY ELSE — a profile read about another

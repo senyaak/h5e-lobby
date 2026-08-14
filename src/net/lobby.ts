@@ -355,6 +355,111 @@ export class Rooms {
  */
 export const probeRoomFields = { on: false };
 
+/**
+ * Where the other player is — replaced, for one launch, with an address that is ours.
+ *
+ * The duel of 14.08.2026 was captured on the loopback adapter and settled what the peers
+ * dial: `192.168.178.27:8888 <-> 192.168.178.27:8889`, UDP, one socket each, 451 packets
+ * in 186 seconds. Not `127.0.0.1` — the machine's **LAN** address, the one the client
+ * declares about itself in LOBBYSERVERLOGIN. The NAT desk had mirrored `127.0.0.1` back
+ * to both of them and neither dialled it.
+ *
+ * That address reaches the other client by two roads and the capture cannot tell them
+ * apart, because on one machine they carry the same string: the member record's fields
+ * 2 and 3, which the SERVER fills from what he declared, and his own player-info blob,
+ * which we forward byte for byte and which carries a LAN address of its own (tag 4).
+ * Which of the two is dialled decides how much work the relay is — the first we already
+ * own, the second needs surgery on his document.
+ *
+ * So: with this on, every player is registered in `Presence` at an address out of the
+ * pool below instead of his real one, and a listener on those addresses says which road
+ * was taken. Nothing else changes; the blob still goes out as he wrote it.
+ *
+ * **Only in what OTHER players are shown.** `RouterSession.addressOf` answers a player's
+ * own record from `this.localAddress`, which stays true, and everyone else's from
+ * `Presence` — so the host still knows where he himself lives. This is the same line the
+ * room-field probe had to learn the hard way.
+ *
+ * Nothing forwards on the probe addresses, so the game will NOT connect while this is on.
+ * That is the point: the question of this launch is where the call is placed, not whether
+ * it is answered.
+ */
+export const probePeerAddress = {
+  on: false,
+  /** Handed out in the order players log in — the whole 127/8 is loopback on Windows. */
+  pool: ['127.0.0.9', '127.0.0.10', '127.0.0.11', '127.0.0.12'],
+  given: new Map<string, string>(),
+  for(name: string): string {
+    const already = this.given.get(name);
+    if (already) return already;
+    const next = this.pool[this.given.size % this.pool.length]!;
+    this.given.set(name, next);
+    return next;
+  },
+  /**
+   * Which probe address stands in for a copy of the game, by the port it plays on:
+   * 8888 the first install, 8889 the second, 8890 the third.
+   */
+  forPort(port: number): string | null {
+    const at = port - 8888;
+    return at >= 0 && at < this.pool.length ? this.pool[at]! : null;
+  },
+  /** What the last call to `probeEndpoints` did, for the launch's log to state. */
+  lastPatch: '',
+};
+
+/**
+ * The players' endpoints inside the host's description of the game, pointed at us.
+ *
+ * The first probe (announcing players at addresses of ours in the member record)
+ * changed nothing: the clients dialled the real LAN address anyway and played a full
+ * duel. So the address is not carried by any field the server fills in — and the
+ * capture's hex says where it is instead. Inside the 658-byte description the host
+ * sends, each player has a record of this shape:
+ *
+ * ```
+ * 02 10 "Senyaak2"                       the name
+ * 03 24  02 20 <16>                      a sockaddr: port 40010, the NAT-mirrored
+ *                                        address, written back to front
+ * 04 2c  02 04 <port>  03 20 <16>        the GAME port and the LAN address
+ * 05 08 <4>                              the rating
+ * ```
+ *
+ * and `04 2c 02 04 pp pp 03 20` is the shape searched for here: tag 4 of a player
+ * record is exactly 22 bytes, holding a two-byte port under tag 2 and sixteen bytes
+ * under tag 3 of which the first four are the address. That is specific enough to find
+ * without walking the document — the same argument `stampRoomIds` makes for its pair.
+ *
+ * Only the four address bytes are written, in place, so the document keeps its length
+ * and every other byte the host wrote. The port is read, not changed: the probe listens
+ * on the ports the copies already use.
+ */
+export function probeEndpoints(info: Uint8Array): Uint8Array {
+  const out = Buffer.from(info);
+  const shape = Buffer.from([0x04, 0x2c, 0x02, 0x04]);
+  const done: string[] = [];
+  let at = 0;
+  for (;;) {
+    at = out.indexOf(shape, at);
+    if (at < 0) break;
+    const port = out.readUInt16LE(at + 4);
+    // The two bytes after the port must be tag 3 with sixteen bytes, or this is a
+    // coincidence in some other field and writing into it would corrupt the document.
+    if (out[at + 6] !== 0x03 || out[at + 7] !== 0x20) {
+      at += shape.length;
+      continue;
+    }
+    const address = probePeerAddress.forPort(port);
+    if (address) {
+      for (const [i, octet] of address.split('.').map(Number).entries()) out[at + 8 + i] = octet;
+      done.push(`${String(port)}→${address}`);
+    }
+    at += shape.length;
+  }
+  probePeerAddress.lastPatch = done.length ? done.join(', ') : 'NOTHING MATCHED';
+  return out;
+}
+
 export function roomEntry(room: Room, probe = false): GSValue[] {
   const numbered = (field: number, real: string): string =>
     probe && probeRoomFields.on ? String(8000 + field) : real;
@@ -369,7 +474,7 @@ export function roomEntry(room: Room, probe = false): GSValue[] {
     room.master,
     '',
     '',
-    room.info,
+    infoOut(room),
     numbered(11, String(room.eventId)),
     String(room.maxPlayers),
     String(room.members.length),
@@ -380,6 +485,11 @@ export function roomEntry(room: Room, probe = false): GSValue[] {
     room.address,
     room.altAddress,
   ];
+}
+
+/** The host's description as it goes OUT — probed on the way, never in what we store. */
+function infoOut(room: Room): Uint8Array {
+  return probePeerAddress.on ? probeEndpoints(room.info) : room.info;
 }
 
 /**
@@ -405,7 +515,7 @@ export function roomEntry(room: Room, probe = false): GSValue[] {
  * anything.
  */
 export function gameStartedEntry(room: Room, port = GAME_PORT): GSValue[] {
-  return [String(LobbyMsg.GAME_STARTED), room.info, String(port), room.address, room.altAddress];
+  return [String(LobbyMsg.GAME_STARTED), infoOut(room), String(port), room.address, room.altAddress];
 }
 
 /**

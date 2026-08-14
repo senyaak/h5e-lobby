@@ -120,6 +120,8 @@ const IDENTIFY_MS = 10_000;
 export function startRelay(options: RelayOptions): Promise<RunningRelay> {
   const log = options.log ?? ((): void => {});
   const agents = new Set<Agent>();
+  /** Every open connection, admitted or not — what `close()` has to let go of. */
+  const peers = new Set<WebSocketPeer>();
   const recent = new Map<string, { nick: string; room: string; roster: PeerEndpoint[]; at: number }>();
 
   const core = new CoreClient({ url: options.coreUrl, service: 'relay', log });
@@ -137,6 +139,7 @@ export function startRelay(options: RelayOptions): Promise<RunningRelay> {
   });
 
   serveWebSocket(server, (peer) => {
+    peers.add(peer);
     let agent: Agent | null = null;
     /** Set the moment the agent has said where it plays; the core is asked once, not twice. */
     let asked = false;
@@ -220,6 +223,7 @@ export function startRelay(options: RelayOptions): Promise<RunningRelay> {
 
     peer.onClose(() => {
       clearTimeout(mute);
+      peers.delete(peer);
       if (!agent) return;
       agents.delete(agent);
       log(`relay ${agent.nick} left room ${agent.room}`);
@@ -272,7 +276,11 @@ export function startRelay(options: RelayOptions): Promise<RunningRelay> {
         close: () =>
           new Promise<void>((done) => {
             core.stop();
-            for (const agent of agents) agent.peer.close();
+            // EVERY connection, not only the admitted ones. `server.close()` waits for the
+            // sockets that are still open, and one that never identified is still a socket
+            // — closing only the agents left it holding the door, and a suite that ought to
+            // have gone red hung instead. Found by sabotaging the silence timeout.
+            for (const one of peers) one.close();
             server.close(() => done());
           }),
       });

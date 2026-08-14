@@ -1360,23 +1360,37 @@ before looking at mods.
 1. **Getting a hand-made map to the other player.** Not a transport question after all:
    the game never sends one, it refuses the join instead (see the checksum section). So
    distribution is ours to do — the lobby knows which map a room is for, and the launcher
-   could fetch it before the player enters. Nothing of this is written.
-2. **An adventure map, and more than two players.** Everything above is a duel between two
+   could fetch it before the player enters. Nothing of this is written. Сеня wants it
+   eventually done **inside the game** rather than by a launcher (14.08.2026).
+2. **Duel presets, which the game saves and then cannot show.** Saving one writes a
+   complete `<game>\DuelPresets\<name>.h5p` — a zip holding `Maps/DuelPresets/<name>/`
+   with `preset.xdb` (an `AdvMapHero`: hero, experience, army slots, artifacts),
+   `name.txt` and three `HeroIcon_*` textures. Exactly the four pieces a list entry needs.
+   But the list the duel screen draws is a **fixed data table**,
+   `UI/MPDMLobby/presets.(DuelPresets).xdb` in `a2p1-data.pak`, 24 `<Item>`s each naming a
+   shipped hero and shipped icons. Nothing enumerates `.h5p`, so a saved preset is never
+   listed however it is mounted — putting the archive in the scanned mod folder changed
+   nothing, which was tried. An override of that table with a 25th Item pointing into the
+   saved archive was built (`H5E\homm5-editor-presets.h5u`, valid XML, 25 items) and did
+   not bring it up either, so the screen is not simply reading the packed table. Not
+   chased further. Сеня wants a preset editor in the game and presets carried to the other
+   player for a duel — a later feature, recorded here because the pieces are known.
+3. **An adventure map, and more than two players.** Everything above is a duel between two
    clients. A third install is ready at `C:\Projects\homm5-game-net3` (port 8890,
    `run-net3.bat`) and will say whether the peers form a mesh or a star, and whether
    `NetDriver` keys players by address — if it does, each peer needs a loopback address of
    its own, which the pool already provides.
-3. **Whether the game's transport survives real address translation.** It is UDP with its
+4. **Whether the game's transport survives real address translation.** It is UDP with its
    own sequencing; nothing here says how it behaves when the port it is answered from is
    not the port it dialled.
-4. **What the game does when the dial fails.** Observed only as silent one-a-second
+5. **What the game does when the dial fails.** Observed only as silent one-a-second
    retries for as long as the probe refused to answer; the timeout and the message the
    player sees were never reached.
-5. **The port, when the relay is real.** The address is rewritten and the port is left
+6. **The port, when the relay is real.** The address is rewritten and the port is left
    alone, which works because each copy here plays on a port of its own. Two players
    behind one relay both on 8888 need either a distinct address each or the port rewritten
    too — and the port is two bytes in the same record, under tag 2.
-6. **A finished game stays on the other players' screens.** Not a transport question, but
+7. **A finished game stays on the other players' screens.** Not a transport question, but
    it will be constant online, where connections drop rather than say goodbye. The server
    does its part: on the host's socket closing it removed the room and told the channel
    (`Senyaak2 left — dropped "Сервер — Senyaak", 2 player(s) told`, 14.08.2026). The

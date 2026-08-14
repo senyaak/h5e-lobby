@@ -29,7 +29,9 @@ if (imported.length) log(`brought across from the old JSON files: ${imported.joi
 const channels = gameChannels();
 
 const running = await startCore({
-  host: settings.host,
+  // Not `settings.bind`, and not a variable of its own: the core is the one service that
+  // is never reached from another machine, and `startCore` refuses anything else.
+  bind: '127.0.0.1',
   port: settings.corePort,
   db,
   token: settings.coreToken,
@@ -37,7 +39,7 @@ const running = await startCore({
   log,
 });
 
-log(`core on ${settings.host}:${running.port()} — ws at /core, health at /health`);
+log(`core on 127.0.0.1:${running.port()} — ws at /core, health at /health, loopback only`);
 log(`database ${settings.database}, ${running.core.chat.size} chat line(s) kept`);
 log(`channels: ${channels.map((c) => `${c.name} ${c.key}`).join(', ')}`);
 log(`logging to ${log.session}`);

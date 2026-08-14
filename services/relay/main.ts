@@ -16,12 +16,15 @@ const settings = config();
 const log = openLog('relay');
 
 const running = await startRelay({
-  host: settings.host,
+  bind: settings.bind,
   port: settings.relayPort,
   coreUrl: settings.coreUrl,
   coreToken: settings.coreToken,
   log,
 });
 
-log(`relay on ws://${settings.host}:${running.port()}/agent — agents identify once, against ${settings.coreUrl}`);
+log(
+  `relay on ${settings.bind}:${running.port()} — agents dial ws://${settings.host}:${running.port()}/agent ` +
+    `(or the tunnel's wss://…/agent), identify once, against ${settings.coreUrl}`,
+);
 log(`logging to ${log.session}`);

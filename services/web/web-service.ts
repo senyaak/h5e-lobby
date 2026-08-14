@@ -63,7 +63,8 @@ interface Browser {
 }
 
 export interface WebOptions {
-  host: string;
+  /** The address to bind — `H5E_BIND`, not the one the game is advertised. */
+  bind: string;
   port: number;
   coreUrl: string;
   coreToken: string;
@@ -437,7 +438,7 @@ export function startWeb(options: WebOptions): Promise<RunningWeb> {
   });
 
   return new Promise((resolve) => {
-    server.listen(options.port, options.host, () => {
+    server.listen(options.port, options.bind, () => {
       resolve({
         server,
         port: () => (server.address() as { port: number }).port,

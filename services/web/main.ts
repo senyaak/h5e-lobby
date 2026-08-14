@@ -14,13 +14,13 @@ const settings = config();
 const log = openLog('web');
 
 const running = await startWeb({
-  host: settings.host,
+  bind: settings.bind,
   port: settings.webPort,
   coreUrl: settings.coreUrl,
   coreToken: settings.coreToken,
   log,
 });
 
-log(`web on http://${settings.host}:${running.port()} — the same chat the game is in`);
+log(`web on ${settings.bind}:${running.port()} — open http://${settings.host}:${running.port()}, the same chat the game is in`);
 log(`core at ${settings.coreUrl}`);
 log(`logging to ${log.session}`);

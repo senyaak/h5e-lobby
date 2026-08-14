@@ -14,7 +14,12 @@ import type { ChannelInfo } from '../../shared/core-protocol.ts';
 import { serveWebSocket } from '../../shared/websocket.ts';
 
 export interface CoreServerOptions {
-  host: string;
+  /**
+   * The address to bind, and it may only be a loopback one — see `LOOPBACK` below. There
+   * is deliberately no environment variable behind this: a core reachable from off the
+   * host is a core with nothing but a shared token in front of it.
+   */
+  bind: string;
   port: number;
   db: DatabaseSync;
   token: string;
@@ -38,7 +43,22 @@ export interface RunningCore {
   close(): Promise<void>;
 }
 
+/**
+ * The addresses the core is allowed to bind. Everything that talks to it — the gateway,
+ * the web, the relay — is on the same host by design (docs/ARCHITECTURE.md), so the list
+ * is the loopback interface and nothing else. `0.0.0.0` is not on it, which is the point:
+ * it is the value a well-meaning "make it reachable" edit reaches for first.
+ */
+const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1']);
+
 export function startCore(options: CoreServerOptions): Promise<RunningCore> {
+  if (!LOOPBACK.has(options.bind)) {
+    throw new Error(
+      `core: refusing to listen on ${options.bind} — the core is loopback only, and a token is not a lock. ` +
+        `If it truly has to move, it needs a way in of its own, not a share of H5E_BIND.`,
+    );
+  }
+
   const core = new CoreService({
     db: options.db,
     token: options.token,
@@ -70,14 +90,18 @@ export function startCore(options: CoreServerOptions): Promise<RunningCore> {
     });
   });
 
-  return new Promise((resolve) => {
-    server.listen(options.port, options.host, () => {
+  return new Promise((resolve, reject) => {
+    // A socket that cannot be had — the port taken, the address not this machine's — is a
+    // message, not a stack trace: without this, `listen` raises an 'error' event nobody is
+    // listening for and Node ends the process on the spot.
+    server.on('error', (error: Error) => reject(new Error(`core: cannot listen on ${options.bind}:${options.port} — ${error.message}`)));
+    server.listen(options.port, options.bind, () => {
       const port = (server.address() as { port: number }).port;
       resolve({
         core,
         server,
         port: () => port,
-        url: () => `ws://${options.host}:${port}/core`,
+        url: () => `ws://${options.bind}:${port}/core`,
         close: () =>
           new Promise<void>((done) => {
             for (const peer of [...peers]) peer.close();

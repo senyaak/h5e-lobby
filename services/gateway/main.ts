@@ -1,6 +1,6 @@
 // The game gateway: the desks the game itself connects to.
 //
-//   node services/gateway/main.ts [--host 127.0.0.1] [--http 8080] [--ghosts] [--quiet-bot]
+//   node services/gateway/main.ts [--host 127.0.0.1] [--bind 0.0.0.0] [--http 8080] [--ghosts] [--quiet-bot]
 //
 // This was `tools/net-server.ts`, the one process that was everything. What left it is
 // chat, which now belongs to the core so that a browser can be in the same conversation;
@@ -36,8 +36,13 @@ function arg(name: string, fallback: string): string {
   return at >= 0 && process.argv[at + 1] ? process.argv[at + 1]! : fallback;
 }
 
-/** The address the game will be told to connect to — itself, by default. */
+/**
+ * The address the game will be told to connect to — itself, by default. Advertised only:
+ * it is what goes into the ini and into the endpoints, and no socket is bound to it.
+ */
 const host = arg('host', settings.host);
+/** What the desks actually bind — every interface unless `H5E_BIND` says otherwise. */
+const bind = arg('bind', settings.bind);
 const httpPort = Number(arg('http', String(settings.httpPort)));
 
 /**
@@ -91,7 +96,11 @@ createHttpServer((req: IncomingMessage, res: ServerResponse) => {
   const ini = serversIni();
   log(`HTTP -> ${ini.length} bytes of servers ini\n${hexDump(Buffer.from(ini))}`);
   serve(res, ini);
-}).listen(httpPort, () => log(`http on ${httpPort} — start the game with http_proxy=http://127.0.0.1:${httpPort}`));
+  // The line below is the one that gets copied into run-net.bat, so it has to name the
+  // address this gateway is advertising — not the loopback it was written against.
+}).listen(httpPort, bind, () =>
+  log(`http on ${bind}:${httpPort} — start the game with http_proxy=http://${host}:${httpPort}`),
+);
 
 let connections = 0;
 
@@ -382,7 +391,7 @@ for (const service of [...SERVICES, PROXY, LOBBY]) {
       socket.on('error', (err: Error) => log(`TCP  #${id} ${label}:${port} error: ${err.message}`));
     })
       .on('error', (err: Error) => log(`TCP  ${label}:${port} listen failed: ${err.message}`))
-      .listen(port, () => log(`tcp  ${label} on ${port}`));
+      .listen(port, bind, () => log(`tcp  ${label} on ${bind}:${port}`));
 
     if (service.kind === 'tcp+udp') {
       // Two of the UDP services answer: the NAT mirror and the CD-key desk. Each
@@ -421,7 +430,7 @@ for (const service of [...SERVICES, PROXY, LOBBY]) {
         }
       });
       udp.on('error', (err: Error) => log(`UDP  ${label}:${port} bind failed: ${err.message}`));
-      udp.bind(port, () => log(`udp  ${label} on ${port}`));
+      udp.bind(port, bind, () => log(`udp  ${label} on ${bind}:${port}`));
     }
   }
 }

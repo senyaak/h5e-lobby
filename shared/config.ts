@@ -19,8 +19,18 @@ import { fileURLToPath } from 'node:url';
 export const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 export interface Config {
-  /** The address the game is told to connect to, and what the services bind. */
+  /**
+   * The address the game is told to connect to. Advertised only — it goes into the
+   * `[Servers]` ini and into the endpoints a room hands out, and no socket is ever bound
+   * to it. On a host reached from outside this is the public address.
+   */
   host: string;
+  /**
+   * What the gateway, the web and the relay bind. Every interface by default, because a
+   * second machine has to be able to reach them. The core is not on this list: it binds
+   * loopback and nothing else (services/core/server.ts).
+   */
+  bind: string;
   /** Where the game asks for its server list (`http_proxy` points here). */
   httpPort: number;
   /** The core's internal API — loopback only, never exposed. */
@@ -41,6 +51,7 @@ export interface Config {
 
 const DEFAULTS: Config = {
   host: '127.0.0.1',
+  bind: '0.0.0.0',
   httpPort: 8080,
   corePort: 40100,
   coreUrl: 'ws://127.0.0.1:40100/core',
@@ -54,6 +65,7 @@ const DEFAULTS: Config = {
 /** Which environment variable carries which setting. */
 const FROM_ENV: Record<keyof Config, string> = {
   host: 'H5E_HOST',
+  bind: 'H5E_BIND',
   httpPort: 'H5E_HTTP_PORT',
   corePort: 'H5E_CORE_PORT',
   coreUrl: 'H5E_CORE_URL',
@@ -99,9 +111,10 @@ export function config(): Config {
   settings.database = resolve(settings.database);
   settings.logDir = resolve(settings.logDir);
   // `coreUrl` defaults to wherever the core was told to listen, so moving the port is one
-  // variable rather than two that can disagree.
+  // variable rather than two that can disagree. The address is not a choice: the core is
+  // loopback and the three that call it are on the same host.
   if (!process.env['H5E_CORE_URL'] && file.coreUrl === undefined) {
-    settings.coreUrl = `ws://${settings.host === '0.0.0.0' ? '127.0.0.1' : settings.host}:${settings.corePort}/core`;
+    settings.coreUrl = `ws://127.0.0.1:${settings.corePort}/core`;
   }
   cached = settings;
   return settings;

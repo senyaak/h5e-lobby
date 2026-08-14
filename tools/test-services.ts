@@ -94,7 +94,44 @@ async function openBrowser(url: string, cookie = ''): Promise<Browser> {
 }
 
 const { db } = openDatabase(':memory:');
-const core = await startCore({ host: '127.0.0.1', port: 0, db, token: TOKEN, channels: CHANNELS });
+const core = await startCore({ bind: '127.0.0.1', port: 0, db, token: TOKEN, channels: CHANNELS });
+
+// ---------------------------------------------------------------------------------
+console.log('\nthe core stays on loopback');
+// ---------------------------------------------------------------------------------
+{
+  // `H5E_BIND` moved the other three off loopback so a second machine can reach them
+  // (SLICE §2.1). The core must not have come along: a token is what stands in front of
+  // it, and a token is a seatbelt, not a lock.
+  const bound = core.server.address() as { address: string };
+  check('the running core listens on loopback', bound.address === '127.0.0.1', bound.address);
+
+  // Refused means refused *quickly*: without the guard, a core handed an address this
+  // machine does not have neither throws nor listens — it waits forever, and a hanging
+  // suite says nothing. The deadline turns that into a red line like any other.
+  async function refused(bind: string): Promise<boolean> {
+    // `Promise.resolve().then` and not a bare call, because the guard says no by throwing
+    // where it stands — a synchronous throw would go straight past a `.catch` on the
+    // returned promise.
+    const listening = Promise.resolve()
+      .then(() => startCore({ bind, port: 0, db, token: TOKEN, channels: CHANNELS }))
+      .then(async (stray) => {
+        await stray.close();
+        return 'listened';
+      })
+      .catch(() => 'refused');
+    const verdict = await Promise.race([
+      listening,
+      new Promise<string>((resolve) => setTimeout(() => resolve('hung'), 2000)),
+    ]);
+    return verdict === 'refused';
+  }
+  // The sabotage half: hand it the two addresses a "make it reachable" edit reaches for,
+  // and the checks go red the moment the guard in services/core/server.ts is gone.
+  check('every interface is refused', await refused('0.0.0.0'));
+  check('a LAN address is refused', await refused('192.168.1.5'));
+  check('loopback by another name is allowed', !(await refused('::1')));
+}
 
 // The gateway's side of the wire, which is a CoreClient and nothing else — the same
 // object services/gateway/main.ts holds.
@@ -106,7 +143,7 @@ gateway.onPresence = (entries) => (presenceSeen = entries);
 gateway.start();
 check('the gateway reaches the core', await until(() => gateway.connected));
 
-const web = await startWeb({ host: '127.0.0.1', port: 0, coreUrl: core.url(), coreToken: TOKEN });
+const web = await startWeb({ bind: '127.0.0.1', port: 0, coreUrl: core.url(), coreToken: TOKEN });
 const pageUrl = `http://127.0.0.1:${web.port()}`;
 
 const page = await fetch(pageUrl);
@@ -304,7 +341,7 @@ console.log('\nsessions that run out, and sockets that hold them open');
   // including the throttle, which by now has this address on it.
   const IDLE = 1200;
   const brief = await startWeb({
-    host: '127.0.0.1',
+    bind: '127.0.0.1',
     port: 0,
     coreUrl: core.url(),
     coreToken: TOKEN,
@@ -370,7 +407,7 @@ gateway.replaceRooms([
 ]);
 await until(() => false, 100);
 
-const relay = await startRelay({ host: '127.0.0.1', port: 0, coreUrl: core.url(), coreToken: TOKEN });
+const relay = await startRelay({ bind: '127.0.0.1', port: 0, coreUrl: core.url(), coreToken: TOKEN });
 
 interface Agent {
   got: Buffer[];
@@ -467,7 +504,7 @@ console.log('\nthree in a room, each datagram to the one it names');
   ]);
   await until(() => false, 100);
 
-  const three = await startRelay({ host: '127.0.0.1', port: 0, coreUrl: core.url(), coreToken: TOKEN });
+  const three = await startRelay({ bind: '127.0.0.1', port: 0, coreUrl: core.url(), coreToken: TOKEN });
   const a = await openAgentOn(three.port(), secretA);
   const b = await openAgentOn(three.port(), secretB);
   const c = await openAgentOn(three.port(), secretC);
@@ -511,7 +548,7 @@ console.log('\nthe relay with the core away');
   // The property the whole design turns on: everything else may restart, and a game in
   // progress must not notice. Its own core and its own relay, because this one is going
   // to be killed — with its connections cut, or "away" would mean "still answering".
-  const spare = await startCore({ host: '127.0.0.1', port: 0, db, token: TOKEN, channels: CHANNELS });
+  const spare = await startCore({ bind: '127.0.0.1', port: 0, db, token: TOKEN, channels: CHANNELS });
   const feed = new CoreClient({ url: spare.url(), token: TOKEN, service: 'gateway' });
   feed.start();
   await until(() => feed.connected);
@@ -520,7 +557,7 @@ console.log('\nthe relay with the core away');
   ]);
   await until(() => false, 100);
 
-  const spareRelay = await startRelay({ host: '127.0.0.1', port: 0, coreUrl: spare.url(), coreToken: TOKEN });
+  const spareRelay = await startRelay({ bind: '127.0.0.1', port: 0, coreUrl: spare.url(), coreToken: TOKEN });
   const before = await openAgentOn(spareRelay.port(), secretA);
   check('an agent is admitted while the core is up', await until(() => Object.values(spareRelay.rooms()).flat().length === 1));
   before.close();

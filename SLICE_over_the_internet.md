@@ -6,9 +6,10 @@
 > tunnel run as `senyaak-h5e-*` user units in the `~/Projects/tunnels` fleet
 > (`systemctl --user start senyaak-h5e.target`, `deploy/README.md`);
 > `https://h5e-lobby.example.com` is the lobby and `wss://relay-h5e.example.com/agent`
-> is the relay, both answering `/health` over a real certificate. **Not** done: §2.3, and
-> no game has played through any of it yet — the two client-side files (§2.4) still point
-> nowhere, §2.5 has not been read off, and stage three is untouched.
+> is the relay, both answering `/health` over a real certificate. **Not** done, and it is
+> the part only a game can do: no game has played through any of this yet — the two
+> client-side files (§2.4) still point nowhere, §2.5 has not been read off, the firewall
+> is still closed, and stage three is untouched.
 >
 > What IS built and measured is the local half — four services, three copies of the game,
 > every peer datagram carried by our own relay ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
@@ -50,8 +51,9 @@ So there are two transports and they get two different answers:
 | relay (`40200`), browser lobby (`8081`) | tunnel, `wss://` and `https://` |
 | everything the game itself dials | a routable address: port forwarding, a VPS, or a private network |
 
-How many ports that second row costs is a separate question with a good answer — one,
-once §2.3 is done — but it is never zero, and no tunnel of this kind changes that.
+How many ports that second row costs is a separate question with a good answer — one in
+TCP and one in UDP since §2.3, and the ten desks below are ten protocols now rather than
+ten numbers — but it is never zero, and no tunnel of this kind changes that.
 
 The agent already supports its half: `relay.c` accepts `ws://` and `wss://`, takes the
 port from the scheme (80 / 443) unless one is given, and passes

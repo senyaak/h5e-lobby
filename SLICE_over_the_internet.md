@@ -59,9 +59,10 @@ rather than ten numbers — but it is never zero, and no tunnel of this kind cha
 The agent already supports its half: `relay.c` accepts `ws://` and `wss://`, takes the
 port from the scheme (80 / 443) unless one is given, and passes
 `WINHTTP_FLAG_SECURE` when the scheme is secure. Two things about that URL, both
-load-bearing: it must carry **no query string**, because the agent appends
-`?token=<secret>` itself; and the session is opened `WINHTTP_ACCESS_TYPE_NO_PROXY`, so
-the `http_proxy` that redirects the game deliberately does not leak into the agent.
+load-bearing: it carries no query string at all any more — the `?token=<secret>` the agent
+used to append went with the secret itself — and the session is opened
+`WINHTTP_ACCESS_TYPE_NO_PROXY`, so the `http_proxy` that redirects the game deliberately
+does not leak into the agent.
 
 ---
 
@@ -287,9 +288,8 @@ Per game copy, and neither of them is in a repository:
 - `<copy>\run-net.bat` — `http_proxy=http://<laptop>:8080`. Hand-written and unmanaged
   today; if it survives this stage as a bat file, at least say so in the editor's
   Network tab, next to the field that writes the other one.
-- `<copy>\bin\homm5-editor-net.txt` — `relay ws://<laptop>:40200/agent`, secret
-  unchanged. The editor's **Network** tab writes this file; use it rather than an
-  editor.
+- `<copy>\bin\homm5-editor-net.txt` — `relay ws://<laptop>:40200/agent`, and that is the
+  whole file now. The editor's **Network** tab writes it; use it rather than an editor.
 
 As the fleet stands today, those two lines are:
 
@@ -300,17 +300,19 @@ relay wss://relay-h5e.example.com/agent
 
 **Both files on this box now say that** (14.08.2026, from the Windows side): all three
 copies' bat files name `192.168.178.23:8080`, and all three `homm5-editor-net.txt` name
-the tunnelled relay, each keeping its own secret.
+the tunnelled relay.
 
-**The trap in that last word.** An agent's secret is a hash in the **core's database**,
-and the laptop's `data/lobby.db` is not the one those three were issued against. If it
-does not know them the relay refuses every agent — and on one LAN **that failure looks
-like success**: the games fall back to talking directly, play perfectly, and prove
-nothing. So either carry the database over, or re-issue on the laptop
-(`npm run issue-agent -- Senyaak`, and the same for `Senyaak2` and `Senyaak3`) and write
-the three new secrets into the three files. The way to tell afterwards is in each game's
-own log: `carried out by the relay` must climb. Sitting at zero while the game plays fine
-is the tell.
+**And the second file no longer holds a secret.** It did, and that was the trap here: a
+secret is a hash in the core's database, the laptop's database is not the one those three
+were issued against, and on one LAN a relay that refuses every agent **looks like success**
+— the games fall back to talking directly, play perfectly and prove nothing. The secret is
+gone entirely now (`docs/ARCHITECTURE.md`, Identity): an agent says where its game plays
+and the room list is what admits it, so there is nothing to carry between machines and
+nothing to re-issue.
+
+The way to tell an admitted agent from a refused one is still the same, and still worth
+looking at: in each game's own log `carried out by the relay` must climb. Sitting at zero
+while the game plays fine is the tell.
 
 The first is `H5E_HOST` from `~/.config/h5e-lobby.env` and has to be an address the game
 can dial — it changes here and in the bat file together. Its **port** does not change any

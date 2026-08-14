@@ -16,7 +16,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { ChatStore, HISTORY_DEFAULT } from './chat.ts';
 import { Accounts } from './rules/accounts.ts';
-import { Agents } from './rules/agents.ts';
 import {
   CORE_PROTOCOL,
   decode,
@@ -54,7 +53,6 @@ interface Client {
 export class CoreService {
   readonly chat: ChatStore;
   readonly accounts: Accounts;
-  readonly agents: Agents;
   readonly channels: ChannelInfo[];
   private readonly clients = new Set<Client>();
   private readonly token: string;
@@ -63,7 +61,6 @@ export class CoreService {
   constructor(options: CoreOptions) {
     this.chat = new ChatStore(options.db);
     this.accounts = new Accounts(options.db);
-    this.agents = new Agents(options.db);
     this.channels = options.channels;
     this.token = options.token;
     this.log = options.log ?? ((): void => {});
@@ -79,11 +76,31 @@ export class CoreService {
     return [...this.clients].flatMap((client) => client.rooms);
   }
 
-  /** The room a player is in, or null. */
-  private roomOf(nick: string): RoomInfo | null {
-    return (
-      this.rooms().find((one) => one.members.some((member) => member.toLowerCase() === nick.toLowerCase())) ?? null
-    );
+  /**
+   * Who is playing at this address and port, out of the room list — and nothing else.
+   *
+   * This is the whole of how an agent is recognised. The endpoints come from the host's
+   * own description of the room, by way of the gateway, so the answer is only ever yes for
+   * somebody the lobby has actually seated in a game.
+   *
+   * TWO PLAYERS CAN DECLARE THE SAME ADDRESS — two behind one NAT both saying
+   * `192.168.1.5` — and then the port is what separates them. Two who match on both are a
+   * hole this cannot close from here; the room list is where that has to be fixed, by the
+   * gateway handing out an endpoint of its own per player (SLICE_over_the_internet.md §4.2).
+   * Until then such a pair is refused rather than guessed at.
+   */
+  private playerAt(address: string, port: number): { nick: string; room: RoomInfo } | null {
+    const found: { nick: string; room: RoomInfo }[] = [];
+    for (const room of this.rooms()) {
+      for (const one of room.endpoints) {
+        if (one.address === address && one.port === port) found.push({ nick: one.nick, room });
+      }
+    }
+    if (found.length === 1) return found[0]!;
+    if (found.length > 1) {
+      this.log(`core  ${address}:${port} is ${found.length} players at once — refusing rather than guessing`);
+    }
+    return null;
   }
 
   get connections(): number {
@@ -187,25 +204,20 @@ export class CoreService {
         );
         return;
       }
-      case 'agent.issue': {
-        const secret = this.agents.issue(message.name);
-        this.log(`core  an agent secret was issued for ${message.name}`);
-        client.send(encode({ kind: 'reply', id: message.id, ok: true, secret }));
-        return;
-      }
       case 'agent.identify': {
-        // The one question the relay ever asks, and it asks it once per connection. Both
-        // halves are refused here rather than anywhere downstream — that refusal is the
-        // whole of the relay's admission control.
-        const nick = this.agents.resolve(message.token);
-        const room = nick ? this.roomOf(nick) : null;
-        if (!nick || !room) {
-          this.log(`core  an agent was refused: ${nick ? `${nick} is in no room` : 'no such secret'}`);
-          client.send(
-            encode({ kind: 'reply', id: message.id, ok: false, error: nick ? 'not in a room' : 'no such agent' }),
-          );
+        // The one question the relay ever asks, and it asks it once per connection. The
+        // refusal here is the whole of the relay's admission control.
+        //
+        // Nothing is presented but an endpoint, and it is the ROOM LIST that turns it into
+        // a player — which is what "the lobby says who may be let in" means in code. An
+        // endpoint nobody is playing at belongs to nobody.
+        const found = this.playerAt(message.address, message.port);
+        if (!found) {
+          this.log(`core  an agent was refused: nobody is playing at ${message.address}:${message.port}`);
+          client.send(encode({ kind: 'reply', id: message.id, ok: false, error: 'no player at that endpoint' }));
           return;
         }
+        const { nick, room } = found;
         const where = `room-${room.id}`;
         this.log(
           `core  agent ${nick} is in ${where}, ${room.endpoints.length} endpoint(s) known: ` +

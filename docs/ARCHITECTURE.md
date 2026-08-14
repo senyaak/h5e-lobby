@@ -116,20 +116,31 @@ The path choice is invisible to the game and to the core, so the agent may chang
 mid-game. The core's part is to hand out the materials for the choice — the peers' public
 endpoints, which its NAT desk already observes, and the relay's address.
 
-**Identity.** The agent holds a secret, kept in the extension's own config
-(`bin/homm5-editor-net.txt`) rather than anywhere the game can read, and the relay turns it
-into a name by asking the core.
+**Identity: the lobby says who may be let in, and there is nothing to hand out.**
 
-**Where that secret comes from is OPEN, and there is no launcher.** An earlier version of
-this section had one — "the same page in an Electron shell" — issuing the secret at login
-and starting the game. There is no such thing and none is planned; Сеня cut it on
-14.08.2026, here and in `NETWORK_STATE.md`. What exists is a hand crank:
-`npm run issue-agent -- <name>` writes the hash, and the editor's **Network** tab writes
-the secret into the config. That is enough for our own copies and answers nothing for
-anybody else, so this is a decision still to be taken. The two candidates on the table are
-a secret handed out by the web lobby after the login it already performs, and the signed
-ticket above — and note that the ticket does not dodge the question, because a ticket has
-to reach the agent by exactly the same road a secret does.
+An agent opens with seven bytes saying where its game plays — the address and port it
+takes off the socket it already has its hands on. The relay asks the core that one
+question, and the core answers it out of the room list the gateway sends: somebody is
+playing at that endpoint, or nobody is. No secret, no ticket, no file to distribute, and
+nothing on disk. A player becomes admissible by joining a game and stops being admissible
+when the game ends, which is exactly the lifetime that was wanted.
+
+There WAS a long-lived secret here, hashed in the core's database, issued by
+`npm run issue-agent` and written into the extension's config. Сеня cut it on 14.08.2026
+and the reason is the one that ends the argument: **nobody outside the three copies on his
+desk could ever have obtained one.** The doc had answered "where does it come from" with a
+launcher that does not exist and is not planned.
+
+Two consequences worth having in front of you:
+
+- **A room whose description we cannot read admits nobody.** The endpoints are the
+  identity, so a room with none has no admissible players — where the secret would have let
+  them in and left the relay with nowhere to aim. `roomEndpoints` reads by shape and is
+  tested against captured bytes, which is what makes that acceptable.
+- **Two players who declare the same address AND port cannot be told apart**, and are
+  refused rather than guessed at. The port separates two behind one NAT; two colliding on
+  both is a hole the core cannot close, and the fix belongs in the gateway — an endpoint of
+  its own per player in the room description (`SLICE_over_the_internet.md` §4.2).
 
 **The agent is C, inside the game** — a module of the existing native extension
 (`homm5-editor`, worktree `homm5-editor-net`, `native/net/`), not a process beside it.
@@ -255,12 +266,11 @@ gateway keeps writing `logs/latest.log` as well, because that is the file that g
 2. **The agent and the relay, locally**: three copies of the game, three agents, one
    relay, everything on `127.0.0.1`, no tunnel and no 443. In order:
    - ~~**the lobby's half, which needs no game**~~ — **done 14.08.2026.** The gateway
-     sends the core its whole room list whenever it changes (`rooms.replace`, on the same
-     two-second poll as presence), and the core answers the relay's one question out of
-     two facts of different ages: WHO from the agent's secret, which is issued once and
-     kept as a hash (`services/core/rules/agents.ts`, `npm run issue-agent -- <name>`),
-     and WHICH ROOM from what the gateway last said. An agent whose player is in no room
-     is refused, and so is one whose game has ended.
+     sends the core its whole room list whenever it changes (`rooms.replace`, on the event
+     and not on a clock — `services/gateway/state-feed.ts`), and the core answers the
+     relay's one question out of that list alone: an agent says where its game plays, and
+     somebody is playing there or nobody is. An endpoint in no room is refused, and so is
+     one whose game has ended.
    - ~~**the agent**, in C~~ — **done 14.08.2026, and a duel was played through the relay.**
      `homm5-editor-net/native/net/agent.c` and `relay.c`: WinHTTP for the WebSocket, hooks on
      `sendto`/`recvfrom`/`select` (imported from WSOCK32 **by ordinal**), and the datagram

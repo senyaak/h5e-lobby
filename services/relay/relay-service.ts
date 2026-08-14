@@ -64,6 +64,15 @@ interface Agent {
 // ---------------------------------------------------------------------------
 
 const FRAME_DATAGRAM = 0x01;
+/**
+ * And the one an agent sends first: `[0x02][address: 4][port: 2]`, where its game plays.
+ *
+ * Same seven bytes as a datagram frame with nothing after them, because the agent is C
+ * inside the game and one shape is easier to get right than two. It is not a credential —
+ * see `agent.identify` in the protocol — it is the question "who is at this address", and
+ * only the lobby can answer it.
+ */
+const FRAME_IDENTIFY = 0x02;
 const FRAME_HEADER = 7;
 
 function frameFor(endpoint: PeerEndpoint | null, payload: Buffer): Buffer {
@@ -74,6 +83,14 @@ function frameFor(endpoint: PeerEndpoint | null, payload: Buffer): Buffer {
   out.writeUInt16BE(endpoint?.port ?? 0, 5);
   payload.copy(out, FRAME_HEADER);
   return out;
+}
+
+/** Where an agent says its game plays, out of its first frame. Null if this is not one. */
+function readIdentify(bytes: Buffer): PeerEndpoint | null {
+  if (bytes.length !== FRAME_HEADER || bytes[0] !== FRAME_IDENTIFY) return null;
+  const port = bytes.readUInt16BE(5);
+  if (!port) return null;
+  return { nick: '', address: `${bytes[1]}.${bytes[2]}.${bytes[3]}.${bytes[4]}`, port };
 }
 
 /** The address a framed datagram names, and the rest of it. Null if unframed. */
@@ -105,27 +122,29 @@ export function startRelay(options: RelayOptions): Promise<RunningRelay> {
       return;
     }
     response.writeHead(404, { 'Content-Type': 'text/plain' });
-    response.end('the relay speaks WebSocket at /agent?token=…\n');
+    response.end('the relay speaks WebSocket at /agent\n');
   });
 
   serveWebSocket(server, (peer) => {
-    const token = new URL(peer.url, 'http://relay').searchParams.get('token') ?? '';
     let agent: Agent | null = null;
+    /** Set the moment the agent has said where it plays; the core is asked once, not twice. */
+    let asked = false;
     /** Datagrams that arrive while the core is still being asked. A handful, then stop. */
     const early: Buffer[] = [];
 
-    const admit = (identity: { nick: string; room: string; roster?: PeerEndpoint[] }): void => {
-      // His own endpoint out of the roster, which is what every datagram he
-      // sends will be stamped with on the way to the others.
-      const mine =
-        (identity.roster ?? []).find((one) => one.nick.toLowerCase() === identity.nick.toLowerCase()) ?? null;
+    const admit = (mine: PeerEndpoint, identity: { nick: string; room: string; roster?: PeerEndpoint[] }): void => {
       agent = { peer, nick: identity.nick, room: identity.room, endpoint: mine };
       agents.add(agent);
-      recent.set(token, { nick: identity.nick, room: identity.room, roster: identity.roster ?? [], at: Date.now() });
+      recent.set(`${mine.address}:${mine.port}`, {
+        nick: identity.nick,
+        room: identity.room,
+        roster: identity.roster ?? [],
+        at: Date.now(),
+      });
       log(
         `relay ${identity.nick} joined room ${identity.room} ` +
           `(${[...agents].filter((a) => a.room === identity.room).length} there, ` +
-          `${mine ? `at ${mine.address}:${mine.port}` : 'endpoint unknown'})`,
+          `at ${mine.address}:${mine.port})`,
       );
       for (const held of early.splice(0)) forward(agent, held);
     };
@@ -135,31 +154,44 @@ export function startRelay(options: RelayOptions): Promise<RunningRelay> {
       peer.close();
     };
 
-    if (!token) {
-      refuse('no token');
-    } else {
-      // The core is ASKED FIRST, every time. The grace window below is for a core that
-      // cannot answer — it is not a shortcut past one that can: a "no" from the core is
-      // final, and an agent whose game has ended must be refused even though he was
-      // admitted a minute ago. Answering that out of the cache is what this did at first,
-      // and what let a finished room keep taking connections.
+    /**
+     * An agent has said where its game is. Now the lobby decides whether that is anybody.
+     *
+     * The core is ASKED FIRST, every time. The grace window is for a core that cannot
+     * answer — it is not a shortcut past one that can: a "no" is final, and an agent whose
+     * game has ended must be refused even though he was admitted a minute ago. Answering
+     * that out of the cache is what this did at first, and what let a finished room keep
+     * taking connections.
+     */
+    const identify = (mine: PeerEndpoint): void => {
       core
-        .identifyAgent(token)
-        .then((identity) => (identity ? admit(identity) : refuse('the core does not know that agent, or he is in no room')))
+        .identifyAgent(mine.address, mine.port)
+        .then((identity) =>
+          identity ? admit(mine, identity) : refuse(`nobody the lobby knows is playing at ${mine.address}:${mine.port}`),
+        )
         .catch((error: Error) => {
-          const cached = recent.get(token);
+          const cached = recent.get(`${mine.address}:${mine.port}`);
           if (cached && Date.now() - cached.at < GRACE_MS) {
             log(`relay the core did not answer (${error.message}) — admitting ${cached.nick} on a minute-old identity`);
-            admit(cached);
+            admit(mine, cached);
             return;
           }
           refuse(`the core did not answer — ${error.message}`);
         });
-    }
+    };
 
     peer.onMessage((bytes) => {
       if (agent) {
         forward(agent, bytes);
+        return;
+      }
+      // Nothing is known about this connection until it says where it plays. That is the
+      // whole of what an agent presents — no secret, no name — and the lobby turns it into
+      // a player or does not.
+      const hello = readIdentify(bytes);
+      if (hello && !asked) {
+        asked = true;
+        identify(hello);
         return;
       }
       // Still waiting on the core. A datagram is worth holding for the moment that takes;

@@ -116,22 +116,21 @@ export type ToCore =
    */
   | { kind: 'auth.verify'; id: number; name: string; password: string }
   /**
-   * Give this player an agent secret, and keep it.
+   * The relay's one question, asked once per connection: WHO is at this endpoint?
    *
-   * Asked once per installation, by whatever sets a copy of the game up — the launcher
-   * eventually, `tools/issue-agent.ts` today. The secret goes into the extension's config
-   * and the game never sees it.
-   */
-  | { kind: 'agent.issue'; id: number; name: string }
-  /**
-   * The relay's one question, asked once per connection.
+   * **There is no secret and nothing is issued.** An agent says where its game is —
+   * the address and port the game itself plays on, which it takes from the socket it
+   * already has its hands on — and the core looks that up in the room list the gateway
+   * sends it. The lobby is what says who may be let in; the connection carries no claim
+   * of its own beyond an address the lobby either knows or does not.
    *
-   * The answer is two facts of different ages: WHO, from the secret, which was issued
-   * once and does not change; and WHICH ROOM, from what the gateway last said, which
-   * changes every time somebody joins a game. An agent whose player is in no room is
-   * refused — there is nothing for him to be relayed to yet.
+   * There used to be a long-lived secret here, hashed in the core's database and issued
+   * by hand. Сеня cut it on 14.08.2026 for the reason that ends the argument: nobody
+   * outside the three copies on his desk could ever have obtained one.
+   *
+   * An endpoint in no room is refused — there is nothing for him to be relayed to yet.
    */
-  | { kind: 'agent.identify'; id: number; token: string };
+  | { kind: 'agent.identify'; id: number; address: string; port: number };
 
 export type FromCore =
   | { kind: 'welcome'; protocol: number; channels: ChannelInfo[] }
@@ -150,8 +149,6 @@ export type FromCore =
        * than shouting into the room.
        */
       agent?: { nick: string; room: string; roster: PeerEndpoint[] };
-      /** On a successful `agent.issue`: the secret, said once and never again. */
-      secret?: string;
       /** On a successful `auth.verify`: the account's own spelling of its name. */
       account?: { name: string };
     };

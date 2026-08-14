@@ -14,7 +14,7 @@
 // Exports:
 //   CoreClient   start(), post(), history(), replacePresence(), identifyAgent()
 
-import type { ChannelInfo, ChatMessage, FromCore, Origin, PresenceEntry, RoomInfo, ToCore } from './core-protocol.ts';
+import type { ChannelInfo, ChatMessage, FromCore, Origin, PeerEndpoint, PresenceEntry, RoomInfo, ToCore } from './core-protocol.ts';
 import { decode, encode } from './core-protocol.ts';
 
 export interface CoreClientOptions {
@@ -211,15 +211,14 @@ export class CoreClient {
       : { ok: false, name, reason: reply.error ?? 'refused' };
   }
 
-  /** A secret for this player's agent, said once. Re-issuing revokes the last one. */
-  async issueAgent(name: string): Promise<string> {
-    const reply = await this.ask((id) => ({ kind: 'agent.issue', id, name }));
-    if (!reply.ok || !reply.secret) throw new Error(reply.error ?? 'the core issued nothing');
-    return reply.secret;
-  }
-
-  async identifyAgent(token: string): Promise<{ nick: string; room: string } | null> {
-    const reply = await this.ask((id) => ({ kind: 'agent.identify', id, token }));
+  /**
+   * Who is playing at this endpoint, and where — or null, which means "do not let him in".
+   *
+   * The relay's only question. There is no credential in it: the endpoint is checked
+   * against the rooms the gateway reports, so the lobby is what admits an agent.
+   */
+  async identifyAgent(address: string, port: number): Promise<{ nick: string; room: string; roster: PeerEndpoint[] } | null> {
+    const reply = await this.ask((id) => ({ kind: 'agent.identify', id, address, port }));
     return reply.ok ? (reply.agent ?? null) : null;
   }
 }

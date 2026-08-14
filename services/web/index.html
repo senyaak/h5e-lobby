@@ -16,13 +16,14 @@
         --gold: #d8b45a;
         --web: #66ccff;
         --server: #b18cff;
+        --bad: #ff9b9b;
       }
       * { box-sizing: border-box; }
       body {
         margin: 0;
         height: 100vh;
         display: grid;
-        grid-template-rows: auto 1fr auto;
+        grid-template-rows: auto auto 1fr auto;
         background: var(--back);
         color: var(--ink);
         font: 15px/1.5 system-ui, sans-serif;
@@ -47,8 +48,9 @@
         font: inherit;
       }
       button.tab[aria-selected='true'] { color: var(--back); background: var(--gold); border-color: var(--gold); }
-      #who { margin-left: auto; color: var(--dim); font-size: 13px; }
+      #who { margin-left: auto; color: var(--dim); font-size: 13px; display: flex; align-items: center; gap: 10px; }
       #who b { color: var(--ink); font-weight: 600; }
+      #leave { border: 1px solid var(--edge); background: transparent; color: var(--dim); border-radius: 6px; padding: 3px 10px; font: inherit; font-size: 13px; cursor: pointer; }
       main { display: grid; grid-template-columns: 1fr 220px; min-height: 0; }
       #log { overflow-y: auto; padding: 14px 16px; }
       .line { display: flex; gap: 10px; padding: 2px 0; align-items: baseline; }
@@ -68,7 +70,7 @@
       aside p { color: var(--dim); font-size: 13px; margin: 0; }
       footer { padding: 10px 16px; border-top: 1px solid var(--edge); background: var(--panel); }
       #composer { display: flex; gap: 8px; }
-      input, footer button {
+      input, button.go {
         font: inherit;
         border: 1px solid var(--edge);
         background: var(--back);
@@ -77,21 +79,27 @@
         padding: 8px 10px;
       }
       #say { flex: 1; }
-      footer button { background: var(--gold); color: var(--back); border-color: var(--gold); font-weight: 600; cursor: pointer; }
+      button.go { background: var(--gold); color: var(--back); border-color: var(--gold); font-weight: 600; cursor: pointer; }
       #banner { display: none; padding: 6px 16px; background: #4a2020; color: #ffd9d9; font-size: 13px; }
       #banner.on { display: block; }
-      dialog {
-        border: 1px solid var(--edge);
+
+      /* The login. It covers the lobby rather than replacing it, so that what is behind
+         it is visibly the thing being logged into. */
+      #gate { position: fixed; inset: 0; display: none; place-items: center; background: rgba(10, 9, 7, 0.86); }
+      #gate.on { display: grid; }
+      #gate form {
+        width: min(380px, calc(100vw - 32px));
         background: var(--panel);
-        color: var(--ink);
+        border: 1px solid var(--edge);
         border-radius: 10px;
-        padding: 20px;
+        padding: 22px;
+        display: grid;
+        gap: 10px;
       }
-      dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
-      dialog h2 { margin: 0 0 4px; font-size: 16px; }
-      dialog p { margin: 0 0 14px; color: var(--dim); font-size: 13px; }
-      dialog form { display: flex; gap: 8px; }
-      dialog button { font: inherit; border-radius: 6px; border: 1px solid var(--gold); background: var(--gold); color: var(--back); padding: 8px 14px; font-weight: 600; cursor: pointer; }
+      #gate h2 { margin: 0; font-size: 17px; color: var(--gold); }
+      #gate p { margin: 0; color: var(--dim); font-size: 13px; }
+      #gate input { width: 100%; }
+      #why { color: var(--bad); font-size: 13px; min-height: 1.5em; }
     </style>
   </head>
   <body>
@@ -111,24 +119,30 @@
         <p id="nobody">Nobody is here yet.</p>
       </aside>
     </main>
-    <!-- A form, so that Enter sends the line the way Enter sends everything else on the
-         web. A keydown listener looked equivalent and was not: the pane this was driven
-         from never delivered one, and the box quietly ate every message. -->
     <footer>
+      <!-- A form, so that Enter sends the line the way Enter sends everything else on the
+           web. A keydown listener looked equivalent and was not: the pane this was driven
+           from never delivered one, and the box quietly ate every message. -->
       <form id="composer">
         <input id="say" placeholder="Say something to the channel…" autocomplete="off" />
-        <button id="send" type="submit">Send</button>
+        <button class="go" type="submit">Send</button>
       </form>
     </footer>
 
-    <dialog id="ask">
-      <h2>What are you called?</h2>
-      <p>The same name the game shows, if you want the players to know it is you.</p>
-      <form method="dialog">
-        <input id="nick" maxlength="24" autocomplete="off" required />
-        <button value="ok">Enter</button>
+    <div id="gate">
+      <form id="signin">
+        <h2>Log in</h2>
+        <p>The same name and password you use in the game.</p>
+        <input id="name" placeholder="Name" autocomplete="username" required />
+        <input id="password" type="password" placeholder="Password" autocomplete="current-password" />
+        <div id="why"></div>
+        <button class="go" type="submit">Enter</button>
+        <p>
+          No account yet? There is no sign-up here — start the game and log in once with the
+          name and password you want. That is what creates it.
+        </p>
       </form>
-    </dialog>
+    </div>
 
     <script type="module">
       const $ = (id) => document.getElementById(id);
@@ -136,40 +150,18 @@
       const tabs = $('tabs');
 
       let socket = null;
-      let nick = localStorage.getItem('h5e-nick') ?? '';
+      let token = localStorage.getItem('h5e-token') ?? '';
+      let nick = '';
       let channel = localStorage.getItem('h5e-channel') ?? '';
       let channels = [];
 
-      if (!nick) {
-        const ask = $('ask');
-        // Both the form's submit and the dialog's close, because they are not the same
-        // event everywhere: the browser pane this was first driven in never dispatched
-        // `close`, and a name box that swallows the name is the whole page not starting.
-        // The guard makes the second one a no-op.
-        const entered = () => {
-          if (nick) return;
-          nick = $('nick').value.trim() || 'somebody';
-          localStorage.setItem('h5e-nick', nick);
-          ask.close();
-          connect();
-        };
-        ask.querySelector('form').addEventListener('submit', (event) => {
-          event.preventDefault();
-          entered();
-        });
-        ask.addEventListener('close', entered);
-        ask.showModal();
-      } else {
-        connect();
-      }
+      connect();
 
       function connect() {
-        $('who').innerHTML = `you are <b></b>`;
-        $('who').querySelector('b').textContent = nick;
         socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/`);
         socket.addEventListener('open', () => {
           banner(false);
-          socket.send(JSON.stringify({ kind: 'hello', nick, channel: channel || undefined }));
+          hello();
         });
         socket.addEventListener('message', (event) => handle(JSON.parse(event.data)));
         // The web service restarting must not mean reloading the page by hand.
@@ -179,16 +171,39 @@
         });
       }
 
+      function hello() {
+        if (!token) {
+          gate(true);
+          return;
+        }
+        socket.send(JSON.stringify({ kind: 'hello', token, channel: channel || undefined }));
+      }
+
       function banner(on) {
         $('banner').classList.toggle('on', on);
       }
 
+      function gate(on, why = '') {
+        $('gate').classList.toggle('on', on);
+        $('why').textContent = why;
+        if (on) $('name').focus();
+      }
+
       function handle(message) {
         if (message.kind === 'welcome') {
+          nick = message.nick;
           channels = message.channels;
           if (!channels.some((c) => c.key === channel)) channel = channels[0]?.key ?? '';
+          gate(false);
+          drawWho();
           drawTabs();
           banner(!message.core);
+        } else if (message.kind === 'denied') {
+          // The session is gone — expired, or the service restarted and forgot it.
+          token = '';
+          localStorage.removeItem('h5e-token');
+          log.replaceChildren();
+          gate(true, 'Please log in again.');
         } else if (message.kind === 'core') {
           banner(!message.connected);
         } else if (message.kind === 'history') {
@@ -226,6 +241,20 @@
         log.append(row);
       }
 
+      function drawWho() {
+        $('who').replaceChildren();
+        const label = document.createElement('span');
+        label.textContent = 'you are ';
+        const name = document.createElement('b');
+        name.textContent = nick;
+        label.append(name);
+        const leave = document.createElement('button');
+        leave.id = 'leave';
+        leave.textContent = 'Log out';
+        leave.addEventListener('click', logout);
+        $('who').append(label, leave);
+      }
+
       function drawTabs() {
         tabs.replaceChildren();
         for (const one of channels) {
@@ -260,6 +289,62 @@
         $('nobody').hidden = here.length > 0;
       }
 
+      /** What each refusal means, in words a person can act on. */
+      const REFUSALS = {
+        'no-such-account': 'No account by that name. Log in once in the game to create it.',
+        'wrong-password': 'That password does not match.',
+        'too-many-tries': 'Too many attempts from here. Wait a minute.',
+        'core-away': 'The lobby core is not answering. Try again in a moment.',
+        'bad-request': 'A name is needed.',
+      };
+
+      async function signIn(event) {
+        event.preventDefault();
+        $('why').textContent = '';
+        let answer;
+        try {
+          const response = await fetch('/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: $('name').value.trim(), password: $('password').value }),
+          });
+          answer = await response.json();
+        } catch {
+          $('why').textContent = 'The lobby did not answer.';
+          return;
+        }
+        if (!answer.ok) {
+          $('why').textContent = REFUSALS[answer.reason] ?? 'Refused.';
+          return;
+        }
+        token = answer.token;
+        localStorage.setItem('h5e-token', token);
+        $('password').value = '';
+        if (socket?.readyState === 1) hello();
+        else connect();
+      }
+
+      async function logout() {
+        const gone = token;
+        token = '';
+        nick = '';
+        localStorage.removeItem('h5e-token');
+        log.replaceChildren();
+        tabs.replaceChildren();
+        $('who').replaceChildren();
+        gate(true);
+        try {
+          await fetch('/logout', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: gone }),
+          });
+        } catch {
+          /* the session is already forgotten here; the service will expire its own */
+        }
+        socket?.close();
+      }
+
       function say() {
         const input = $('say');
         const text = input.value.trim();
@@ -268,6 +353,7 @@
         input.value = '';
       }
 
+      $('signin').addEventListener('submit', signIn);
       $('composer').addEventListener('submit', (event) => {
         event.preventDefault();
         say();

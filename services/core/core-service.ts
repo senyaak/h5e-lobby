@@ -15,6 +15,7 @@
 
 import type { DatabaseSync } from 'node:sqlite';
 import { ChatStore, HISTORY_DEFAULT } from './chat.ts';
+import { Accounts } from './rules/accounts.ts';
 import {
   CORE_PROTOCOL,
   decode,
@@ -48,6 +49,7 @@ interface Client {
 
 export class CoreService {
   readonly chat: ChatStore;
+  readonly accounts: Accounts;
   readonly channels: ChannelInfo[];
   private readonly clients = new Set<Client>();
   private readonly agents = new Map<string, { nick: string; room: string }>();
@@ -56,6 +58,7 @@ export class CoreService {
 
   constructor(options: CoreOptions) {
     this.chat = new ChatStore(options.db);
+    this.accounts = new Accounts(options.db);
     this.channels = options.channels;
     this.token = options.token;
     this.log = options.log ?? ((): void => {});
@@ -139,6 +142,21 @@ export class CoreService {
       }
       case 'channels': {
         client.send(encode({ kind: 'reply', id: message.id, ok: true, channels: this.channels }));
+        return;
+      }
+      case 'auth.verify': {
+        // The browser's login. The account has to exist already — it is made by a first
+        // login in the game — so an unknown name is told apart from a wrong password,
+        // and the page can say which.
+        const { verdict, name } = this.accounts.verify(message.name, message.password);
+        this.log(`auth  ${message.name} from ${client.service}: ${verdict}`);
+        client.send(
+          encode(
+            verdict === 'ok'
+              ? { kind: 'reply', id: message.id, ok: true, account: { name } }
+              : { kind: 'reply', id: message.id, ok: false, error: verdict },
+          ),
+        );
         return;
       }
       case 'agent.register': {

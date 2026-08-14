@@ -12,6 +12,7 @@
 // Usage: `node tools/test-services.ts`
 
 import { openDatabase } from '../services/core/rules/database.ts';
+import { Accounts } from '../services/core/rules/accounts.ts';
 import { startCore } from '../services/core/server.ts';
 import { CoreClient } from '../shared/core-client.ts';
 import { ChatStore } from '../services/core/chat.ts';
@@ -112,9 +113,63 @@ check('the page is served', page.status === 200 && html.includes('Heroes V lobby
 const health = (await (await fetch(`${pageUrl}/health`)).json()) as { core: boolean };
 check('and it says the core is up', health.core === true, JSON.stringify(health));
 
+// ---------------------------------------------------------------------------------
+console.log('\nthe login, which is the game s login');
+// ---------------------------------------------------------------------------------
+
+/** What the game does on a player's first connection: the account is made there. */
+new Accounts(db).login('Senyaak', 'swordsman');
+
+interface LoginAnswer {
+  status: number;
+  ok?: boolean;
+  token?: string;
+  name?: string;
+  reason?: string;
+}
+
+async function tryLogin(name: string, password: string): Promise<LoginAnswer> {
+  const response = await fetch(`${pageUrl}/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, password }),
+  });
+  return { status: response.status, ...((await response.json()) as Record<string, unknown>) };
+}
+
+// Case first, because it decides which name everyone else sees him under.
+const admitted = await tryLogin('senyaak', 'swordsman');
+check('the game s password lets him into the browser', admitted.ok === true, JSON.stringify(admitted.reason));
+check('and he is named the way the account is spelled', admitted.name === 'Senyaak', String(admitted.name));
+check('with a token to come back with', typeof admitted.token === 'string' && admitted.token.length > 20);
+
+const wrong = await tryLogin('Senyaak', 'archer');
+check('a wrong password is refused', wrong.ok !== true && wrong.status === 401, `${wrong.status} ${wrong.reason}`);
+check('and says so, rather than that there is no such name', wrong.reason === 'wrong-password', String(wrong.reason));
+check('with no token', wrong.token === undefined);
+
+const unknown = await tryLogin('Nobody', 'anything');
+check('a name the game never saw is refused', unknown.ok !== true, String(unknown.reason));
+check(
+  'and told to go and make it in the game',
+  unknown.reason === 'no-such-account',
+  String(unknown.reason),
+);
+check('the browser CANNOT create an account', !core.core.accounts.has('Nobody'));
+
 const senya = await openBrowser(`ws://127.0.0.1:${web.port()}/`);
-senya.say({ kind: 'hello', nick: 'Senyaak', channel: RANKED });
+senya.say({ kind: 'hello', token: 'not-a-token' });
+check('a made-up token is denied', await until(() => senya.of('denied').length > 0));
+senya.say({ kind: 'say', text: 'let me through' });
+await until(() => false, 200);
+check(
+  'and nothing said without one is kept',
+  core.core.chat.history(RANKED).every((message) => message.text !== 'let me through'),
+);
+
+senya.say({ kind: 'hello', token: admitted.token!, channel: RANKED });
 check('the browser is welcomed', await until(() => senya.of('welcome').length > 0));
+check('under the account s own name', senya.of('welcome')[0]?.['nick'] === 'Senyaak', String(senya.of('welcome')[0]?.['nick']));
 check(
   'with the channels the game has',
   (senya.of('welcome')[0]?.['channels'] as ChannelInfo[])?.length === 3,
@@ -148,9 +203,14 @@ check(
   JSON.stringify(presenceSeen),
 );
 
-// History — the requirement, not the nicety.
+// History — the requirement, not the nicety. A second account, made the way the first
+// one was, so that this is a different person and not the same tab twice.
+new Accounts(db).login('Somebody', 'peasant');
+const second = await tryLogin('Somebody', 'peasant');
+check('a second player logs in the same way', second.ok === true, String(second.reason));
+
 const latecomer = await openBrowser(`ws://127.0.0.1:${web.port()}/`);
-latecomer.say({ kind: 'hello', nick: 'Somebody', channel: RANKED });
+latecomer.say({ kind: 'hello', token: second.token!, channel: RANKED });
 check('somebody arriving later is given the history', await until(() => latecomer.of('history').length > 0));
 const history = latecomer.of('history')[0]?.['messages'] as ChatMessage[] | undefined;
 check(
@@ -166,6 +226,32 @@ check(
   'another channel is a different conversation',
   await until(() => latecomer.of('history').length === 2 && (latecomer.of('history')[1]?.['messages'] as unknown[]).length === 0),
   JSON.stringify(latecomer.of('history')[1]),
+);
+
+// Logging out takes the session with it, this tab and any other holding that token.
+await fetch(`${pageUrl}/logout`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ token: second.token }),
+});
+const returning = await openBrowser(`ws://127.0.0.1:${web.port()}/`);
+returning.say({ kind: 'hello', token: second.token!, channel: RANKED });
+check('a token that was logged out is dead', await until(() => returning.of('denied').length > 0));
+returning.close();
+
+// Guessing. Five misses from one address and the sixth is not even asked about — which
+// has to hold for the RIGHT password too, or it is a filter that stops nobody.
+let throttled = 0;
+for (let attempt = 0; attempt < 8 && !throttled; attempt += 1) {
+  const miss = await tryLogin('Senyaak', `guess-${attempt}`);
+  if (miss.status === 429) throttled = attempt + 1;
+}
+check('a run of wrong passwords starts being refused unasked', throttled > 0, `after ${throttled} tries`);
+const duringThrottle = await tryLogin('Senyaak', 'swordsman');
+check(
+  'and the real password is refused too while it lasts',
+  duringThrottle.status === 429,
+  `${duringThrottle.status} ${duringThrottle.reason}`,
 );
 
 // The token.

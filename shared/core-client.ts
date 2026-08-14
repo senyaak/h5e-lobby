@@ -193,6 +193,19 @@ export class CoreClient {
     return reply.channels ?? [];
   }
 
+  /**
+   * A name and a password, checked against the accounts the game made.
+   *
+   * The reason comes back with the refusal because the page shows it: "no-such-account"
+   * is the one that has to read as "log in once in the game first", not as "try again".
+   */
+  async verifyAccount(name: string, password: string): Promise<{ ok: boolean; name: string; reason?: string }> {
+    const reply = await this.ask((id) => ({ kind: 'auth.verify', id, name, password }));
+    return reply.ok
+      ? { ok: true, name: reply.account?.name ?? name }
+      : { ok: false, name, reason: reply.error ?? 'refused' };
+  }
+
   async registerAgent(token: string, nick: string, room: string): Promise<void> {
     const reply = await this.ask((id) => ({ kind: 'agent.register', id, token, nick, room }));
     if (!reply.ok) throw new Error(reply.error ?? 'the core refused the agent');

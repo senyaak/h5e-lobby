@@ -19,8 +19,14 @@
 // milliseconds here, which is nothing against a login that happens once per session,
 // and enough that a stolen database is not a list of passwords.
 //
+// WHERE AN ACCOUNT CAN BE MADE: in the game, and nowhere else. `verify` below is the
+// door the browser uses, and it refuses a name it has never seen instead of creating it.
+// One way in means one place where a password is first set, and it is the one the player
+// has to reach anyway — a registration form on the web would be a second door to the same
+// accounts, needing everything a public sign-up needs, for nothing gained.
+//
 // Exports:
-//   Accounts   login(name, password) -> the verdict; count; forget(name)
+//   Accounts   login(name, password) -> the verdict; verify(...) for the web; forget(name)
 
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
@@ -36,6 +42,16 @@ const HASH_BYTES = 64;
  * to seed anything a new player needs.
  */
 export type LoginVerdict = 'created' | 'welcome-back' | 'wrong-password';
+
+/**
+ * The same question asked from outside the game, where nothing may be created.
+ *
+ * `no-such-account` is a different answer from `wrong-password` on purpose: the page has
+ * to be able to say "log in once in the game first", which is advice and not a leak —
+ * the game itself already tells anyone who asks whether a name is taken, by creating it
+ * or refusing it.
+ */
+export type VerifyVerdict = 'ok' | 'wrong-password' | 'no-such-account';
 
 function hashOf(password: string, salt: Buffer): Buffer {
   return scryptSync(password, salt, HASH_BYTES);
@@ -79,6 +95,29 @@ export class Accounts {
     if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) return 'wrong-password';
     this.db.prepare('UPDATE users SET seen_at = ?, logins = logins + 1 WHERE name = ?').run(now, name);
     return 'welcome-back';
+  }
+
+  /**
+   * Check a name and a password, and create nothing.
+   *
+   * The canonical spelling comes back with the verdict: the table is NOCASE, so a player
+   * who types `senyaak` in the browser is the same account as `Senyaak` in the game and
+   * must be drawn under the one name, or the chat has two people in it.
+   */
+  verify(name: string, password: string): { verdict: VerifyVerdict; name: string } {
+    const row = this.db.prepare('SELECT name, salt, hash FROM users WHERE name = ?').get(name) as
+      | { name: string; salt: Uint8Array; hash: Uint8Array }
+      | undefined;
+    if (!row) return { verdict: 'no-such-account', name };
+    const expected = Buffer.from(row.hash);
+    const actual = hashOf(password, Buffer.from(row.salt));
+    if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
+      return { verdict: 'wrong-password', name: row.name };
+    }
+    // Seen, but not a login: `logins` counts the game's, and a browser tab left open
+    // overnight should not read as somebody who plays a great deal.
+    this.db.prepare('UPDATE users SET seen_at = ? WHERE name = ?').run(Date.now(), row.name);
+    return { verdict: 'ok', name: row.name };
   }
 
   /** Whether a name exists at all — for a log line, and for tests. */

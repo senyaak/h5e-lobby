@@ -53,6 +53,10 @@ TypeScript straight off disk. Then start the game — `run-net.bat` in the game 
 variable and nothing else — and open <http://127.0.0.1:8081> beside it: the same channels,
 the same messages, and what was said while nobody was playing is still there.
 
+**The browser logs in with the game's account** — the same name and the same password.
+There is no sign-up on the web: an account is created by its first login *in the game*, so
+a password is set in one place only. A name the game has never seen is told exactly that.
+
 ## Where everything is written down
 
 - **[docs/NETWORK_STATE.md](docs/NETWORK_STATE.md)** — the state of play: the ports,

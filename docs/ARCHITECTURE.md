@@ -158,8 +158,32 @@ same presence list, so both sides see each other.
 game must still be there when someone opens the browser an hour later. That is the first
 piece of state the core keeps that the game never asked for.
 
+### Who you are in the browser (14.08.2026, done)
+
+The same account as in the game, and **there is no sign-up here**. An account is created by
+its first login *in the game* and nowhere else, so a password is set in exactly one place;
+the page checks nothing itself, it posts the name and password to the web service, which
+asks the core, which asks `Accounts.verify` — the one entry that refuses an unknown name
+instead of creating it. A second door to the same accounts would need everything a public
+sign-up needs and would buy nothing.
+
+Consequences worth knowing:
+
+- **a refusal says which**, `no-such-account` or `wrong-password`, because the page has to
+  be able to say "log in once in the game first". That is advice, not a leak: the game
+  already tells anyone who asks whether a name exists, by creating it or refusing it;
+- **the name shown is the account's own spelling** — the table is `NOCASE`, so `senyaak`
+  in the browser and `Senyaak` in the game must not become two people in one chat;
+- **sessions live in the web service's memory**, a random token per login held by the page
+  in `localStorage`. Restarting the web service asks everybody for a password again, which
+  is the honest price of not having a session table yet;
+- **five wrong passwords from one address and it stops asking the core**, for a minute,
+  the right password included — a throttle that lets the real one through is not one;
+- the browser is a chat participant, not a player: it is in the web presence list and in
+  the channel, but not in the game's own player panel, which only `GROUP_INFO` fills.
+
 The launcher we need anyway — it issues the agent's secret and starts the game — is the
-same page in an Electron shell.
+same page in an Electron shell, and it logs in the same way.
 
 ## Deployment
 

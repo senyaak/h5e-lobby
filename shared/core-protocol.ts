@@ -60,6 +60,17 @@ export type ToCore =
   /** The whole of one service's view, sent whenever it changes. Simpler than deltas. */
   | { kind: 'presence.replace'; origin: Origin; entries: PresenceEntry[] }
   | { kind: 'channels'; id: number }
+  /**
+   * "Is this the password for this account?" — the browser's login, asked for it by the
+   * web service. It never creates: an account is made by the first login in the game and
+   * nowhere else (services/core/rules/accounts.ts).
+   *
+   * The password crosses loopback in this frame, in the clear, the same way it crosses
+   * the web service's own HTTP. Nothing logs it — the core logs a message's kind and the
+   * verdict, never its body — and the day this hop is not loopback is the day it needs
+   * more than that.
+   */
+  | { kind: 'auth.verify'; id: number; name: string; password: string }
   | { kind: 'agent.register'; id: number; token: string; nick: string; room: string }
   | { kind: 'agent.identify'; id: number; token: string };
 
@@ -75,6 +86,8 @@ export type FromCore =
       messages?: ChatMessage[];
       channels?: ChannelInfo[];
       agent?: { nick: string; room: string };
+      /** On a successful `auth.verify`: the account's own spelling of its name. */
+      account?: { name: string };
     };
 
 export function encode(message: ToCore | FromCore): string {

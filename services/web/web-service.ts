@@ -1,8 +1,15 @@
-// The browser lobby: one page, and the WebSocket behind it.
+// The browser lobby: one page, the WebSocket behind it, and the login in front of it.
 //
 // The point is not a second client — a browser cannot play Heroes. The point is that
 // finding an opponent should not require the game to be running. So this is a participant
 // in the same chat and the same presence list the game sees, and nothing more than that.
+//
+// WHO YOU ARE HERE IS WHO YOU ARE IN THE GAME. The same name and the same password, and
+// this service checks neither itself: it asks the core, which asks the accounts the game
+// made. There is no sign-up here on purpose — an account is created by its first login in
+// the game and nowhere else, so there is exactly one place a password is ever set. A page
+// that could create accounts would be a second door to the same players, needing
+// everything a public sign-up needs, for nothing gained.
 //
 // It never touches the database. Everything it shows comes from the core, and everything
 // it is told goes to the core; if the core is away, the page says so and shows nothing
@@ -15,7 +22,8 @@
 // Exports:
 //   startWeb(options)   the http server, listening, with close()
 
-import { createServer, type Server } from 'node:http';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,13 +33,15 @@ import { serveWebSocket, type WebSocketPeer } from '../../shared/websocket.ts';
 
 /** What a page sends us. */
 type FromBrowser =
-  | { kind: 'hello'; nick: string; channel?: string }
+  | { kind: 'hello'; token: string; channel?: string }
   | { kind: 'channel'; channel: string }
   | { kind: 'say'; text: string };
 
 /** And what it is sent. */
 type ToBrowser =
   | { kind: 'welcome'; nick: string; channels: ChannelInfo[]; core: boolean }
+  /** No session, or one that has run out: the page shows the login and asks again. */
+  | { kind: 'denied' }
   | { kind: 'history'; channel: string; messages: ChatMessage[] }
   | { kind: 'message'; message: ChatMessage }
   | { kind: 'presence'; entries: PresenceEntry[] }
@@ -39,6 +49,7 @@ type ToBrowser =
 
 interface Browser {
   peer: WebSocketPeer;
+  /** Empty until a token has been shown. Nothing is sent or accepted before that. */
   nick: string;
   channel: string;
 }
@@ -58,20 +69,37 @@ export interface RunningWeb {
   close(): Promise<void>;
 }
 
-/** Beside this file, not somewhere under the repository root: moving the folder should
- *  not be able to turn the page into a 500, which is exactly what it did once. */
 const PAGE = join(dirname(fileURLToPath(import.meta.url)), 'index.html');
+
+/**
+ * How long a browser stays logged in without being used.
+ *
+ * Sessions live in this process and nowhere else, so restarting the web service logs
+ * everybody out. That is the honest trade for now: the alternative is another table and
+ * another thing to expire, and being asked for a password again after a deploy is not an
+ * injury.
+ */
+const SESSION_IDLE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** A wrong password costs the next one: five misses from an address and it waits. */
+const MAX_FAILURES = 5;
+const FAILURE_WINDOW_MS = 60_000;
+
+/** Nothing a login needs is bigger than this, and a body that is, is not a login. */
+const MAX_BODY = 4096;
 
 export function startWeb(options: WebOptions): Promise<RunningWeb> {
   const log = options.log ?? ((): void => {});
   const browsers = new Set<Browser>();
+  const sessions = new Map<string, { name: string; usedAt: number }>();
+  const failures = new Map<string, number[]>();
   let channels: ChannelInfo[] = [];
 
   const core = new CoreClient({ url: options.coreUrl, token: options.coreToken, service: 'web', log });
 
   const send = (browser: Browser, message: ToBrowser): void => browser.peer.sendText(JSON.stringify(message));
   const tellEveryone = (message: ToBrowser, where?: string): void => {
-    for (const browser of browsers) if (!where || browser.channel === where) send(browser, message);
+    for (const browser of browsers) if (browser.nick && (!where || browser.channel === where)) send(browser, message);
   };
 
   /** Who is in the browser right now, as the core wants to hear it. */
@@ -80,6 +108,24 @@ export function startWeb(options: WebOptions): Promise<RunningWeb> {
       .filter((browser) => browser.nick)
       .map((browser) => ({ nick: browser.nick, channel: browser.channel, origin: 'web' as const }));
     core.replacePresence('web', entries);
+  };
+
+  /** A session, if the token names a live one; using it keeps it alive. */
+  const sessionOf = (token: string): string => {
+    const session = sessions.get(token);
+    if (!session) return '';
+    if (Date.now() - session.usedAt > SESSION_IDLE_MS) {
+      sessions.delete(token);
+      return '';
+    }
+    session.usedAt = Date.now();
+    return session.name;
+  };
+
+  const tooManyFailures = (from: string): boolean => {
+    const recent = (failures.get(from) ?? []).filter((at) => Date.now() - at < FAILURE_WINDOW_MS);
+    failures.set(from, recent);
+    return recent.length >= MAX_FAILURES;
   };
 
   core.onConnected = (list) => {
@@ -91,11 +137,93 @@ export function startWeb(options: WebOptions): Promise<RunningWeb> {
   core.onPresence = (entries) => tellEveryone({ kind: 'presence', entries });
   core.start();
 
+  function readBody(request: IncomingMessage): Promise<string> {
+    return new Promise((resolve, reject) => {
+      let body = '';
+      request.on('data', (chunk: Buffer) => {
+        body += chunk.toString('utf8');
+        if (body.length > MAX_BODY) {
+          request.destroy();
+          reject(new Error('body too large'));
+        }
+      });
+      request.on('end', () => resolve(body));
+      request.on('error', reject);
+    });
+  }
+
+  function answer(response: ServerResponse, status: number, value: unknown): void {
+    const body = JSON.stringify(value);
+    response.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) });
+    response.end(body);
+  }
+
+  /**
+   * The login.
+   *
+   * The password is in the request body and goes straight into the core's question; it is
+   * never written to the log, never kept, and never put in a URL — which is the whole
+   * reason this is a POST with a body rather than the query string it would be easier to
+   * test with.
+   */
+  async function login(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    const from = request.socket.remoteAddress ?? '?';
+    if (tooManyFailures(from)) {
+      log(`web  ${from} is guessing — refused without asking the core`);
+      answer(response, 429, { ok: false, reason: 'too-many-tries' });
+      return;
+    }
+    let asked: { name?: unknown; password?: unknown };
+    try {
+      asked = JSON.parse(await readBody(request)) as { name?: unknown; password?: unknown };
+    } catch {
+      answer(response, 400, { ok: false, reason: 'bad-request' });
+      return;
+    }
+    const name = String(asked.name ?? '').trim();
+    const password = String(asked.password ?? '');
+    if (!name) {
+      answer(response, 400, { ok: false, reason: 'bad-request' });
+      return;
+    }
+    if (!core.connected) {
+      answer(response, 503, { ok: false, reason: 'core-away' });
+      return;
+    }
+
+    const verdict = await core.verifyAccount(name, password);
+    if (!verdict.ok) {
+      failures.set(from, [...(failures.get(from) ?? []), Date.now()]);
+      log(`web  ${name} was refused: ${verdict.reason}`);
+      answer(response, 401, { ok: false, reason: verdict.reason });
+      return;
+    }
+    const token = randomBytes(24).toString('base64url');
+    sessions.set(token, { name: verdict.name, usedAt: Date.now() });
+    log(`web  ${verdict.name} logged in`);
+    answer(response, 200, { ok: true, token, name: verdict.name });
+  }
+
   const server = createServer((request, response) => {
+    if (request.method === 'POST' && request.url === '/login') {
+      void login(request, response).catch((error: Error) => {
+        log(`web  login failed to answer: ${error.message}`);
+        answer(response, 500, { ok: false, reason: 'server' });
+      });
+      return;
+    }
+    if (request.method === 'POST' && request.url === '/logout') {
+      void readBody(request)
+        .then((body) => {
+          const token = String((JSON.parse(body || '{}') as { token?: unknown }).token ?? '');
+          sessions.delete(token);
+          answer(response, 200, { ok: true });
+        })
+        .catch(() => answer(response, 400, { ok: false }));
+      return;
+    }
     if (request.url === '/health') {
-      const body = JSON.stringify({ ok: true, browsers: browsers.size, core: core.connected });
-      response.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) });
-      response.end(body);
+      answer(response, 200, { ok: true, browsers: browsers.size, sessions: sessions.size, core: core.connected });
       return;
     }
     if (request.url === '/' || request.url?.startsWith('/?')) {
@@ -136,19 +264,29 @@ export function startWeb(options: WebOptions): Promise<RunningWeb> {
       } catch {
         return;
       }
-      switch (message.kind) {
-        case 'hello': {
-          // A name is whatever the person typed. There is no account behind it yet: the
-          // launcher will bring one (docs/ARCHITECTURE.md), and until it does, pretending
-          // otherwise would be a login screen that checks nothing.
-          browser.nick = String(message.nick).slice(0, 24).replace(/[^\S ]/g, '') || 'somebody';
-          if (message.channel) browser.channel = message.channel;
-          log(`web  ${browser.nick} is watching ${browser.channel}`);
-          send(browser, { kind: 'welcome', nick: browser.nick, channels, core: core.connected });
-          openHistory(browser.channel);
-          pushPresence();
+      if (message.kind === 'hello') {
+        // A name is not something the page gets to choose: it is whichever account the
+        // token was issued for, spelled the way the account spells it.
+        const nick = sessionOf(String(message.token ?? ''));
+        if (!nick) {
+          send(browser, { kind: 'denied' });
           return;
         }
+        browser.nick = nick;
+        if (message.channel) browser.channel = message.channel;
+        log(`web  ${browser.nick} is watching ${browser.channel}`);
+        send(browser, { kind: 'welcome', nick: browser.nick, channels, core: core.connected });
+        openHistory(browser.channel);
+        pushPresence();
+        return;
+      }
+      // Everything else needs a session. A socket that never showed one is a socket that
+      // can watch nothing and say nothing.
+      if (!browser.nick) {
+        send(browser, { kind: 'denied' });
+        return;
+      }
+      switch (message.kind) {
         case 'channel': {
           browser.channel = message.channel;
           openHistory(browser.channel);
@@ -157,7 +295,7 @@ export function startWeb(options: WebOptions): Promise<RunningWeb> {
         }
         case 'say': {
           const text = String(message.text).slice(0, 400).trim();
-          if (!text || !browser.nick) return;
+          if (!text) return;
           core.post({ channel: browser.channel, nick: browser.nick, text, origin: 'web' });
           return;
         }

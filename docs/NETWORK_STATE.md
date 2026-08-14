@@ -1182,50 +1182,106 @@ change, which Сеня chose over a website or a new screen. Removing the CD-key
 still open: the key sits in the client's `ubi_cdkey` setting, used by the screens at
 0x87B790, 0x87C840, 0x87CF50, 0x87D2B0.
 
-## Playing over the internet, which is the next thing entirely
+## Playing over the internet
 
-14.08.2026, written as a starting point rather than as work done: **everything measured so
-far happened on one machine, over `127.0.0.1`.** Two copies of the game, one server, no
-router between them. The question that follows — can two people on different internet
-connections play through this server without a VPN — has not been touched, and this
-section only collects what is already known so that it does not have to be found again.
+**The gameplay is peer to peer and this server never carries it.** So "playing over the
+internet" is not a lobby feature at all — it is a question about two NATs, and the plan
+Сеня settled on is a **relay**: the game's own packets tunnelled to our server rather than
+sent peer to peer, because the traffic turns out to be too small for the cost to matter
+and a relay is the one path that works behind CGNAT. Hole punching is an optimisation to
+put on top later, not the thing to build first.
 
-**The gameplay is peer to peer and this server never carries it.** The lobby's whole part
-ends when it says the game has started; from there the two clients talk to each other
-directly. So "playing over the internet" is not a lobby feature at all — it is a question
-about two NATs.
+Everything below was measured on 14.08.2026, on one machine, with Wireshark's `tshark` on
+the Npcap loopback adapter (`\Device\NPF_Loopback`, capture works unelevated). Note that
+traffic to the machine's own LAN address goes through the loopback path too, which is how
+a "loopback" capture caught peers dialling `192.168.178.27`.
 
-What the server already knows about where a player is:
+### What the peers actually do — measured
 
-- **his LAN address**, which he states himself in `LOBBYSERVERLOGIN` (address and netmask,
-  e.g. `192.168.178.27/255.255.255.0`) and which is copied into his member record;
-- **how he looks from outside**, because our own NAT service (UDP 40010) is an address
-  mirror: it answers the client with the address the datagram came from. Today that is
-  `127.0.0.1` for everybody, but on a real network it would be each player's public
-  address, and it is already computed and already sent — see `src/net/nat-service.ts`;
-- **the port his game runs on**: 8888, a config variable (`net_game_port`, registered at
-  0x4cf2b0), visible in every log as the source of his NAT pings;
-- **what he tells the others about himself**: the player-info blob carries a sockaddr with
-  the mirrored address, and a second field with the game port and the LAN address
-  (`playerInfo` in `src/net/lobby.ts`). We forward that blob untouched.
+A duel, 186 seconds, captured whole:
 
-So the material for introducing two peers is in hand. What is NOT known, and is the actual
-work:
+- **UDP, straight to each other**, at the machine's LAN address and at each other's
+  `net_game_port`: `192.168.178.27:8888 <-> 192.168.178.27:8889`.
+- **One socket per client** — the same one that pings the NAT desk. No second connection
+  of any kind was opened.
+- A **nine-byte handshake** each way carrying a four-byte token (`07 01 00 00 00` + token
+  from the first copy, `07 00 00 00 00` + token from the second), then one **273-byte**
+  description, then a steady 18-to-28-byte packet about **every 0.9 s** with two 16-bit
+  counters that behave like a sequence and an acknowledgement. It is a reliable ordered
+  layer of the game's own over UDP — which means a relay can pass datagrams through
+  unchanged and understand none of it.
+- **16 kB of payload in 186 s**: median 56 bytes a second, peak 950, largest packet 273.
 
-1. **Which of those addresses a client actually dials** when the game starts — the string
-   in the member record, the sockaddr in the blob, or something the two exchange
-   themselves. On one machine every one of them says `127.0.0.1`, so the run that proved
-   the game works proved nothing about this.
-2. **Whether the game's own transport can traverse NAT at all.** It is UDP with the SRP
-   framing in `src/net/srp.ts`; whether it survives address translation, and whether both
-   ends punch or one expects to be dialled, is unread.
-3. **Whether a hole punch is enough, or a relay is needed.** The NAT service is already the
-   one component that sees both players' public endpoints, which is exactly what a
-   rendezvous server does — telling each peer the other's mirrored address and port at the
-   right moment is the cheap experiment. A relay (this server forwarding the game's UDP
-   between the two) is the fallback that always works and costs bandwidth.
-4. **What the game does when the dial fails** — the timeouts and the message the player
-   sees, which is what a failed attempt will look like from the outside.
+### Where the peer address comes from — measured, and not where it was expected
 
-The honest summary: the lobby half is finished and measured, and the transport half has
-not begun.
+Three launches, one question each.
+
+1. **Not the NAT mirror.** The NAT desk answered both clients with `127.0.0.1` and neither
+   ever dialled it.
+2. **Not any field the server fills in.** With `--probe-peer-address` every player was
+   announced to the others at an address of ours in the member record (`szIPAddress` /
+   `szAltIPAddress`, from `RouterSession.addressOf`) — the log confirms both substitutions
+   went out — and the clients found each other at the real LAN address and played a full
+   duel regardless. A clean negative: the member record is not read for this.
+3. **The host's own description of the game is.** Inside `room.info` — the blob we forward
+   and only stamp room ids into — each player has a record:
+
+   ```
+   02 10 "Senyaak2"                    the name
+   03 24  02 20 <16 bytes>             sockaddr: family 2, port 40010, the NAT-mirrored
+                                       address written back to front
+   04 2c  02 04 <port>  03 20 <16>     the GAME port, then the LAN address
+   05 08 <4 bytes>                     the rating
+   ```
+
+   `probeEndpoints` (`src/net/lobby.ts`) searches for `04 2c 02 04 pp pp 03 20` and writes
+   four bytes of address in place — the document keeps its length and every other byte the
+   host wrote. Both clients then dialled us, in both directions, and **not one packet went
+   to the real address**.
+
+**They meet at `JOIN_ROOM`, not at the start of the game.** The dialling began within a
+second of the guest entering the room; that run never reached `START_GAME` at all. A relay
+has to stand up when the room fills.
+
+**Patch on the way out, never in what we store.** `infoOut` applies it in `roomEntry` and
+`gameStartedEntry` only. The host resends his settings three to five times a second and
+the join button depends on us telling the difference between a real change and a repeat —
+rewriting the stored copy would break that, as it did once before.
+
+### A relay, proven in the small
+
+`tools/peer-probe.ts` stands in for a player: the socket at `pool[i]:PORTS[i]` **is** that
+player as far as everyone else is concerned — it receives what is sent to him, and it is
+what his own packets appear to come from. A datagram arriving on P's socket from Q's port
+is Q talking to P, and goes out again through Q's socket. Two pretend clients verify the
+directions before the game is ever started.
+
+A full duel played through it: **1114 packets, 38 kB both ways over 455 seconds, peak 1170
+bytes in one second, nothing direct between the clients.** For eight players and a real
+server that is still small enough not to think about.
+
+### Still open
+
+1. **What a generated map costs, and by what road.** A game on an RMG map was played and
+   the map appeared in both installs — 187411 bytes in one, 187366 in the other, different
+   hashes, 19 seconds apart. Those bytes did NOT cross the relay (peak 3 kB in any
+   five-second window) and did not cross the lobby (34 kB in the whole two minutes). Either
+   both clients generated it from a shared seed, which the differing sizes suggest, or it
+   travelled by a road we were not watching — that run had no capture running. **Repeat it
+   with `tshark` on before believing either.** Until then nothing is known about the peak
+   this feature has to survive, which is the whole reason throttling is on the list.
+2. **An adventure map, and more than two players.** Everything above is a duel between two
+   clients. A third install is ready at `C:\Projects\homm5-game-net3` (port 8890,
+   `run-net3.bat`) and will say whether the peers form a mesh or a star, and whether
+   `NetDriver` keys players by address — if it does, each peer needs a loopback address of
+   its own, which the pool already provides.
+3. **Whether the game's transport survives real address translation.** It is UDP with its
+   own sequencing; nothing here says how it behaves when the port it is answered from is
+   not the port it dialled.
+4. **What the game does when the dial fails.** Observed only as silent one-a-second
+   retries for as long as the probe refused to answer; the timeout and the message the
+   player sees were never reached.
+5. **The port, when the relay is real.** The address is rewritten and the port is left
+   alone, which works because each copy here plays on a port of its own. Two players
+   behind one relay both on 8888 need either a distinct address each or the port rewritten
+   too — and the port is two bytes in the same record, under tag 2.

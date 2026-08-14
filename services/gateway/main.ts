@@ -48,6 +48,14 @@ const httpPort = Number(arg('http', String(settings.httpPort)));
 /**
  * What the ini advertises. `launcher` is only read for Router and CDKeyServer
  * (`%sLauncherPort%i`); what it is for is not known yet.
+ *
+ * A launcher port equal to its desk's own is deliberate and is the first step of
+ * SLICE §2.3: the wait module and the desk that hands it out run byte-identical
+ * code — the handler takes its behaviour from the role, and the role comes from the
+ * desk, never from the port — so one number serves both and one socket is bound.
+ * The client is told the launcher's address twice over (the ini, the wait-module
+ * reply, `PROXY_HANDLER`, the join hand-off) and nothing in it or in us compares
+ * the two.
  */
 interface Service {
   prefix: string;
@@ -57,7 +65,7 @@ interface Service {
 }
 
 const SERVICES: Service[] = [
-  { prefix: 'Router', port: 40000, launcher: 40001, kind: 'tcp+udp' },
+  { prefix: 'Router', port: 40000, launcher: 40000, kind: 'tcp+udp' },
   { prefix: 'NATServer', port: 40010, launcher: null, kind: 'tcp+udp' },
   { prefix: 'CDKeyServer', port: 40020, launcher: 40021, kind: 'tcp+udp' },
   { prefix: 'IRC', port: 6667, launcher: null, kind: 'tcp' },
@@ -65,7 +73,7 @@ const SERVICES: Service[] = [
 
 // Not in the ini: the client is told where this one lives when it asks for a
 // module (PROXY_HANDLER). It is where persistent data and the ladder sit.
-const PROXY: Service = { prefix: 'Proxy', port: 40030, launcher: 40031, kind: 'tcp' };
+const PROXY: Service = { prefix: 'Proxy', port: 40030, launcher: 40030, kind: 'tcp' };
 
 // Also not in the ini: where the lobby itself lives, handed over when the client
 // asks to join a lobby server.
@@ -299,7 +307,10 @@ async function replayHistory(channel: string, socket: Socket): Promise<void> {
 }
 
 for (const service of [...SERVICES, PROXY, LOBBY]) {
-  for (const port of [service.port, service.launcher].filter((p): p is number => p !== null)) {
+  // A `Set`, because a launcher that shares its desk's number is one socket and one
+  // label, not two of each. When they differ this is still two sockets, as it was.
+  const ports = [...new Set([service.port, service.launcher].filter((p): p is number => p !== null))];
+  for (const port of ports) {
     const label = port === service.port ? service.prefix : `${service.prefix}Launcher`;
 
     createTcpServer((socket: Socket) => {

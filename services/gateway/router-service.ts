@@ -568,7 +568,9 @@ export class RouterSession {
       his.send?.(bytes);
       return { replies: [], where: `on ${this.username}'s router connection` };
     }
-    const onRouter = this.desks.get('RouterLauncher');
+    // 'Router' and not 'RouterLauncher': the wait module now shares the router's own
+    // port, so there is one desk of that name (SLICE §2.3, services/gateway/main.ts).
+    const onRouter = this.desks.get('Router');
     if (!onRouter) return { replies: [bytes], where: 'here, with no router connection open' };
     onRouter(bytes);
     return { replies: [], where: 'on the router connection' };

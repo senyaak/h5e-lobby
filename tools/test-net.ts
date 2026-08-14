@@ -1254,8 +1254,10 @@ console.log('\nThe profile, from the read the client really asked for');
   // never queued at all — measured by the probe: the ladder's two copies produced ONE
   // queued message, and the profile answer, sent only on the proxy's wait module, was
   // never seen. So when a router connection is open, that is where the answer goes.
+  // The desk is named 'Router' and not 'RouterLauncher' since the wait module moved onto
+  // the router's own port (SLICE §2.3): one socket, so one name.
   const onRouter: Buffer[] = [];
-  proxy.desks.set('RouterLauncher', (bytes) => onRouter.push(bytes));
+  proxy.desks.set('Router', (bytes) => onRouter.push(bytes));
   const routed = session.receive(
     build({
       property: Property.GS,
@@ -1274,7 +1276,7 @@ console.log('\nThe profile, from the read the client really asked for');
     parse(onRouter[0]!)?.type === MessageType.PROXY_HANDLER && (parse(onRouter[0]!)?.body?.[1] as GSValue[])?.[0] === '1025',
     JSON.stringify(parse(onRouter[0]!)?.body),
   );
-  proxy.desks.delete('RouterLauncher');
+  proxy.desks.delete('Router');
 
   // A write, then a read: we are a store, so what comes back is what went in — byte
   // for byte, with no opinion about what a profile means.

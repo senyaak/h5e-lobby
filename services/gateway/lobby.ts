@@ -22,6 +22,7 @@
 import type { Lobby } from '../../shared/channels.ts';
 import { type GSValue } from './gs-data.ts';
 import { looksLikeFields, readFields, writeFields, type Field } from './structure.ts';
+import { NAT_PORT } from './nat-service.ts';
 
 /**
  * LOBBY_MSG subtypes — the whole table, not only what we answer today.
@@ -666,7 +667,7 @@ export function playerInfo(name: string, rating: number, address = '127.0.0.1', 
 
   const sockaddr = Buffer.alloc(16);
   sockaddr.writeUInt16LE(2, 0); // AF_INET
-  sockaddr.writeUInt16BE(40010, 2); // the NAT mirror's own port, as he reports it
+  sockaddr.writeUInt16BE(NAT_PORT, 2); // the NAT mirror's own port, as he reports it
   mirrored.copy(sockaddr, 4);
 
   const lan = Buffer.alloc(16);

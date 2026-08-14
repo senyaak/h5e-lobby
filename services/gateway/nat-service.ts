@@ -19,6 +19,14 @@ import { MessageType, build, parse, reply } from './gs-message.ts';
 import { Flags, HEADER_SIZE, buildSegment, parseSegment, flagNames, type SrpConnection } from './srp.ts';
 
 /**
+ * Where the mirror answers, and — because the client writes it into the room description
+ * as the address others are told to dial him at — a number two files have to agree on
+ * (`services/gateway/lobby.ts`). One constant, so a move stays a move rather than a
+ * mismatch nobody sees until a game fails to connect.
+ */
+export const NAT_PORT = 40010;
+
+/**
  * The answer to a NAT ask, in the ONE shape that has ever been accepted.
  *
  * Four runs, and only the third was let through — its own log said "address

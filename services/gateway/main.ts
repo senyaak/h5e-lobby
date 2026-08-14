@@ -22,12 +22,12 @@ import { config } from '../../shared/config.ts';
 import { hexDump, openLog } from '../../shared/log.ts';
 import { CoreClient } from '../../shared/core-client.ts';
 import type { PresenceEntry, RoomInfo } from '../../shared/core-protocol.ts';
-import { NatService } from './nat-service.ts';
+import { NAT_PORT, NatService } from './nat-service.ts';
 import { GUEST, GUEST_LOBBY, RouterService } from './router-service.ts';
 import { CdKeyService } from './cdkey-service.ts';
 import { IrcConnection, IrcService, chatLine, frame, fromGameText, toGameText } from './irc.ts';
 import { probePeerAddress, probeRoomFields, roomEndpoints } from './lobby.ts';
-import { classifyDesk, type Desk } from './desk.ts';
+import { classifyDatagram, classifyDesk, type Desk } from './desk.ts';
 import { DEFAULT_LOBBIES, lobbyChannel } from '../../shared/channels.ts';
 
 const settings = config();
@@ -84,8 +84,8 @@ const DESKS = 40000;
 
 const SERVICES: Service[] = [
   { prefix: 'Router', port: DESKS, launcher: DESKS, listens: ['tcp'] },
-  { prefix: 'NATServer', port: 40010, launcher: null, listens: ['udp'] },
-  { prefix: 'CDKeyServer', port: 40020, launcher: 40020, listens: ['udp'] },
+  { prefix: 'NATServer', port: NAT_PORT, launcher: null, listens: ['udp'] },
+  { prefix: 'CDKeyServer', port: NAT_PORT, launcher: NAT_PORT, listens: ['udp'] },
   { prefix: 'IRC', port: DESKS, launcher: null, listens: ['tcp'] },
 ];
 
@@ -464,32 +464,36 @@ function attach(label: Desk, socket: Socket, id: number, port: number): (data: B
   }
 }
 
-/** One UDP desk: the NAT mirror or the CD-key window, each keeping its own state. */
-function openUdpDesk(label: string, port: number): void {
-  // Two of the UDP services answer: the NAT mirror and the CD-key desk. Each
-  // keeps its own state, so the instance is made once per port, not per
-  // datagram.
-  const nat = label === 'NATServer' ? new NatService(port) : null;
-  const service = nat
-    ? { tag: 'NAT', handle: (data: Buffer, from: { address: string; port: number }) => nat.handle(data, from) }
-    : label === 'CDKeyServer'
-      ? { tag: 'KEY', handle: (data: Buffer, from: { address: string; port: number }) => cdkey.handle(data, from) }
-      : null;
+/**
+ * One socket, both UDP windows.
+ *
+ * The same trick as the TCP desks and a smaller one: a datagram carries no connection to
+ * remember, so every one of them is classified on its own (`services/gateway/desk.ts`).
+ * Each window keeps its own state, so the two services are made once here rather than
+ * per datagram.
+ */
+function openUdpWindow(port: number): void {
+  const nat = new NatService(port);
+  const handlers = {
+    NAT: { tag: 'NAT', handle: (data: Buffer, from: { address: string; port: number }) => nat.handle(data, from) },
+    CDKey: { tag: 'KEY', handle: (data: Buffer, from: { address: string; port: number }) => cdkey.handle(data, from) },
+  };
   const udp = createSocket('udp4');
   udp.on('message', (data: Buffer, from) => {
-    log(`UDP  ${label}:${port} <- ${from.address}:${from.port}, ${data.length} bytes\n${hexDump(data)}`);
-    if (!service) return;
+    const { window, note } = classifyDatagram(data);
+    log(`UDP  ${window}:${port} <- ${from.address}:${from.port}, ${data.length} bytes — ${note}\n${hexDump(data)}`);
+    const service = handlers[window];
     let result;
     try {
       result = service.handle(data, from);
     } catch (err) {
-      log(`UDP  ${label}:${port} !! ${(err as Error).message}`);
+      log(`UDP  ${window}:${port} !! ${(err as Error).message}`);
       return;
     }
     log(`${service.tag}  ${result.note}`);
     for (const reply of result.replies) {
       udp.send(reply, from.port, from.address);
-      log(`UDP  ${label}:${port} -> ${from.address}:${from.port}, ${reply.length} bytes\n${hexDump(reply)}`);
+      log(`UDP  ${window}:${port} -> ${from.address}:${from.port}, ${reply.length} bytes\n${hexDump(reply)}`);
     }
     // Some answers go out a second time a moment later — see `againAfterMs`
     // in services/gateway/nat-service.ts for the race that makes that necessary.
@@ -497,12 +501,12 @@ function openUdpDesk(label: string, port: number): void {
     if (again) {
       setTimeout(() => {
         for (const reply of result.replies) udp.send(reply, from.port, from.address);
-        log(`UDP  ${label}:${port} -> ${from.address}:${from.port}, the same ${result.replies.length} answer(s) again`);
+        log(`UDP  ${window}:${port} -> ${from.address}:${from.port}, the same ${result.replies.length} answer(s) again`);
       }, again);
     }
   });
-  udp.on('error', (err: Error) => log(`UDP  ${label}:${port} bind failed: ${err.message}`));
-  udp.bind(port, bind, () => log(`udp  ${label} on ${bind}:${port}`));
+  udp.on('error', (err: Error) => log(`UDP  windows:${port} bind failed: ${err.message}`));
+  udp.bind(port, bind, () => log(`udp  windows on ${bind}:${port}`));
 }
 
 // A desk opens the sockets it was measured using and no others (SLICE §2.3, step 2).
@@ -515,15 +519,15 @@ function openUdpDesk(label: string, port: number): void {
 // desks name it. `Set` on the numbers, not on the desks: if a desk is ever moved back to
 // one of its own, this loop opens a second listener for it and nothing else changes.
 const tcpPorts = new Set<number>();
+const udpPorts = new Set<number>();
 for (const service of [...SERVICES, PROXY, LOBBY]) {
-  const ports = [...new Set([service.port, service.launcher].filter((p): p is number => p !== null))];
-  for (const port of ports) {
+  for (const port of [service.port, service.launcher].filter((p): p is number => p !== null)) {
     if (service.listens.includes('tcp')) tcpPorts.add(port);
-    if (service.listens.includes('udp'))
-      openUdpDesk(port === service.port ? service.prefix : `${service.prefix}Launcher`, port);
+    if (service.listens.includes('udp')) udpPorts.add(port);
   }
 }
 for (const port of tcpPorts) openDeskListener(port);
+for (const port of udpPorts) openUdpWindow(port);
 
 log(`chat goes through the core at ${settings.coreUrl} — game clients here still hear each other if it is away`);
 log(`logging to ${log.session} — and to ${log.latest}, which is always this run`);

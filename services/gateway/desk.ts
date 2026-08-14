@@ -93,3 +93,29 @@ export function classifyDesk(bytes: Buffer): DeskVerdict {
   // 3. Everything else.
   return { desk: 'IRC', wait: false, note: 'not a GET and not a GS header — chat' };
 }
+
+/** The two UDP desks. A datagram is one or the other; there is no waiting for more. */
+export type Window = 'CDKey' | 'NAT';
+
+/** What the CD-key framing costs before its body: a type byte and a big-endian u32. */
+const CDKEY_HEADER = 5;
+
+/**
+ * Which window a datagram is for.
+ *
+ * The CD-key framing carries its body's length, so it can be recognised by arithmetic:
+ * five bytes of header plus the length it declares is the datagram that arrived. The
+ * mirror is everything else, and it has to be tried LAST — it answers any datagram under
+ * twelve bytes with the same bytes back, as a keep-alive, so given first refusal it would
+ * swallow anything short that was meant for the other window.
+ *
+ * The capture also shows the CD-key type byte as `d3`, but the byte is not what decides
+ * here: `cdkey-service.ts` reads the request out of the body and has never looked at it,
+ * and our own recorded requests carry a different one. The length is the test that holds.
+ */
+export function classifyDatagram(packet: Buffer): { window: Window; note: string } {
+  if (packet.length > CDKEY_HEADER && packet.readUInt32BE(1) + CDKEY_HEADER === packet.length) {
+    return { window: 'CDKey', note: `a CD-key message of ${packet.length - CDKEY_HEADER} bytes, type ${packet[0]}` };
+  }
+  return { window: 'NAT', note: packet.length < 12 ? 'short — the mirror keep-alive' : 'the NAT mirror' };
+}

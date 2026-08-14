@@ -24,7 +24,7 @@ import { Accounts } from '../services/core/rules/accounts.ts';
 import { Friends } from '../services/core/rules/friends.ts';
 import { openDatabase } from '../services/core/rules/database.ts';
 import { IrcService, chatLine, frame, unframe } from '../services/gateway/irc.ts';
-import { classifyDesk } from '../services/gateway/desk.ts';
+import { classifyDatagram, classifyDesk } from '../services/gateway/desk.ts';
 import { lobbyChannel } from '../shared/channels.ts';
 import { readFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -296,6 +296,30 @@ console.log('\nWhich desk a connection is, from what it says first');
   const alive = classifyDesk(Buffer.from('000006003a41', 'hex'));
   check('a STILLALIVE opens no desk and is refused, not guessed at', alive.desk === null && !alive.wait, alive.note);
   check('and the refusal names the type, for whoever reads the log', alive.note.includes('STILLALIVE'), alive.note);
+}
+
+console.log('\nWhich window a datagram is for');
+{
+  // Both UDP windows are one socket too (SLICE §2.3, step 4), and a datagram has no
+  // connection to remember it by, so each one is sorted on its own.
+  const cipher = new Blowfish(Buffer.from('SKJDHF$0maoijfn4i8$aJdnv1jaldifar93-AS_dfo;hjhC4jhflasnF3fnd', 'utf8'));
+  const cdkey = (): Buffer => {
+    const body = cipher.encrypt(encodeBody(['17', String(CdKeyRequest.CHALLENGE), '0', []]));
+    const out = Buffer.alloc(5 + body.length);
+    out[0] = 0xd3;
+    out.writeUInt32BE(body.length, 1);
+    body.copy(out, 5);
+    return out;
+  };
+
+  check('a CD-key request adds up, so it is the CD-key window', classifyDatagram(cdkey()).window === 'CDKey', classifyDatagram(cdkey()).note);
+  check('the SYN the client really sent is the mirror', classifyDatagram(CLIENT_SYN).window === 'NAT', classifyDatagram(CLIENT_SYN).note);
+  check('and so is the FIN', classifyDatagram(CLIENT_FIN).window === 'NAT');
+  // The trap: the mirror echoes anything under twelve bytes, so it must be tried last or
+  // it swallows whatever short thing was meant for the other window.
+  const short = Buffer.from('d300000003010203', 'hex'); // eight bytes: header, a body of three
+  check('a short datagram that adds up is still the CD-key window', classifyDatagram(short).window === 'CDKey', classifyDatagram(short).note);
+  check('a short one that does not is the mirror keep-alive', classifyDatagram(Buffer.from('0102030405060708', 'hex')).window === 'NAT');
 }
 
 console.log('\nRouter, driven by the recorded packet');

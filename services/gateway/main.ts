@@ -72,15 +72,19 @@ interface Service {
 }
 
 /**
- * The one number every TCP desk is at. It was four (`40000`, `6667`, `40030`, `40040`)
- * and they are one, because the desk a connection wants is in the first thing it says
- * and not in the port it said it on (`services/gateway/desk.ts`). The number is the
- * router's own, which is what the ini named first anyway.
+ * The one number every TCP desk is at. It was five — `8080` for the ini and then `40000`,
+ * `6667`, `40030`, `40040` — and they are one, because the desk a connection wants is in
+ * the first thing it says and not in the port it said it on (`services/gateway/desk.ts`).
  *
- * It must not be one a game listens on for its peers — `8888` upward here — because the
- * agent tells a desk from a player by port and nothing else.
+ * The number is the ini's, not the router's, and that is the whole reason to prefer it:
+ * `http_proxy` is set by hand in each game copy's `run-net.bat`, while every desk address
+ * is read out of the ini we serve. Keep the hand-written one and the rest follow by
+ * themselves; keep the router's instead and three bat files have to be edited.
+ *
+ * It must not be a number a game listens on for its peers — `8888` upward here — because
+ * the agent tells a desk from a player by port and nothing else.
  */
-const DESKS = 40000;
+const DESKS = httpPort;
 
 const SERVICES: Service[] = [
   { prefix: 'Router', port: DESKS, launcher: DESKS, listens: ['tcp'] },
@@ -114,7 +118,16 @@ function serve(res: ServerResponse, body: string): void {
   res.end(body);
 }
 
-createHttpServer((req: IncomingMessage, res: ServerResponse) => {
+/**
+ * The server list, answered by Node's own HTTP parser — but on no port of its own.
+ *
+ * The last step of §2.3: a `GET ` is one of the things a desk connection can turn out to
+ * be, so the ini is served on the desks' port like everything else, and this server is
+ * never listened on. `iniServer.emit('connection', socket)` is how a socket that has
+ * already been read from is handed over; the bytes that were read to classify it go back
+ * on the stream first with `unshift`, so the parser sees the request whole.
+ */
+const iniServer = createHttpServer((req: IncomingMessage, res: ServerResponse) => {
   // As a proxy the game's curl sends an absolute URI; asked directly it sends a
   // path. Either way there is only one answer we have to give.
   log(`HTTP ${req.method} ${req.url}`);
@@ -122,11 +135,7 @@ createHttpServer((req: IncomingMessage, res: ServerResponse) => {
   const ini = serversIni();
   log(`HTTP -> ${ini.length} bytes of servers ini\n${hexDump(Buffer.from(ini))}`);
   serve(res, ini);
-  // The line below is the one that gets copied into run-net.bat, so it has to name the
-  // address this gateway is advertising — not the loopback it was written against.
-}).listen(httpPort, bind, () =>
-  log(`http on ${bind}:${httpPort} — start the game with http_proxy=http://${host}:${httpPort}`),
-);
+});
 
 let connections = 0;
 
@@ -351,6 +360,17 @@ function openDeskListener(port: number): void {
       const verdict = classifyDesk(waiting);
       if (verdict.wait) {
         log(`TCP  #${id} :${port} <- ${waiting.length} bytes, undecided — ${verdict.note}`);
+        return;
+      }
+      if (verdict.desk === 'HTTP') {
+        log(`TCP  #${id} HTTP:${port} — ${verdict.note}`);
+        // Ours no longer: the bytes go back on the stream, our reader steps off it, and
+        // Node's HTTP server takes the socket as if it had just been accepted.
+        socket.removeAllListeners('data');
+        socket.pause();
+        socket.unshift(waiting);
+        iniServer.emit('connection', socket);
+        socket.resume();
         return;
       }
       if (!verdict.desk) {

@@ -31,7 +31,11 @@ export interface Config {
    * loopback and nothing else (services/core/server.ts).
    */
   bind: string;
-  /** Where the game asks for its server list (`http_proxy` points here). */
+  /**
+   * The gateway's one TCP port: the server list (`http_proxy` points here) and, since
+   * SLICE §2.3, every desk the game dials — they are told apart by what a connection
+   * says first, not by the number it said it on.
+   */
   httpPort: number;
   /** The core's internal API — loopback only, never exposed. */
   corePort: number;

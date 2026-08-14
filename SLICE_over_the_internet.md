@@ -298,6 +298,20 @@ http_proxy=http://192.168.178.23:8080
 relay wss://relay-h5e.example.com/agent
 ```
 
+**Both files on this box now say that** (14.08.2026, from the Windows side): all three
+copies' bat files name `192.168.178.23:8080`, and all three `homm5-editor-net.txt` name
+the tunnelled relay, each keeping its own secret.
+
+**The trap in that last word.** An agent's secret is a hash in the **core's database**,
+and the laptop's `data/lobby.db` is not the one those three were issued against. If it
+does not know them the relay refuses every agent — and on one LAN **that failure looks
+like success**: the games fall back to talking directly, play perfectly, and prove
+nothing. So either carry the database over, or re-issue on the laptop
+(`npm run issue-agent -- Senyaak`, and the same for `Senyaak2` and `Senyaak3`) and write
+the three new secrets into the three files. The way to tell afterwards is in each game's
+own log: `carried out by the relay` must climb. Sitting at zero while the game plays fine
+is the tell.
+
 The first is `H5E_HOST` from `~/.config/h5e-lobby.env` and has to be an address the game
 can dial — it changes here and in the bat file together. Its **port** does not change any
 more, which is why §2.3 put every desk on the ini's own number: `8080` is now the whole

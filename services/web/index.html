@@ -362,6 +362,28 @@
         input.value = '';
       }
 
+      /**
+       * The minute tick, while the socket is up.
+       *
+       * The service already keeps a connected session alive on its own — a background
+       * tab's timers cannot be relied on for that. This is the other half: the cookie has
+       * an expiry of its own, and this is what hands the browser a fresh one, so a tab
+       * left open past the hour is not logged out the moment it is reloaded.
+       */
+      setInterval(async () => {
+        if (socket?.readyState !== 1 || !nick) return;
+        try {
+          const response = await fetch('/session', { method: 'POST', credentials: 'same-origin' });
+          if (response.status === 401) {
+            nick = '';
+            log.replaceChildren();
+            gate(true, 'Your session ran out.');
+          }
+        } catch {
+          /* the socket will notice too, and it is the one that draws the banner */
+        }
+      }, 60_000);
+
       $('signin').addEventListener('submit', signIn);
       $('composer').addEventListener('submit', (event) => {
         event.preventDefault();

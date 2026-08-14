@@ -132,8 +132,8 @@ interface LoginAnswer {
   cookie: string;
 }
 
-async function tryLogin(name: string, password: string): Promise<LoginAnswer> {
-  const response = await fetch(`${pageUrl}/login`, {
+async function tryLogin(name: string, password: string, where = pageUrl): Promise<LoginAnswer> {
+  const response = await fetch(`${where}/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, password }),
@@ -163,6 +163,7 @@ check(
   !admitted.setCookie.includes('Secure'),
   admitted.setCookie,
 );
+check('it runs out in an hour', admitted.setCookie.includes('Max-Age=3600'), admitted.setCookie);
 
 const wrong = await tryLogin('Senyaak', 'archer');
 check('a wrong password is refused', wrong.ok !== true && wrong.status === 401, `${wrong.status} ${wrong.reason}`);
@@ -293,6 +294,53 @@ check(
   core.core.chat.history(RANKED).every((message) => message.nick !== 'nobody'),
 );
 impostor.stop();
+
+// ---------------------------------------------------------------------------------
+console.log('\nsessions that run out, and sockets that hold them open');
+// ---------------------------------------------------------------------------------
+{
+  // The real windows are an hour and a minute; these are the same mechanism wound down
+  // so the test can watch it happen. Its own service, so nothing above is disturbed —
+  // including the throttle, which by now has this address on it.
+  const IDLE = 1200;
+  const brief = await startWeb({
+    host: '127.0.0.1',
+    port: 0,
+    coreUrl: core.url(),
+    coreToken: TOKEN,
+    sessionIdleMs: IDLE,
+    sessionTouchMs: 150,
+  });
+  const briefUrl = `http://127.0.0.1:${brief.port()}`;
+  const touch = (cookie: string): Promise<Response> =>
+    fetch(`${briefUrl}/session`, { method: 'POST', headers: { cookie } });
+
+  const held = await tryLogin('Senyaak', 'swordsman', briefUrl);
+  check('logging in against the brief service works', held.ok === true, String(held.reason));
+  check('and its cookie says its own hour', held.setCookie.includes(`Max-Age=${Math.floor(IDLE / 1000)}`), held.setCookie);
+
+  const sitting = await openBrowser(`ws://127.0.0.1:${brief.port()}/`, held.cookie);
+  sitting.say({ kind: 'hello', channel: RANKED });
+  check('the socket is welcomed', await until(() => sitting.of('welcome').length > 0));
+
+  // Twice the whole idle window, spent doing nothing but holding the socket open.
+  await until(() => false, IDLE * 2);
+  const stillGood = await touch(held.cookie);
+  check('a session with a live socket is still there after twice its idle time', stillGood.status === 200, `status ${stillGood.status}`);
+  check('and the socket was never told otherwise', sitting.of('denied').length === 0);
+
+  // Now let go of it.
+  sitting.close();
+  await until(() => false, IDLE * 2);
+  const lapsed = await touch(held.cookie);
+  check('with nobody connected it runs out', lapsed.status === 401, `status ${lapsed.status}`);
+
+  const returning = await openBrowser(`ws://127.0.0.1:${brief.port()}/`, held.cookie);
+  returning.say({ kind: 'hello', channel: RANKED });
+  check('and the cookie is no longer worth anything', await until(() => returning.of('denied').length > 0));
+  returning.close();
+  await brief.close();
+}
 
 // ---------------------------------------------------------------------------------
 console.log('\nthe relay');

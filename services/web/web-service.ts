@@ -55,8 +55,10 @@ type ToBrowser =
 
 interface Browser {
   peer: WebSocketPeer;
-  /** Empty until a token has been shown. Nothing is sent or accepted before that. */
+  /** Empty until a session has been shown. Nothing is sent or accepted before that. */
   nick: string;
+  /** Which session this socket belongs to, so the sweep can keep it alive. */
+  token: string;
   channel: string;
 }
 
@@ -66,6 +68,9 @@ export interface WebOptions {
   coreUrl: string;
   coreToken: string;
   log?: (line: string) => void;
+  /** Both are here so a test can watch a session expire without waiting an hour. */
+  sessionIdleMs?: number;
+  sessionTouchMs?: number;
 }
 
 export interface RunningWeb {
@@ -78,14 +83,29 @@ export interface RunningWeb {
 const PAGE = join(dirname(fileURLToPath(import.meta.url)), 'index.html');
 
 /**
- * How long a browser stays logged in without being used.
+ * How long a session lives after the last sign of the person behind it.
+ *
+ * An hour, and it is counted from the last USE, not from the login: a tab that is open
+ * and connected is kept alive by the sweep below, so the hour only ever runs while nobody
+ * is there. Closing the tab starts it.
  *
  * Sessions live in this process and nowhere else, so restarting the web service logs
  * everybody out. That is the honest trade for now: the alternative is another table and
  * another thing to expire, and being asked for a password again after a deploy is not an
  * injury.
  */
-const SESSION_IDLE_MS = 7 * 24 * 60 * 60 * 1000;
+const SESSION_IDLE_MS = 60 * 60 * 1000;
+
+/**
+ * How often a live socket refreshes the session behind it.
+ *
+ * Done HERE and not in the page on purpose: a background tab's timers are throttled by
+ * the browser, sometimes to nothing, and a session that expires while its own connection
+ * is open and carrying chat would be a bug the person cannot even see coming. The socket
+ * is the evidence; the page only has to keep its cookie's clock in step, which is what
+ * `POST /session` is for.
+ */
+const SESSION_TOUCH_MS = 60_000;
 
 /** The cookie the session lives in. The page never sees it — that is the point. */
 const COOKIE = 'h5e_session';
@@ -129,6 +149,8 @@ const MAX_BODY = 4096;
 
 export function startWeb(options: WebOptions): Promise<RunningWeb> {
   const log = options.log ?? ((): void => {});
+  const idleMs = options.sessionIdleMs ?? SESSION_IDLE_MS;
+  const touchMs = options.sessionTouchMs ?? SESSION_TOUCH_MS;
   const browsers = new Set<Browser>();
   const sessions = new Map<string, { name: string; usedAt: number }>();
   const failures = new Map<string, number[]>();
@@ -153,13 +175,37 @@ export function startWeb(options: WebOptions): Promise<RunningWeb> {
   const sessionOf = (token: string): string => {
     const session = sessions.get(token);
     if (!session) return '';
-    if (Date.now() - session.usedAt > SESSION_IDLE_MS) {
+    if (Date.now() - session.usedAt > idleMs) {
       sessions.delete(token);
       return '';
     }
     session.usedAt = Date.now();
     return session.name;
   };
+
+  /**
+   * Once a minute: every session with a socket behind it is still in use, and every
+   * session with nothing behind it for an hour is gone.
+   *
+   * The second half matters as much as the first — without it an abandoned session sits
+   * in the map until somebody happens to present it, and "expired" would mean "expired
+   * when asked" rather than "expired".
+   */
+  const sweep = setInterval(() => {
+    const now = Date.now();
+    for (const browser of browsers) {
+      const session = browser.token ? sessions.get(browser.token) : undefined;
+      if (session) session.usedAt = now;
+    }
+    for (const [token, session] of sessions) {
+      if (now - session.usedAt > idleMs) {
+        sessions.delete(token);
+        log(`web  ${session.name}'s session expired`);
+      }
+    }
+  }, touchMs);
+  // Nothing here should hold the process open by itself.
+  sweep.unref?.();
 
   const tooManyFailures = (from: string): boolean => {
     const recent = (failures.get(from) ?? []).filter((at) => Date.now() - at < FAILURE_WINDOW_MS);
@@ -233,12 +279,17 @@ export function startWeb(options: WebOptions): Promise<RunningWeb> {
       answer(response, 400, { ok: false, reason: 'bad-request' });
       return;
     }
-    if (!core.connected) {
+    // No "is the core connected?" before asking: the client waits a moment for its own
+    // connection and only then gives up, which is what makes a login during a core
+    // restart — or in the first second of this service's life — wait rather than fail.
+    let verdict: { ok: boolean; name: string; reason?: string };
+    try {
+      verdict = await core.verifyAccount(name, password);
+    } catch (error) {
+      log(`web  could not ask the core about ${name}: ${(error as Error).message}`);
       answer(response, 503, { ok: false, reason: 'core-away' });
       return;
     }
-
-    const verdict = await core.verifyAccount(name, password);
     if (!verdict.ok) {
       failures.set(from, [...(failures.get(from) ?? []), Date.now()]);
       log(`web  ${name} was refused: ${verdict.reason}`);
@@ -252,7 +303,7 @@ export function startWeb(options: WebOptions): Promise<RunningWeb> {
       response,
       200,
       { ok: true, name: verdict.name },
-      sessionCookie(token, overTls(request), Math.floor(SESSION_IDLE_MS / 1000)),
+      sessionCookie(token, overTls(request), Math.floor(idleMs / 1000)),
     );
   }
 
@@ -274,6 +325,24 @@ export function startWeb(options: WebOptions): Promise<RunningWeb> {
         if (gone) log(`web  ${gone.name} logged out`);
       }
       answer(response, 200, { ok: true }, sessionCookie('', overTls(request), 0));
+      return;
+    }
+    if (request.method === 'POST' && request.url === '/session') {
+      // The page's minute tick. The server already keeps a socket's session warm; this is
+      // the browser's half of it — the cookie carries an expiry of its own, and without
+      // being handed a fresh one a tab that stays open past the hour would be logged out
+      // the moment it was reloaded.
+      const name = sessionOf(cookieValue(request.headers.cookie, COOKIE));
+      if (!name) {
+        answer(response, 401, { ok: false });
+        return;
+      }
+      answer(
+        response,
+        200,
+        { ok: true, name },
+        sessionCookie(cookieValue(request.headers.cookie, COOKIE), overTls(request), Math.floor(idleMs / 1000)),
+      );
       return;
     }
     if (request.url === '/health') {
@@ -300,7 +369,7 @@ export function startWeb(options: WebOptions): Promise<RunningWeb> {
   });
 
   serveWebSocket(server, (peer) => {
-    const browser: Browser = { peer, nick: '', channel: channels[0]?.key ?? '' };
+    const browser: Browser = { peer, nick: '', token: '', channel: channels[0]?.key ?? '' };
     browsers.add(browser);
 
     const openHistory = (channel: string): void => {
@@ -322,12 +391,14 @@ export function startWeb(options: WebOptions): Promise<RunningWeb> {
         // A name is not something the page gets to choose: it is whichever account the
         // session cookie belongs to, spelled the way the account spells it. The cookie
         // came with the handshake, so it is read from there and not from this frame.
-        const nick = sessionOf(cookieValue(peer.headers.cookie, COOKIE));
+        const token = cookieValue(peer.headers.cookie, COOKIE);
+        const nick = sessionOf(token);
         if (!nick) {
           send(browser, { kind: 'denied' });
           return;
         }
         browser.nick = nick;
+        browser.token = token;
         if (message.channel) browser.channel = message.channel;
         log(`web  ${browser.nick} is watching ${browser.channel}`);
         send(browser, { kind: 'welcome', nick: browser.nick, channels, core: core.connected });
@@ -372,6 +443,7 @@ export function startWeb(options: WebOptions): Promise<RunningWeb> {
         port: () => (server.address() as { port: number }).port,
         close: () =>
           new Promise<void>((done) => {
+            clearInterval(sweep);
             core.stop();
             for (const browser of browsers) browser.peer.close();
             server.close(() => done());

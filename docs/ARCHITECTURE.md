@@ -175,13 +175,22 @@ Consequences worth knowing:
 - **the name shown is the account's own spelling** — the table is `NOCASE`, so `senyaak`
   in the browser and `Senyaak` in the game must not become two people in one chat;
 - **the session is a cookie the page cannot read.** A random token per login, kept in the
-  web service's memory and sent back as `HttpOnly; SameSite=Lax; Path=/` (plus `Secure`
-  when the request arrived over TLS, which behind cloudflared it will). `HttpOnly` puts it
-  out of reach of any script, ours included, so there is no copy of it anywhere in the
-  page; `SameSite=Lax` stops another site spending it, on a form post or on a WebSocket
-  handshake. The cookie travels with the HANDSHAKE, so logging in has to open a NEW socket
-  — the one already open was greeted without it. Restarting the web service asks everybody
-  for a password again, which is the honest price of not having a session table yet;
+  web service's memory and sent back as `HttpOnly; SameSite=Lax; Path=/; Max-Age=3600`
+  (plus `Secure` when the request arrived over TLS, which behind cloudflared it will).
+  `HttpOnly` puts it out of reach of any script, ours included, so there is no copy of it
+  anywhere in the page; `SameSite=Lax` stops another site spending it, on a form post or on
+  a WebSocket handshake. The cookie travels with the HANDSHAKE, so logging in has to open a
+  NEW socket — the one already open was greeted without it. Restarting the web service asks
+  everybody for a password again, which is the honest price of not having a session table
+  yet;
+- **it runs out an hour after the last sign of the person, and a live socket is one.**
+  Every minute the service marks the session behind each connected browser as used, and
+  deletes any that has had nobody behind it for an hour — expiry that happens on its own
+  rather than "when next asked". The refresh is on the SERVER and not in the page because a
+  background tab's timers are throttled, sometimes to nothing, and a session must not run
+  out under a connection that is open and carrying chat. The page's own minute tick
+  (`POST /session`) exists for the other half: the cookie carries an expiry too, and a tab
+  open past the hour would otherwise be logged out the moment it was reloaded;
 - **five wrong passwords from one address and it stops asking the core**, for a minute,
   the right password included — a throttle that lets the real one through is not one;
 - the browser is a chat participant, not a player: it is in the web presence list and in

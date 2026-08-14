@@ -1330,6 +1330,23 @@ There is a gate byte at 0x108F91C (initialised to 1) and a per-`SGameInfo` bool 
 that leave the field zero, and a `no_checksum` config key (string 0xfa86d0) — what connects
 them was not traced.
 
+**Confirmed against the game, 14.08.2026, not only read.** One hand-made map (`test1`) was
+put on both installs and another (`test12`) on the host only, and at the same time an
+unrelated hand-made map (`PandoraProbe.h5m`) was deleted from the joiner alone:
+
+- hosting `test1` — joins, **although the joiner is missing PandoraProbe**. An unrelated
+  map absent on one side does not refuse anything, which is the claim that mattered and
+  the one a reading of the disassembly alone would not have settled.
+- hosting `test12` — refused with 0.2.0, and **the channel list shows that room with an
+  empty Map column** while `test1`'s row shows its name. The name is resolved locally from
+  the path in the settings blob, so a player can be told he lacks the map before he
+  clicks — the game already knows.
+
+And the path is in the blob we hold, in plain text:
+`/Maps/Multiplayer/test1/map.xdb#xpointer(/AdvMapDesc)` (676 bytes for that room). So this
+server can see which map every room needs, which is everything a launcher needs to fetch
+one before the player enters.
+
 **A trap for this server.** The host computes the value into `SGameInfo+0xC4` while
 composing his room description, so it rides in the settings blob we forward. That blob is
 the one he replaces moments after creating the room (522 → 590 → 660 bytes), and forwarding

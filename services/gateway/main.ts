@@ -28,6 +28,7 @@ import { CdKeyService } from './cdkey-service.ts';
 import { IrcConnection, IrcService, chatLine, frame, fromGameText, toGameText } from './irc.ts';
 import { probePeerAddress, probeRoomFields, roomEndpoints } from './lobby.ts';
 import { classifyDatagram, classifyDesk, type Desk } from './desk.ts';
+import { StateFeed } from './state-feed.ts';
 import { DEFAULT_LOBBIES, lobbyChannel } from '../../shared/channels.ts';
 
 const settings = config();
@@ -239,32 +240,35 @@ core.start();
 /**
  * What the core is told about who is where: the channels, and the rooms.
  *
- * There is no event for either — both live inside the router's own state and nothing
- * announces a change. Two seconds of polling costs nothing next to reaching into the
- * session machinery for a hook, and a picture that is two seconds old is one nobody can
- * tell from a fresh one. Each is sent only when it is not what was sent last.
+ * **On the event, not on a clock.** Every room and every presence entry changes because a
+ * client said something or a socket closed, and both of those are handled a few hundred
+ * lines below — so `stateMayHaveChanged()` is called there and nothing has to reach into
+ * the router's own state for a hook. This used to be a two-second poll, and two seconds is
+ * a long time to be admitted to a game you have joined.
  *
- * The presence half is drawn by the browser. The rooms half answers the relay's one
- * question — "which room is this agent in" — and it is a whole list rather than "X joined
- * Y" on purpose: rooms appear, fill, empty and vanish on the client's own messages, and a
- * missed delta would leave the core routing a game that has finished.
+ * What goes out is still a WHOLE LIST and still only when it differs from the last one.
+ * Not "X joined Y": rooms appear, fill, empty and vanish on the client's own messages, and
+ * a missed delta would leave the core routing a game that has finished. The throttle in
+ * `state-feed.ts` keeps a burst from becoming a burst of pushes: the first change opens a
+ * window of `STATE_WINDOW`, and everything inside it leaves together at its end.
+ *
+ * The presence half is drawn by the browser. The rooms half is what lets the relay admit
+ * an agent at all.
  */
-let lastPresence = '';
-let lastRooms = '';
-setInterval(() => {
+const STATE_WINDOW = 20;
+
+function presenceNow(): PresenceEntry[] {
   const entries: PresenceEntry[] = [];
   for (const lobby of DEFAULT_LOBBIES) {
     for (const nick of router.presence.inLobby(lobby.id)) {
       entries.push({ nick, channel: lobbyChannel(lobby.id), origin: 'game' });
     }
   }
-  const shape = JSON.stringify(entries);
-  if (shape !== lastPresence) {
-    lastPresence = shape;
-    core.replacePresence('game', entries);
-  }
+  return entries;
+}
 
-  const rooms: RoomInfo[] = router.openRooms.map((room) => ({
+function roomsNow(): RoomInfo[] {
+  return router.openRooms.map((room) => ({
     id: room.id,
     name: room.name,
     master: room.master,
@@ -274,9 +278,14 @@ setInterval(() => {
     // relay has only one other agent to hand a datagram to.
     endpoints: roomEndpoints(room.info),
   }));
-  const roomShape = JSON.stringify(rooms);
-  if (roomShape !== lastRooms) {
-    lastRooms = roomShape;
+}
+
+const feed = new StateFeed({
+  window: STATE_WINDOW,
+  presence: presenceNow,
+  rooms: roomsNow,
+  sendPresence: (entries) => core.replacePresence('game', entries),
+  sendRooms: (rooms) => {
     core.replaceRooms(rooms);
     log(
       `RTR  rooms -> core: ${
@@ -290,8 +299,27 @@ setInterval(() => {
           .join('; ') || 'none'
       }`,
     );
-  }
-}, 2000).unref();
+  },
+});
+
+/** Called from wherever a socket said something; see `state-feed.ts` for the rules. */
+function stateMayHaveChanged(): void {
+  feed.touch();
+}
+
+/**
+ * A core that has just come back knows nothing, and nothing here has changed.
+ *
+ * The events cannot miss a room — every room moves on socket data or on socket close, and
+ * both are handled in one place below — but a core that restarts loses the list and no
+ * event follows, because on this side nothing happened. That was broken before the events
+ * too: the old poll compared against the same memory and would not have re-sent either.
+ */
+core.onConnected = () => feed.reconnected();
+
+// The guest and the ghosts are seated before any client connects, so the first picture is
+// not owed to an event either.
+setImmediate(() => feed.pushNow());
 
 /**
  * And the guest says something, on a timer.
@@ -444,6 +472,9 @@ function attach(label: Desk, socket: Socket, id: number, port: number): (data: B
       const gone = session?.close();
       if (gone) log(`RTR  #${id} ${gone}`);
       log(`TCP  #${id} ${label}:${port} closed`);
+      // A player who drops out of a room does it by his socket going away, and this is
+      // the only place that hears about it.
+      if (session) stateMayHaveChanged();
     });
     return (data: Buffer) => {
       log(`TCP  #${id} ${label}:${port} <- ${data.length} bytes\n${hexDump(data)}`);
@@ -484,6 +515,9 @@ function attach(label: Desk, socket: Socket, id: number, port: number): (data: B
           log(`TCP  #${id} ${label}:${port} -> ${answer.length} bytes\n${hexDump(answer)}`);
         }
       }
+      // Every room and every presence entry moves because of a message that just went
+      // through here. Comparing is what decides whether the core hears anything.
+      if (events.length) stateMayHaveChanged();
     };
   }
 }

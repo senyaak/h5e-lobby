@@ -25,6 +25,8 @@ import { Friends } from '../services/core/rules/friends.ts';
 import { openDatabase } from '../services/core/rules/database.ts';
 import { IrcService, chatLine, frame, unframe } from '../services/gateway/irc.ts';
 import { classifyDatagram, classifyDesk } from '../services/gateway/desk.ts';
+import { StateFeed } from '../services/gateway/state-feed.ts';
+import type { PresenceEntry, RoomInfo } from '../shared/core-protocol.ts';
 import { lobbyChannel } from '../shared/channels.ts';
 import { readFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -2067,6 +2069,86 @@ console.log('\nwhere the players are, out of the room description');
   const truncated = capturedRoomPlayers().subarray(0, 300);
   check('a description cut in half still gives up what it holds', roomEndpoints(truncated).length >= 1, String(roomEndpoints(truncated).length));
   check('and nothing is invented out of noise', roomEndpoints(Buffer.alloc(64, 0xab)).length === 0);
+}
+
+console.log('\nthe state feed, which decides when the core hears about a room');
+{
+  // The timer is ours, so the window is run out rather than waited out. Nothing here
+  // asserts a duration — the feed has no fast path to assert one about.
+  const timers: (() => void)[] = [];
+  const runWindow = (): void => {
+    for (const fire of timers.splice(0)) fire();
+  };
+
+  let rooms: RoomInfo[] = [];
+  const sentRooms: RoomInfo[][] = [];
+  const sentPresence: PresenceEntry[][] = [];
+  const feed = new StateFeed({
+    window: 20,
+    schedule: (fn) => void timers.push(fn),
+    presence: () => [],
+    rooms: () => rooms,
+    sendPresence: (entries) => void sentPresence.push(entries),
+    sendRooms: (list) => void sentRooms.push(list),
+  });
+
+  const room = (id: number, members: string[]): RoomInfo => ({
+    id,
+    name: `room ${id}`,
+    master: members[0] ?? '',
+    members,
+    endpoints: [],
+  });
+
+  // The window is always waited out, and a lone change waits it out too.
+  rooms = [room(1, ['A'])];
+  feed.touch();
+  check('nothing leaves before the window is out', sentRooms.length === 0, `${sentRooms.length} push(es)`);
+  runWindow();
+  check('and then it does', sentRooms.length === 1, `${sentRooms.length} push(es)`);
+
+  // A login is a dozen messages in a few milliseconds. They are ONE push, counted from the
+  // first of them, and what goes is the LAST state — not the one that opened the window.
+  for (let i = 0; i < 12; i++) {
+    rooms = [room(1, ['A', `B${i}`])];
+    feed.touch();
+  }
+  check('a burst of twelve is one window', timers.length === 1, `${timers.length} timer(s)`);
+  runWindow();
+  check('and one push', sentRooms.length === 2, `${sentRooms.length} push(es)`);
+  check(
+    'carrying the last state, not the one that opened it',
+    sentRooms[1]?.[0]?.members.join(',') === 'A,B11',
+    sentRooms[1]?.[0]?.members.join(','),
+  );
+
+  // The comparison is what makes touch() cheap enough to call from every message. This is
+  // the check that goes red if the feed ever sends without looking.
+  feed.touch();
+  runWindow();
+  check('a touch with nothing changed sends nothing', sentRooms.length === 2, `${sentRooms.length} push(es)`);
+
+  // And the hole neither of those covers: the core restarted, so it knows nothing, and
+  // nothing here changed to tell it.
+  const presenceBefore = sentPresence.length;
+  feed.reconnected();
+  check('a core that reconnects is told everything again', sentRooms.length === 3, `${sentRooms.length} push(es)`);
+  check(
+    'the whole list, not a difference',
+    sentRooms[2]?.[0]?.members.join(',') === 'A,B11',
+    sentRooms[2]?.[0]?.members.join(','),
+  );
+  check(
+    'and presence with it, from the same silence',
+    sentPresence.length === presenceBefore + 1,
+    `${presenceBefore} -> ${sentPresence.length}`,
+  );
+
+  // A room that empties is a change like any other — the relay must stop admitting to it.
+  rooms = [];
+  feed.touch();
+  runWindow();
+  check('a room that vanishes is sent as a list without it', sentRooms[3]?.length === 0, String(sentRooms[3]?.length));
 }
 
 console.log(failures === 0 ? '\nall good\n' : `\n${failures} failed\n`);

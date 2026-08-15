@@ -14,7 +14,7 @@ import { openLog } from '../../shared/log.ts';
 import { startULobbyTunnel } from './tunnel.ts';
 
 const settings = config();
-const log = openLog('u-lobby services');
+const log = openLog('u-lobby');
 
 const running = await startULobbyTunnel({
   bind: settings.bind,
@@ -27,7 +27,7 @@ const running = await startULobbyTunnel({
 });
 
 log(
-  `u-lobby services on ${settings.bind}:${String(running.port())} — the mod dials ws://${settings.host}:${String(running.port())}/u-lobby ` +
+  `u-lobby on ${settings.bind}:${String(running.port())} — the mod dials ws://${settings.host}:${String(running.port())}/u-lobby ` +
     `(or the tunnel's wss://…/u-lobby), and every stream lands on 127.0.0.1:${String(settings.httpPort)}`,
 );
 log(`logging to ${log.session}`);

@@ -229,7 +229,7 @@ function attach(socket: Socket, url: string, headers: IncomingHttpHeaders): WebS
  * so a browser pointed at the relay by mistake says so instead of spinning.
  */
 export function serveWebSocket(server: Server, onPeer: (peer: WebSocketPeer) => void): void {
-  server.on('upgrade', (request: IncomingMessage, socket: Duplex) => {
+  server.on('upgrade', (request: IncomingMessage, socket: Duplex, head: Buffer) => {
     const key = request.headers['sec-websocket-key'];
     const upgrade = String(request.headers['upgrade'] ?? '').toLowerCase();
     if (upgrade !== 'websocket' || typeof key !== 'string') {
@@ -246,6 +246,10 @@ export function serveWebSocket(server: Server, onPeer: (peer: WebSocketPeer) => 
     // wanted here — no Nagle delay, and who is at the other end — belong to that.
     const connection = socket as Socket;
     connection.setNoDelay(true);
+    // Bytes that arrived in the same packet as the handshake. A client that follows the
+    // RFC sends nothing before our 101, so this is empty every time — but Node hands it
+    // to us and not to the data listener, so dropping it would drop a first frame.
+    if (head.length) connection.unshift(head);
     onPeer(attach(connection, request.url ?? '/', request.headers));
   });
 }

@@ -8,24 +8,24 @@
 //
 // Usage: `node tools/test-net.ts`
 
-import { decode, decodeBody, encode, encodeBody, type GSValue } from '../services/gateway/gs-data.ts';
-import { decrypt, encrypt } from '../services/gateway/gs-xor.ts';
-import { HEADER_SIZE, Flags, buildSegment, checksum, parseSegment, verify } from '../services/gateway/srp.ts';
-import { MessageType, Property, build, parse } from '../services/gateway/gs-message.ts';
-import { NatService, inetU32 } from '../services/gateway/nat-service.ts';
-import { KEY_BLOB_SIZE, decryptWith, encryptTo, generateKeyPair, parsePublicKey, publicKeyBlob } from '../services/gateway/pkc.ts';
-import { GUEST, GUEST_LOBBY, RouterService, type RouterSession } from '../services/gateway/router-service.ts';
-import { Blowfish } from '../services/gateway/blowfish.ts';
-import { CdKeyRequest, CdKeyService } from '../services/gateway/cdkey-service.ts';
-import { GAME_PORT, LobbyMsg, Lsm, RoomUpdate, playerInfo, roomEndpoints, withRating } from '../services/gateway/lobby.ts';
-import { findField, readFields, writeFields } from '../services/gateway/structure.ts';
+import { decode, decodeBody, encode, encodeBody, type GSValue } from '../services/u-lobby/gs-data.ts';
+import { decrypt, encrypt } from '../services/u-lobby/gs-xor.ts';
+import { HEADER_SIZE, Flags, buildSegment, checksum, parseSegment, verify } from '../services/u-lobby/srp.ts';
+import { MessageType, Property, build, parse } from '../services/u-lobby/gs-message.ts';
+import { NatService, inetU32 } from '../services/u-lobby/nat-service.ts';
+import { KEY_BLOB_SIZE, decryptWith, encryptTo, generateKeyPair, parsePublicKey, publicKeyBlob } from '../services/u-lobby/pkc.ts';
+import { GUEST, GUEST_LOBBY, RouterService, type RouterSession } from '../services/u-lobby/router-service.ts';
+import { Blowfish } from '../services/u-lobby/blowfish.ts';
+import { CdKeyRequest, CdKeyService } from '../services/u-lobby/cdkey-service.ts';
+import { GAME_PORT, LobbyMsg, Lsm, RoomUpdate, playerInfo, roomEndpoints, withRating } from '../services/u-lobby/lobby.ts';
+import { findField, readFields, writeFields } from '../services/u-lobby/structure.ts';
 import { FACTIONS, LADDER_KEYS, Ladder, STARTING_RATING } from '../services/core/rules/ladder.ts';
 import { Accounts } from '../services/core/rules/accounts.ts';
 import { Friends } from '../services/core/rules/friends.ts';
 import { openDatabase } from '../services/core/rules/database.ts';
-import { IrcService, chatLine, frame, unframe } from '../services/gateway/irc.ts';
-import { classifyDatagram, classifyUService } from '../services/gateway/u-lobby.ts';
-import { StateFeed } from '../services/gateway/state-feed.ts';
+import { IrcService, chatLine, frame, unframe } from '../services/u-lobby/irc.ts';
+import { classifyDatagram, classifyUService } from '../services/u-lobby/classify.ts';
+import { StateFeed } from '../services/u-lobby/state-feed.ts';
 import type { PresenceEntry, RoomInfo } from '../shared/core-protocol.ts';
 import { lobbyChannel } from '../shared/channels.ts';
 import { readFileSync, rmSync } from 'node:fs';

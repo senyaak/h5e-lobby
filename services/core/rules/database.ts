@@ -164,7 +164,7 @@ export function openDatabase(path = 'data/lobby.db'): OpenedDatabase {
   // A lobby is a handful of writes a minute from a handful of sockets; WAL is for the
   // day two clients write at once, and it costs nothing today.
   db.exec('PRAGMA journal_mode = WAL');
-  // That day arrived: the core and the game gateway are two processes now, and they hold
+  // That day arrived: the core and the u-lobby are two processes now, and they hold
   // this same file open (docs/ARCHITECTURE.md, "Where the seam actually runs"). WAL lets
   // them, but a writer still has to wait its turn, and without this a write that collides
   // fails instantly with SQLITE_BUSY instead of taking the millisecond it needs.

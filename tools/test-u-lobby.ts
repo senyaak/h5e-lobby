@@ -1,23 +1,24 @@
-// The u-lobby tunnel, driven without a game.
+// The u-lobby's door, driven without a game.
 //
-// What it proves is the thing the tunnel exists for: bytes that would have gone straight
-// at the gateway's TCP and UDP sockets arrive there anyway, having crossed a WebSocket,
+// What it proves is the thing the door exists for: bytes that would have gone straight
+// at the u-lobby's TCP and UDP sockets arrive there anyway, having crossed a WebSocket,
 // and come back to the client that sent them AND NOT TO ANOTHER ONE.
 //
 // The u-lobby services themselves are a stub here — a TCP server and a UDP socket that echo what they
 // are given with a mark of their own. That is deliberate: what is being tested is the
-// carrying, and a real gateway would drag the core, the database and the whole protocol
+// carrying, and the real u-lobby would drag the core, the database and the whole protocol
 // into a test whose subject is a socket.
 //
 // Usage: `node tools/test-u-lobby.ts`
 
 import { createServer as createTcpServer, createConnection, type Socket } from 'node:net';
+import { createServer as createHttpServer } from 'node:http';
 import { createSocket } from 'node:dgram';
 import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { startULobbyTunnel } from '../services/u-lobby/tunnel.ts';
+import { carryULobby } from '../services/u-lobby/tunnel.ts';
 
 const WATCHDOG_MS = 60 * 1000;
 setTimeout(() => {
@@ -76,22 +77,25 @@ const tcpService = createTcpServer((socket) => {
   socket.on('error', () => {});
 });
 await new Promise<void>((done) => tcpService.listen(0, '127.0.0.1', () => done()));
-const gatewayPort = (tcpService.address() as { port: number }).port;
+const stubPort = (tcpService.address() as { port: number }).port;
 
 const udpService = createSocket('udp4');
 udpService.on('message', (data, from) => {
   const answer = Buffer.from(`mirror:${data.toString()}@${String(from.port)}`);
   udpService.send(answer, from.port, from.address);
 });
-await new Promise<void>((done) => udpService.bind(gatewayPort, '127.0.0.1', () => done()));
+await new Promise<void>((done) => udpService.bind(stubPort, '127.0.0.1', () => done()));
 
-const tunnel = await startULobbyTunnel({
-  bind: '127.0.0.1',
-  port: 0,
-  gatewayHost: '127.0.0.1',
-  gatewayPort,
+// The door hangs on an HTTP server the way it hangs on the u-lobby's own: here the
+// server is this test's, so the carry can point at the stub.
+const doorServer = createHttpServer();
+const carry = carryULobby({
+  server: doorServer,
+  target: { host: '127.0.0.1', port: stubPort },
   log: () => {},
 });
+await new Promise<void>((done) => doorServer.listen(0, '127.0.0.1', () => done()));
+const doorPort = (doorServer.address() as { port: number }).port;
 
 // ---------------------------------------------------------------------------------
 // A client is Node's own WebSocket, which is what the browsers in test-services.ts are.
@@ -108,7 +112,7 @@ interface Client {
 }
 
 async function connect(): Promise<Client> {
-  const socket = new WebSocket(`ws://127.0.0.1:${String(tunnel.port())}/u-lobby`);
+  const socket = new WebSocket(`ws://127.0.0.1:${String(doorPort)}/u-lobby`);
   socket.binaryType = 'arraybuffer';
   const heard: Buffer[] = [];
   socket.addEventListener('message', (event) => heard.push(Buffer.from(event.data as ArrayBuffer)));
@@ -129,7 +133,7 @@ async function connect(): Promise<Client> {
   };
 }
 
-console.log('\nthe u-lobby tunnel');
+console.log('\nthe u-lobby door, against a stub');
 
 const one = await connect();
 
@@ -147,8 +151,8 @@ await until(() => one.onStream(9).length > 0);
 check('a second stream is its own connection', one.onStream(9) === 'service2:second', one.onStream(9));
 check('and the first one did not hear it', one.onStream(7) === 'service1:hello', one.onStream(7));
 
-// An implicit open is what that last write was. It has to reach a u-lobby service of its own, or two
-// streams would share one connection and their bytes would interleave. Which u-lobby service served
+// An implicit open is what that last write was. It has to reach a connection of its own, or two
+// streams would share one and their bytes would interleave. Which stub connection served
 // which stream is what says so — the count alone stays right while the ids are wrong.
 await until(() => serviceConnections.length >= 2);
 const servedSeven = one.onStream(7).split(':')[0] ?? '';
@@ -214,34 +218,36 @@ one.socket.send(streamFrame(FRAME_CLOSE, 7));
 await until(() => one.closed(7));
 check('a stream closed by the client is closed at the u-lobby service', one.closed(7));
 
-const before = tunnel.clients();
+const before = carry.clients();
 two.socket.close();
-await until(() => tunnel.clients() === before - 1);
-check('a client that leaves is let go of', tunnel.clients() === before - 1, `${String(tunnel.clients())} carrying`);
+await until(() => carry.clients() === before - 1);
+check('a client that leaves is let go of', carry.clients() === before - 1, `${String(carry.clients())} carrying`);
 
 one.socket.close();
-await until(() => tunnel.clients() === 0);
-await tunnel.close();
+await until(() => carry.clients() === 0);
+carry.close();
+await new Promise<void>((done) => doorServer.close(() => done()));
 await new Promise<void>((done) => tcpService.close(() => done()));
 udpService.close();
 
 // ---------------------------------------------------------------------------------
-// And now against a REAL gateway.
+// And now against the REAL u-lobby.
 //
 // Everything above is the carrying, checked against a stub on purpose. This is the
-// seam nothing else holds: a stream that crosses the tunnel and lands on the gateway
-// has to be a connection the gateway cannot tell from one the game dialled itself —
-// its own classifier reading the first message, its own answer coming back.
+// seam nothing else holds: the door is the u-lobby's own — the upgrade answered on
+// the same port as everything else — and a stream that comes through it has to be a
+// connection the classifier cannot tell from one the game dialled itself: its own
+// first-message reading, its own answer coming back.
 //
 // The server list is what to ask for. It opens no session, logs nobody in, and the
 // answer is a document with a shape: `[Servers]`, and every address in it the one the
-// gateway was told to advertise. A live run of this over the internet found nothing
+// u-lobby was told to advertise. A live run of this over the internet found nothing
 // wrong and would still not belong here — a suite that needs a laptop and Cloudflare
 // goes red when the laptop sleeps, which is noise. The trip this checks is the same
 // one minus the tunnel provider, which is not our code.
 // ---------------------------------------------------------------------------------
 
-console.log('\nthe same, against the gateway itself');
+console.log('\nthe same, against the u-lobby itself — one port, the door on it');
 
 /** A port nothing is on, by taking one and giving it straight back. */
 async function freePort(): Promise<number> {
@@ -252,15 +258,15 @@ async function freePort(): Promise<number> {
   return port;
 }
 
-const realGatewayPort = await freePort();
+const realPort = await freePort();
 const scratch = mkdtempSync(join(tmpdir(), 'h5e-u-lobby-'));
 
 // Its own database and its own log directory: this must not touch the repository's.
-// No core is started — the gateway says so and carries on, which is exactly the
+// No core is started — the u-lobby says so and carries on, which is exactly the
 // promise `deploy/README.md` makes about `Wants=` rather than `Requires=`.
-const gateway = spawn(
+const uLobby = spawn(
   process.execPath,
-  ['services/gateway/main.ts', '--http', String(realGatewayPort), '--bind', '127.0.0.1', '--host', '127.0.0.1'],
+  ['services/u-lobby/main.ts', '--http', String(realPort), '--bind', '127.0.0.1', '--host', '127.0.0.1'],
   {
     cwd: join(import.meta.dirname, '..'),
     env: {
@@ -288,19 +294,12 @@ async function listening(port: number, ms = 20_000): Promise<boolean> {
   return false;
 }
 
-const up = await listening(realGatewayPort);
-check('the gateway came up on a port of its own', up, `127.0.0.1:${String(realGatewayPort)}`);
+const up = await listening(realPort);
+check('the u-lobby came up on a port of its own', up, `127.0.0.1:${String(realPort)}`);
 
 if (up) {
-  const live = await startULobbyTunnel({
-    bind: '127.0.0.1',
-    port: 0,
-    gatewayHost: '127.0.0.1',
-    gatewayPort: realGatewayPort,
-    log: () => {},
-  });
-
-  const client = new WebSocket(`ws://127.0.0.1:${String(live.port())}/u-lobby`);
+  // Straight at the u-lobby's one port: the door is no longer a process in front of it.
+  const client = new WebSocket(`ws://127.0.0.1:${String(realPort)}/u-lobby`);
   client.binaryType = 'arraybuffer';
   const back: Buffer[] = [];
   let ended = false;
@@ -312,8 +311,8 @@ if (up) {
   });
   await new Promise<void>((open) => client.addEventListener('open', () => open(), { once: true }));
 
-  // Absolute-form, the way the game's curl asks a proxy. The gateway answers any GET
-  // and reads neither the path nor the query.
+  // Absolute-form, the way the game's curl asks a proxy. The u-lobby answers any GET
+  // that is not /health with the ini, and reads neither the path nor the query.
   client.send(streamFrame(FRAME_OPEN, 1));
   client.send(streamFrame(FRAME_DATA, 1, Buffer.from(
     'GET http://gsconnect.ubisoft.com/gsinit.php?dp=HEROES_29988429c481f219 HTTP/1.1\r\n'
@@ -322,24 +321,23 @@ if (up) {
 
   await until(() => ended, 15_000);
   const answer = Buffer.concat(back).toString('latin1');
-  check('the gateway answered a stream that came through the tunnel', ended, `${String(answer.length)} bytes`);
+  check('the u-lobby answered a stream that came through its door', ended, `${String(answer.length)} bytes`);
   check('and what came back is a server list', /\r\n\[Servers\]\r\n/.test(answer), answer.split('\r\n')[0] ?? '');
   check(
-    'naming the address the gateway was told to advertise',
+    'naming the address the u-lobby was told to advertise',
     /RouterIP0=127\.0\.0\.1/.test(answer) && /IRCIP0=127\.0\.0\.1/.test(answer),
     (/RouterIP0=[^\r]*/.exec(answer) ?? ['(no RouterIP0)'])[0],
   );
   check(
-    'and its own port, which is not the tunnel\'s',
-    answer.includes(`RouterPort0=${String(realGatewayPort)}`),
+    "and its own port — the door and the u-lobby services share the number, which is the point",
+    answer.includes(`RouterPort0=${String(realPort)}`),
     (/RouterPort0=[^\r]*/.exec(answer) ?? ['(no RouterPort0)'])[0],
   );
 
   client.close();
-  await live.close();
 }
 
-gateway.kill();
+uLobby.kill();
 await new Promise((done) => setTimeout(done, 200));
 rmSync(scratch, { recursive: true, force: true });
 

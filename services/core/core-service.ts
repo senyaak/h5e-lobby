@@ -6,7 +6,7 @@
 // serves a WebSocket in `services/core/main.ts` and a pair of function calls in the tests.
 //
 // What it carries today is chat with its history, the presence the services push into it,
-// and the agent registry the relay asks. The rest of the rules still live in the gateway's
+// and the agent registry the relay asks. The rest of the rules still live in the u-lobby's
 // process and reach the database directly — the seam is named in docs/ARCHITECTURE.md,
 // and moving them across changes this file only by adding to the switch.
 //
@@ -45,7 +45,7 @@ interface Client {
   send(text: string): void;
   /** This connection's share of the presence list, replaced whole when it says so. */
   presence: PresenceEntry[];
-  /** And of the room list — today only the gateway ever fills this in. */
+  /** And of the room list — today only the u-lobby ever fills this in. */
   rooms: RoomInfo[];
 }
 
@@ -68,7 +68,7 @@ export class CoreService {
     return [...this.clients].flatMap((client) => client.presence);
   }
 
-  /** Every game being hosted, as the gateway last described them. */
+  /** Every game being hosted, as the u-lobby last described them. */
   rooms(): RoomInfo[] {
     return [...this.clients].flatMap((client) => client.rooms);
   }
@@ -77,13 +77,13 @@ export class CoreService {
    * Who is playing at this address and port, out of the room list — and nothing else.
    *
    * This is the whole of how an agent is recognised. The endpoints come from the host's
-   * own description of the room, by way of the gateway, so the answer is only ever yes for
+   * own description of the room, by way of the u-lobby, so the answer is only ever yes for
    * somebody the lobby has actually seated in a game.
    *
    * TWO PLAYERS CAN DECLARE THE SAME ADDRESS — two behind one NAT both saying
    * `192.168.1.5` — and then the port is what separates them. Two who match on both are a
    * hole this cannot close from here; the room list is where that has to be fixed, by the
-   * gateway handing out an endpoint of its own per player (SLICE_over_the_internet.md §4.2).
+   * u-lobby handing out an endpoint of its own per player (SLICE_over_the_internet.md §4.2).
    * Until then such a pair is refused rather than guessed at.
    */
   private playerAt(address: string, port: number): { nick: string; room: RoomInfo } | null {

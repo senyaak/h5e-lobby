@@ -5,7 +5,7 @@
 // looking up a timestamp first, which matters because these are usually started by
 // somebody else's hand.
 //
-// THE GATEWAY ALSO KEEPS WRITING `logs/latest.log`. That is the file Сеня tails, and the
+// THE U-LOBBY ALSO KEEPS WRITING `logs/latest.log`. That is the file Сеня tails, and the
 // last time a log quietly moved, the obvious place kept yesterday's file and every run
 // after that looked like a server that had stopped writing. So the old name stays, and
 // the new one is beside it.
@@ -44,7 +44,7 @@ export interface Log {
 }
 
 export interface LogOptions {
-  /** Write `logs/latest.log` as well — the gateway does, see the header. */
+  /** Write `logs/latest.log` as well — the u-lobby does, see the header. */
   alsoPlainLatest?: boolean;
 }
 

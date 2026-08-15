@@ -8,7 +8,9 @@
 //
 // The order below is the whole of it, and it is an order, not a set of independent tests:
 //
-//   1. `GET ` is the ini being fetched. Nothing else here begins with a word.
+//   1. `GET ` is HTTP — the ini being fetched, or the door being opened (an upgrade to
+//      `/u-lobby`, `tunnel.ts`). Nothing else here begins with a word, and Node's own
+//      parser tells those two apart.
 //   2. A GS header that adds up — a size that is at least a header and no longer than
 //      what arrived — and whose type is one a u-lobby service opens with. That names the u-lobby service.
 //   3. Anything else is IRC, which is what is left. It fails the GS test twice over: its
@@ -24,7 +26,7 @@
 
 import { HEADER_SIZE, MessageType } from './gs-message.ts';
 
-/** The u-lobby services a TCP connection can turn out to be. `HTTP` is the server list, fetched once. */
+/** The u-lobby services a TCP connection can turn out to be. `HTTP` is the ini or the door. */
 export type UService = 'HTTP' | 'Router' | 'Proxy' | 'Lobby' | 'IRC';
 
 export interface UServiceVerdict {
@@ -63,7 +65,7 @@ export function classifyUService(bytes: Buffer): UServiceVerdict {
   const seen = Math.min(bytes.length, GET.length);
   if (bytes.subarray(0, seen).equals(GET.subarray(0, seen))) {
     if (bytes.length < GET.length) return { service: null, wait: true, note: 'may be a GET, waiting' };
-    return { service: 'HTTP', wait: false, note: 'a GET — the server list' };
+    return { service: 'HTTP', wait: false, note: 'a GET — the server list, or the door' };
   }
 
   // 2. The GS u-lobby services. Half a header decides nothing.

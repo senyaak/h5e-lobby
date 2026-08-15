@@ -10,8 +10,8 @@ to be recovered from memory.
 
 ```bash
 npm start                                   # all four services, one terminal, logs to logs/
-node services/gateway/main.ts               # the game's u-lobby services alone (this was tools/net-server.ts)
-node services/gateway/main.ts --ghosts      # plus synthetic players in every channel
+node services/u-lobby/main.ts               # the game's u-lobby services alone (this was tools/net-server.ts)
+node services/u-lobby/main.ts --ghosts      # plus synthetic players in every channel
 ```
 
 On this machine they normally run as the fleet instead — `systemctl --user start
@@ -74,7 +74,7 @@ as well: strings, references, imports, callers, `--func`, `--dword`, `--bytes`.
 Those are Ubisoft's u-lobby services, and the numbers above are the ones they were first given here.
 **Since 14.08.2026 they are all `8080`** (SLICE §2.3): the client learns every one of them
 from the ini we serve, so which u-lobby service a connection wants is read off its first message
-(`services/gateway/u-lobby.ts`) rather than off the port. The names stay — the log still says
+(`services/u-lobby/classify.ts`) rather than off the port. The names stay — the log still says
 which u-lobby service — and the table above is the map of what speaks what.
 
 The four GS u-lobby services (router, its wait module, proxy, proxy's wait module) speak one

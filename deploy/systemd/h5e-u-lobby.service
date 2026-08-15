@@ -1,10 +1,12 @@
 [Unit]
-Description=h5e-lobby u-lobby tunnel — carries a game's own u-lobby sockets over one WebSocket
+Description=h5e-lobby u-lobby — the Ubisoft lobby the game itself connects to, door included
 Documentation=file:/opt/h5e-lobby/docs/ARCHITECTURE.md
-# The gateway and not the core: every stream this opens lands on the gateway's TCP port,
-# and a tunnel that is up before the u-lobby services are just refuses connections until they are.
-After=network-online.target h5e-gateway.service
-Wants=network-online.target h5e-gateway.service
+After=network-online.target h5e-core.service
+Wants=network-online.target
+# Wants, NOT Requires: the u-lobby is useful with the core away — the game logs in,
+# enters a channel and hosts, and two players in one channel still hear each other.
+# What it loses is history and the browser.
+Wants=h5e-core.service
 PartOf=h5e.target
 
 [Service]
@@ -21,7 +23,7 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectHome=yes
 ProtectSystem=strict
-ReadWritePaths=/opt/h5e-lobby/logs
+ReadWritePaths=/opt/h5e-lobby/data /opt/h5e-lobby/logs
 
 [Install]
 WantedBy=h5e.target

@@ -7,7 +7,7 @@
 // database on its way through, whoever typed it and wherever it came from.
 //
 // The text stored is the bare sentence, not the game's presentation wrapper
-// (`nick%colour%size%0%0%font%text`, see services/gateway/irc.ts). The wrapper is how one client
+// (`nick%colour%size%0%0%font%text`, see services/u-lobby/irc.ts). The wrapper is how one client
 // draws a line; it is not what was said, and a browser must not have to strip it.
 //
 // Exports:

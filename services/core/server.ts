@@ -43,7 +43,7 @@ export interface RunningCore {
 }
 
 /**
- * The addresses the core is allowed to bind. Everything that talks to it — the gateway,
+ * The addresses the core is allowed to bind. Everything that talks to it — the u-lobby,
  * the web, the relay — is on the same host by design (docs/ARCHITECTURE.md), so the list
  * is the loopback interface and nothing else. `0.0.0.0` is not on it, which is the point:
  * it is the value a well-meaning "make it reachable" edit reaches for first.

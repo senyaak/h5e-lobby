@@ -47,7 +47,7 @@ export interface PresenceEntry {
 }
 
 /**
- * A game somebody is hosting, as much of it as anyone outside the gateway needs.
+ * A game somebody is hosting, as much of it as anyone outside the u-lobby needs.
  *
  * The relay's one question is "which room is this agent in", and this is what answers it.
  * Nothing here is the game's own room record — no settings blob, no addresses, no map:
@@ -66,7 +66,7 @@ export interface RoomInfo {
    * The relay needs it to know which agent a datagram is FOR: an agent knows
    * only the address its game dialled, so somebody has to hold "that address is
    * this player", and the game itself says so in the room description
-   * (`roomEndpoints` in services/gateway/lobby.ts).
+   * (`roomEndpoints` in services/u-lobby/lobby.ts).
    *
    * Empty when the description has not been read — two players still work, by
    * the relay handing a datagram to the only other agent in the room.
@@ -102,7 +102,7 @@ export type ToCore =
   /** The whole of one service's view, sent whenever it changes. Simpler than deltas. */
   | { kind: 'presence.replace'; origin: Origin; entries: PresenceEntry[] }
   /**
-   * The same, for rooms: the gateway's whole list, whenever it is not what was sent last.
+   * The same, for rooms: the u-lobby's whole list, whenever it is not what was sent last.
    *
    * A list rather than "player X joined room Y" because rooms appear, fill, empty and
    * vanish on the client's own messages, and a missed delta would leave the core telling
@@ -127,7 +127,7 @@ export type ToCore =
    *
    * **There is no secret and nothing is issued.** An agent says where its game is —
    * the address and port the game itself plays on, which it takes from the socket it
-   * already has its hands on — and the core looks that up in the room list the gateway
+   * already has its hands on — and the core looks that up in the room list the u-lobby
    * sends it. The lobby is what says who may be let in; the connection carries no claim
    * of its own beyond an address the lobby either knows or does not.
    *

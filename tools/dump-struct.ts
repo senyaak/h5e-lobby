@@ -1,5 +1,5 @@
 // What is inside a blob the game wrote — a CStructureSaver document, printed as
-// a tree (services/gateway/structure.ts).
+// a tree (services/u-lobby/structure.ts).
 //
 // Exploratory: it prints, it asserts nothing. Give it a captured message and it
 // dumps the GS list with every blob inside it decoded, or give it raw hex and it
@@ -9,9 +9,9 @@
 //   node tools/dump-struct.ts --hex 0208ffffffff
 
 import { readFileSync } from 'node:fs';
-import { parse } from '../services/gateway/gs-message.ts';
-import type { GSValue } from '../services/gateway/gs-data.ts';
-import { looksLikeFields, readFields } from '../services/gateway/structure.ts';
+import { parse } from '../services/u-lobby/gs-message.ts';
+import type { GSValue } from '../services/u-lobby/gs-data.ts';
+import { looksLikeFields, readFields } from '../services/u-lobby/structure.ts';
 
 function hexOf(path: string): Buffer {
   return Buffer.from(

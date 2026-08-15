@@ -21,7 +21,7 @@ import { ChatStore } from '../services/core/chat.ts';
 import type { ChannelInfo, ChatMessage, PresenceEntry } from '../shared/core-protocol.ts';
 import { startWeb } from '../services/web/web-service.ts';
 import { startRelay } from '../services/relay/relay-service.ts';
-import { IrcConnection, chatLine, frame, fromGameText, parseChatLine, toGameText } from '../services/gateway/irc.ts';
+import { IrcConnection, chatLine, frame, fromGameText, parseChatLine, toGameText } from '../services/u-lobby/irc.ts';
 import { gameChannels, lobbyChannel } from '../shared/channels.ts';
 
 /**
@@ -155,15 +155,15 @@ console.log('\nthe core stays on loopback');
   check('loopback by another name is allowed', !(await refused('::1')));
 }
 
-// The gateway's side of the wire, which is a CoreClient and nothing else — the same
-// object services/gateway/main.ts holds.
+// The u-lobby's side of the wire, which is a CoreClient and nothing else — the same
+// object services/u-lobby/main.ts holds.
 const heard: { message: ChatMessage; sender?: string }[] = [];
 let presenceSeen: PresenceEntry[] = [];
-const gateway = new CoreClient({ url: core.url(), service: 'gateway' });
-gateway.onChat = (message, sender) => heard.push(sender === undefined ? { message } : { message, sender });
-gateway.onPresence = (entries) => (presenceSeen = entries);
-gateway.start();
-check('the gateway reaches the core', await until(() => gateway.connected));
+const uLobby = new CoreClient({ url: core.url(), service: 'u-lobby' });
+uLobby.onChat = (message, sender) => heard.push(sender === undefined ? { message } : { message, sender });
+uLobby.onPresence = (entries) => (presenceSeen = entries);
+uLobby.start();
+check('the u-lobby reaches the core', await until(() => uLobby.connected));
 
 const web = await startWeb({ bind: '127.0.0.1', port: 0, coreUrl: core.url() });
 const pageUrl = `http://127.0.0.1:${web.port()}`;
@@ -260,28 +260,28 @@ check(
 );
 
 // Game -> browser.
-gateway.post({ channel: RANKED, nick: 'Player', text: 'anyone for a duel?', origin: 'game', sender: 'gateway-1' });
+uLobby.post({ channel: RANKED, nick: 'Player', text: 'anyone for a duel?', origin: 'game', sender: 'u-lobby-1' });
 check('a line said in the game reaches the browser', await until(() => senya.of('message').length > 0));
 const fromGame = senya.of('message')[0]?.['message'] as ChatMessage | undefined;
 check('with its text and its origin', fromGame?.text === 'anyone for a duel?' && fromGame?.origin === 'game', JSON.stringify(fromGame));
 check(
-  'and the gateway hears its own line back, marked as its own',
-  await until(() => heard.some((one) => one.sender === 'gateway-1')),
+  'and the u-lobby hears its own line back, marked as its own',
+  await until(() => heard.some((one) => one.sender === 'u-lobby-1')),
   JSON.stringify(heard.map((one) => one.sender)),
 );
 
 // Browser -> game.
 senya.say({ kind: 'say', text: 'I am in the browser' });
-check('a line typed in the browser reaches the gateway', await until(() => heard.some((one) => one.message.origin === 'web')));
+check('a line typed in the browser reaches the u-lobby', await until(() => heard.some((one) => one.message.origin === 'web')));
 const fromWeb = heard.find((one) => one.message.origin === 'web');
 check('with the browser nick on it', fromWeb?.message.nick === 'Senyaak', JSON.stringify(fromWeb?.message));
-check('and no sender, so the gateway knows to draw it', fromWeb?.sender === undefined, String(fromWeb?.sender));
+check('and no sender, so the u-lobby knows to draw it', fromWeb?.sender === undefined, String(fromWeb?.sender));
 
 // Presence, both ways.
-gateway.replacePresence('game', [{ nick: 'Player', channel: RANKED, origin: 'game' }]);
+uLobby.replacePresence('game', [{ nick: 'Player', channel: RANKED, origin: 'game' }]);
 check('the browser is told who is in the game', await until(() => senya.of('presence').some((p) => JSON.stringify(p).includes('Player'))));
 check(
-  'and the gateway is told who is in the browser',
+  'and the u-lobby is told who is in the browser',
   await until(() => presenceSeen.some((entry) => entry.nick === 'Senyaak' && entry.origin === 'web')),
   JSON.stringify(presenceSeen),
 );
@@ -397,7 +397,7 @@ console.log('\nthe relay');
 // Nothing is enrolled and nothing is issued. An agent says where its game plays and the
 // room list is what turns that into a player — so these are the rooms first, and the
 // agents afterwards know nothing but their own address and port.
-gateway.replaceRooms([
+uLobby.replaceRooms([
   {
     id: 7,
     name: 'a duel',
@@ -529,7 +529,7 @@ const unreadable = await openAgentOn(relay.port(), '192.168.178.27', 8891);
 check('a player in a room with no endpoints cannot be admitted at all', await until(() => unreadable.closed()));
 
 // And when the game ends, the room goes — the next connection has nothing to join.
-gateway.replaceRooms([
+uLobby.replaceRooms([
   {
     id: 9,
     name: 'somewhere else',
@@ -623,7 +623,7 @@ console.log('\nthree in a room, each datagram to the one it names');
   const stampOf = (bytes: Buffer): string =>
     `${bytes[1]}.${bytes[2]}.${bytes[3]}.${bytes[4]}:${bytes.readUInt16BE(5)}`;
 
-  gateway.replaceRooms([
+  uLobby.replaceRooms([
     {
       id: 12,
       name: 'three of us',
@@ -683,7 +683,7 @@ console.log('\nthe relay with the core away');
   // progress must not notice. Its own core and its own relay, because this one is going
   // to be killed — with its connections cut, or "away" would mean "still answering".
   const spare = await startCore({ bind: '127.0.0.1', port: 0, db, channels: CHANNELS });
-  const feed = new CoreClient({ url: spare.url(), service: 'gateway' });
+  const feed = new CoreClient({ url: spare.url(), service: 'u-lobby' });
   feed.start();
   await until(() => feed.connected);
   feed.replaceRooms([
@@ -764,7 +764,7 @@ console.log('\nthe chat line, in and out of the game s wrapper');
   );
   check('and says what was typed', sent.toString('utf8') === fromBrowser, sent.toString('utf8'));
 
-  // What the gateway watches for: an IRC connection that says what was said and where.
+  // What the u-lobby watches for: an IRC connection that says what was said and where.
   const connection = new IrcConnection();
   connection.receive(frame('NICK Senyaak'));
   const joined = connection.receive(frame(`JOIN :${RANKED}`));
@@ -785,7 +785,7 @@ agentA.close();
 agentB.close();
 agentC.close();
 stranger.close();
-gateway.stop();
+uLobby.stop();
 await relay.close();
 await web.close();
 await core.close();

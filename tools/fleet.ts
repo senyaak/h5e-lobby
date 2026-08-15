@@ -1,13 +1,13 @@
 // All four services at once, for a machine that has no systemd — which is to say, for
 // this one.
 //
-//   node tools/fleet.ts [gateway flags…]
+//   node tools/fleet.ts [u-lobby flags…]
 //
 // On the Linux host the units in deploy/systemd do this properly: one unit per service,
 // restarted on failure, started in the order their dependencies want. Here it is one
 // parent that spawns four children, prefixes their output so a single console reads like
 // four logs, and takes them all down together. Anything after the command line goes to
-// the gateway, which is the only one with flags worth typing (--ghosts, --quiet-bot…).
+// the u-lobby, which is the only one with flags worth typing (--ghosts, --quiet-bot…).
 //
 // Each service still writes its own file in logs/ — this only makes them visible at once.
 
@@ -22,14 +22,13 @@ interface Unit {
   args?: string[];
 }
 
-const gatewayFlags = process.argv.slice(2);
+const uLobbyFlags = process.argv.slice(2);
 
 const FLEET: Unit[] = [
   { name: 'core   ', script: 'services/core/main.ts', colour: '\u001b[33m' },
-  { name: 'gateway', script: 'services/gateway/main.ts', colour: '\u001b[36m', args: gatewayFlags },
+  { name: 'u-lobby', script: 'services/u-lobby/main.ts', colour: '\u001b[36m', args: uLobbyFlags },
   { name: 'web    ', script: 'services/web/main.ts', colour: '\u001b[32m' },
   { name: 'relay  ', script: 'services/relay/main.ts', colour: '\u001b[35m' },
-  { name: 'u-lobby services  ', script: 'services/u-lobby/main.ts', colour: '\u001b[34m' },
 ];
 
 const RESET = '\u001b[0m';

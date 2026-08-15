@@ -20,7 +20,7 @@ service at this machine.
 | | what it is | where |
 |---|---|---|
 | **core** | accounts, ladder, friends, presence, chat and its history | `services/core/main.ts`, loopback `40100` |
-| **gateway** | the u-lobby the game itself connects to | `services/gateway/main.ts`, `8080` + the game's ports |
+| **u-lobby** | the Ubisoft lobby the game itself connects to — and, at `/u-lobby` on the same port, the door a tunnelled game carries its sockets through | `services/u-lobby/main.ts`, `8080` in TCP and UDP |
 | **web** | the browser lobby | `services/web/main.ts`, `8081` |
 | **relay** | game datagrams between agents | `services/relay/main.ts`, `40200` |
 
@@ -30,19 +30,19 @@ crosses between them:
 
 ```
 services/core/      main.ts server.ts core-service.ts chat.ts  rules/{accounts,ladder,friends,profiles,database}.ts
-services/gateway/   main.ts router-service.ts lobby.ts irc.ts gs-*.ts srp.ts blowfish.ts nat-service.ts …
+services/u-lobby/   main.ts classify.ts tunnel.ts router-service.ts lobby.ts irc.ts gs-*.ts srp.ts blowfish.ts nat-service.ts …
 services/web/       main.ts web-service.ts index.html
 services/relay/     main.ts relay-service.ts
 shared/             config.ts log.ts websocket.ts core-protocol.ts core-client.ts channels.ts
 ```
 
 The core is the only one that touches the database, except for the game handlers that still
-reach it directly — the gateway importing `../core/rules/` is that seam, left visible on
+reach it directly — the u-lobby importing `../core/rules/` is that seam, left visible on
 purpose and named in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ```bash
 npm start                             # all four, output prefixed, logs to logs/<service>-latest.log
-npm run gateway                       # just the game side (--ghosts, --quiet-bot, --probe-… as before)
+npm run u-lobby                       # just the game side (--ghosts, --quiet-bot, --probe-… as before)
 npm test                              # 300+ checks: the protocol, and the services against each other
 npm run typecheck
 node tools/net-decode.ts --file dump.txt   # a hex dump from the log, back into a message
@@ -69,7 +69,7 @@ a password is set in one place only. A name the game has never seen is told exac
   `net/multiplayer`): `docs/NETWORK.md` for how the exe finds its services,
   `native/net/ubi-log.c` for the detour that makes the client narrate what it is
   doing, `tools/net-probe.ts` for the disassembly. That is the split — the editor
-  does things *to* the game, this repo only listens. Comments in `services/gateway/`
+  does things *to* the game, this repo only listens. Comments in `services/u-lobby/`
   that point at `docs/NETWORK.md` mean that one.
 
 A player logs in with any name and the first login CREATES his account, with the

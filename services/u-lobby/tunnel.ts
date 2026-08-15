@@ -1,4 +1,4 @@
-// The u-lobby tunnel — the game's own sockets, carried over one WebSocket.
+// The u-lobby's own door for a tunnelled game — its sockets, carried over one WebSocket.
 //
 // WHY THIS EXISTS. A tunnel of the cloudflared family carries HTTP and WebSocket and
 // nothing else. The game speaks HTTP to us exactly once, for its server list, and raw TCP
@@ -7,13 +7,14 @@
 // of design earlier in this project: the mod inside the game holds the socket and carries
 // its bytes out over an outbound WebSocket. This is that trick applied to the other half.
 //
-// WHAT IT IS NOT. It is not a change to the gateway, and it must never become one. The
-// gateway accepts ordinary sockets and works out which u-lobby service a connection is from the bytes
-// it sends first (`services/gateway/u-lobby.ts`) — so a tunnelled connection is given to it as
-// an ordinary socket, opened here on the loopback. The gateway cannot tell the difference
-// and is not told. That is also what keeps the two halves separable: the u-lobby services know nothing
-// about the tunnel, and the tunnel knows nothing about the u-lobby services beyond the port they are
-// on.
+// A DOOR AND NOT A SERVICE. This was a process of its own for a day, on a port of its
+// own — which was §2.3 walked backwards: the u-lobby's whole shape is one port whose
+// connections say what they are in their first bytes, and a WebSocket upgrade IS a first
+// thing a connection can say. Unlike the relay it has no life of the u-lobby's own to
+// live — the u-lobby down means there is nothing to carry to — so it answers upgrades on
+// the u-lobby's one HTTP server, in the u-lobby's process. What it carries still lands as
+// ordinary loopback connections: the classifier reads them like any dialled socket, and a
+// carried stream and a dialled one stay indistinguishable on purpose.
 //
 // THE PROTOCOL, one byte of type and then the rest:
 //
@@ -35,27 +36,29 @@
 // datagram socket of its own here.
 //
 // Exports:
-//   startULobbyTunnel(options) -> RunningULobbyTunnel
+//   carryULobby(options) -> ULobbyCarry
 
-import { createServer } from 'node:http';
+import type { Server } from 'node:http';
 import { createConnection, type Socket } from 'node:net';
 import { createSocket, type Socket as UdpSocket } from 'node:dgram';
 import { serveWebSocket, type WebSocketPeer } from '../../shared/websocket.ts';
 
-export interface ULobbyTunnelOptions {
-  bind: string;
-  port: number;
-  /** Where the u-lobby actually is. The loopback, because they are on this host with us. */
-  gatewayHost: string;
-  gatewayPort: number;
+export interface ULobbyCarryOptions {
+  /** Whose upgrades to answer — the u-lobby's own HTTP personality. */
+  server: Server;
+  /**
+   * Where carried bytes land: the u-lobby's one port, on the loopback — they are in this
+   * process with us, and the advertised address is bound to nothing.
+   */
+  target: { host: string; port: number };
   log?: (line: string) => void;
 }
 
-export interface RunningULobbyTunnel {
-  port(): number;
+export interface ULobbyCarry {
   /** How many clients are carrying their u-lobby through here — for `/health` and the tests. */
   clients(): number;
-  close(): Promise<void>;
+  /** Let go of every carried client. The server itself is the caller's to close. */
+  close(): void;
 }
 
 const FRAME_DATA = 0x01;
@@ -74,23 +77,19 @@ function frame(type: number, id: number, payload?: Buffer): Buffer {
   return out;
 }
 
-export function startULobbyTunnel(options: ULobbyTunnelOptions): Promise<RunningULobbyTunnel> {
+export function carryULobby(options: ULobbyCarryOptions): ULobbyCarry {
   const log = options.log ?? ((): void => {});
   const peers = new Set<WebSocketPeer>();
   let clients = 0;
 
-  const server = createServer((request, response) => {
-    if (request.url === '/health') {
-      const body = JSON.stringify({ ok: true, clients });
-      response.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) });
-      response.end(body);
+  serveWebSocket(options.server, (peer) => {
+    // An upgrade is classified the way every connection here is — by what it asks for.
+    // `/u-lobby` is the one thing that can be carried; anything else is a caller lost.
+    if (peer.url !== '/u-lobby') {
+      log(`u-lobby carry refused an upgrade to ${peer.url} — only /u-lobby is a door`);
+      peer.close();
       return;
     }
-    response.writeHead(404, { 'Content-Type': 'text/plain' });
-    response.end('the u-lobby tunnel speaks WebSocket at /u-lobby\n');
-  });
-
-  serveWebSocket(server, (peer) => {
     peers.add(peer);
     clients++;
     const who = `${peer.remoteAddress}#${clients}`;
@@ -104,7 +103,7 @@ export function startULobbyTunnel(options: ULobbyTunnelOptions): Promise<Running
      *
      * Never one for the service and never even one for the connection: the u-lobby services answer
      * the address a datagram came from, and the NAT mirror keeps a conversation per
-     * address (`services/gateway/nat-service.ts`). One socket for everybody would merge
+     * address (`services/u-lobby/nat-service.ts`). One socket for everybody would merge
      * every player's mirror into one; one socket per connection would merge the two u-lobby services
      * a single player asks from two sockets of his own.
      */
@@ -125,7 +124,7 @@ export function startULobbyTunnel(options: ULobbyTunnelOptions): Promise<Running
       if (existing) return existing;
       // Writes made before the connection is up are queued by Node, which is what lets a
       // client open a stream and send its first message without a round trip.
-      const socket = createConnection({ host: options.gatewayHost, port: options.gatewayPort });
+      const socket = createConnection({ host: options.target.host, port: options.target.port });
       socket.setNoDelay(true);
       socket.on('data', (data: Buffer) => peer.send(frame(FRAME_DATA, id, data)));
       socket.on('error', (error: Error) => log(`u-lobby ${who} stream ${id} error: ${error.message}`));
@@ -147,7 +146,7 @@ export function startULobbyTunnel(options: ULobbyTunnelOptions): Promise<Running
       const id = bytes.readUInt16BE(1);
 
       if (type === FRAME_DATAGRAM) {
-        datagrams(id).send(bytes.subarray(HEADER), options.gatewayPort, options.gatewayHost);
+        datagrams(id).send(bytes.subarray(HEADER), options.target.port, options.target.host);
         return;
       }
       if (type === FRAME_OPEN) {
@@ -181,23 +180,13 @@ export function startULobbyTunnel(options: ULobbyTunnelOptions): Promise<Running
     });
   });
 
-  return new Promise((resolve, reject) => {
-    server.on('error', reject);
-    server.listen(options.port, options.bind, () => {
-      const address = server.address();
-      const port = typeof address === 'object' && address ? address.port : options.port;
-      resolve({
-        port: () => port,
-        clients: () => clients,
-        close: () =>
-          new Promise((done) => {
-            // Every connection, not only the ones with streams open: a client that has said
-            // nothing still holds a socket, and a close that waits for it never returns.
-            for (const peer of peers) peer.close();
-            peers.clear();
-            server.close(() => done());
-          }),
-      });
-    });
-  });
+  return {
+    clients: () => clients,
+    close: () => {
+      // Every connection, not only the ones with streams open: a client that has said
+      // nothing still holds a socket, and a server close that waits for it never returns.
+      for (const peer of peers) peer.close();
+      peers.clear();
+    },
+  };
 }

@@ -6,7 +6,7 @@
 // between our own processes and has nothing to prove.
 //
 // It reconnects. The core is allowed to restart — that is the point of the split — so a
-// gateway that gave up on the first refused connection would turn a five-second core
+// u-lobby that gave up on the first refused connection would turn a five-second core
 // restart into a chat that never came back. Lines said while it is away are held, up to a
 // bounded number, and go out when it returns; a request that wants an answer fails at
 // once instead, because an answer that arrives a minute late is not an answer.
@@ -182,7 +182,7 @@ export class CoreClient {
     this.tell({ kind: 'presence.replace', origin, entries });
   }
 
-  /** The gateway's whole room list, sent when it is not what was sent last. */
+  /** The u-lobby's whole room list, sent when it is not what was sent last. */
   replaceRooms(rooms: RoomInfo[]): void {
     this.tell({ kind: 'rooms.replace', rooms });
   }
@@ -214,7 +214,7 @@ export class CoreClient {
    * Who is playing at this endpoint, and where — or null, which means "do not let him in".
    *
    * The relay's only question. There is no credential in it: the endpoint is checked
-   * against the rooms the gateway reports, so the lobby is what admits an agent.
+   * against the rooms the u-lobby reports, so the lobby is what admits an agent.
    */
   async identifyAgent(address: string, port: number): Promise<{ nick: string; room: string; roster: PeerEndpoint[] } | null> {
     const reply = await this.ask((id) => ({ kind: 'agent.identify', id, address, port }));

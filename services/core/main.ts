@@ -3,10 +3,10 @@
 //   node services/core/main.ts
 //
 // It owns the database and answers the other three over one WebSocket on loopback. It
-// speaks nothing of the game's protocol and never will: that is the gateway's job, and
+// speaks nothing of the game's protocol and never will: that is the u-lobby's job, and
 // keeping it out of here is what lets the web reach any of this at all.
 //
-// Restarting it is meant to be dull. The gateway reconnects, the web reconnects, and a
+// Restarting it is meant to be dull. The u-lobby reconnects, the web reconnects, and a
 // game already in progress does not notice — nothing in a running match passes through
 // here (docs/ARCHITECTURE.md, "Why the relay is not in the middle").
 

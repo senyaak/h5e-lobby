@@ -23,11 +23,11 @@ import { Flags, HEADER_SIZE, buildSegment, parseSegment, flagNames, type SrpConn
  *
  * Two files have to agree on this number: the mirror is bound with it, and `lobby.ts`
  * writes it into the room description as the address others are told to dial. It is not a
- * constant because the gateway's port is configurable (`H5E_HTTP_PORT`, `--http`), and a
+ * constant because the u-lobby's port is configurable (`H5E_HTTP_PORT`, `--http`), and a
  * constant would go stale the moment either moved — which is a mismatch nobody sees until
  * a game fails to connect.
  *
- * Set once, at startup, by whoever binds the socket; the default is the one the gateway
+ * Set once, at startup, by whoever binds the socket; the default is the one the u-lobby
  * takes when nothing is configured, so a test that imports this needs no setting up.
  */
 let mirror = 8080;

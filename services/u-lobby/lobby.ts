@@ -300,7 +300,7 @@ export class Rooms {
     return name ? [...this.rooms.values()].filter((room) => room.members.includes(name)) : [];
   }
 
-  /** Every open room. The gateway tells the core about these, so the relay can be asked. */
+  /** Every open room. The u-lobby tells the core about these, so the relay can be asked. */
   all(): Room[] {
     return [...this.rooms.values()];
   }

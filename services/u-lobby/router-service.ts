@@ -569,7 +569,7 @@ export class RouterSession {
       return { replies: [], where: `on ${this.username}'s router connection` };
     }
     // 'Router' and not 'RouterLauncher': the wait module now shares the router's own
-    // port, so there is one u-lobby service of that name (SLICE §2.3, services/gateway/main.ts).
+    // port, so there is one u-lobby service of that name (SLICE §2.3, services/u-lobby/main.ts).
     const onRouter = this.services.get('Router');
     if (!onRouter) return { replies: [bytes], where: 'here, with no router connection open' };
     onRouter(bytes);
@@ -763,7 +763,7 @@ export class RouterSession {
       case MessageType.JOINWAITMODULE: {
         // A decimal u32 in HOST order. Both other forms were tried and watched:
         // dotted sent the client to 0.0.0.127, and inet_addr's number sent it to
-        // 1.0.0.127. See services/gateway/address.ts.
+        // 1.0.0.127. See services/u-lobby/address.ts.
         const where = hostU32String(this.waitModule.address);
         // The proxy's own hand-off carries the user and spells the port out;
         // the router's carries four raw bytes. Both come from the client.

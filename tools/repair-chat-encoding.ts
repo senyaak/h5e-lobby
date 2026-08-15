@@ -1,10 +1,10 @@
 // A one-time repair of the chat history the codepage bug left behind.
 //
-// Until 15.08.2026 the gateway read the game's chat as windows-1251. The game speaks
+// Until 15.08.2026 the u-lobby read the game's chat as windows-1251. The game speaks
 // UTF-8, so every Cyrillic line typed in the game was stored as mojibake — `вошёл в игру`
 // went in as `РІРѕС€РµР»`. Nobody saw it, because writing it back out under the same wrong
 // codepage produced the original bytes again; only the browser lobby, which reads the
-// database directly, ever showed the damage. With the gateway fixed the two errors no
+// database directly, ever showed the damage. With the u-lobby fixed the two errors no
 // longer cancel, so what is stored has to be made true.
 //
 // WHICH ROWS. Not "the ones from the game" — origin is not proof, and a row repaired twice

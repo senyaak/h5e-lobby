@@ -3,7 +3,7 @@
 // The game knows a channel as a lobby with a number; the browser knows it by name; the
 // chat knows it as an IRC channel. Two of the four services need all three of those, so
 // the list lives here rather than inside either of them — the core must not import the
-// game's protocol, and the gateway must not be told what a channel is by the web.
+// game's protocol, and the u-lobby must not be told what a channel is by the web.
 //
 // Exports:
 //   Lobby, GameMode, DEFAULT_LOBBIES   what we offer

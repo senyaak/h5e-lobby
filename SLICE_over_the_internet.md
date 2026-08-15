@@ -1,5 +1,16 @@
 # SLICE — The lobby off this machine, and then onto the internet
 
+> **Status, 16.08.2026: THE TUNNEL ENDPOINT IS A DOOR, NOT A SERVICE — and the gateway
+> is now named what it always was.** The fifth service on `40300` lived one day: it was
+> §2.3 walked backwards, a port deciding what a connection is, for a thing with no life
+> of its own to live — the u-lobby down means nothing to carry to. The `/u-lobby`
+> WebSocket is now answered on the u-lobby's own `8080` by the same process
+> (`services/u-lobby/tunnel.ts`), and what it carries still lands as loopback
+> connections the classifier reads like anything the game dialled. With that,
+> `services/gateway` is renamed `services/u-lobby`: the unit is `h5e-u-lobby`, the log
+> `logs/u-lobby-latest.log`, the fleet is four again, and the tunnel's u-lobby ingress
+> points at `8080`. The game side needs no change — the mod dials the URL it is given.
+>
 > **Status, 15.08.2026, later the same day: A GAME HAS NOW PLAYED WITH BOTH HALVES
 > THROUGH THE TUNNEL, and nothing was dialled directly.** Two copies, each with the
 > mod's u-lobby half on its own loopback port (8080 and 8081), reached the lobby
@@ -63,7 +74,7 @@
 
 Reading first: [deploy/README.md](deploy/README.md) (how the fleet installs),
 [shared/config.ts](shared/config.ts) (where every address comes from),
-[services/gateway/main.ts:40-106](services/gateway/main.ts) (the server list the game
+[services/u-lobby/main.ts:40-106](services/u-lobby/main.ts) (the server list the game
 is handed, and the one host inside it), and — in the editor repo, branch
 `net/multiplayer` — `native/net/relay.c` (how the agent dials) and `docs/NETWORK.md`
 (how the game is redirected at all).
@@ -120,9 +131,9 @@ So there are two transports and they get two different answers:
 
 | what | how it gets out |
 |---|---|
-| relay (`40200`), browser lobby (`8081`), u-lobby tunnel (`40300`) | tunnel, `wss://` and `https://` |
+| relay (`40200`), browser lobby (`8081`), the u-lobby's door (`/u-lobby` on `8080`) | tunnel, `wss://` and `https://` |
 | everything the game itself dials, WITHOUT the mod's lobby half | a routable address: port forwarding, a VPS, or a private network |
-| the same, WITH it | the mod's own `wss://` to `services/u-lobby`, and nothing to open |
+| the same, WITH it | the mod's own `wss://` to the u-lobby's door, and nothing to open |
 
 How many ports that second row costs is a separate question with a good answer — one
 number since §2.3, `8080` in both protocols, and the ten u-lobby services below are ten protocols now
@@ -169,7 +180,7 @@ sabotage-check it: hand the core a LAN address and the check must go red. A test
 can only confirm is a test that would pass on a typo.
 
 While in there: the gateway logs `start the game with http_proxy=http://127.0.0.1:8080`
-no matter what host it was given (`services/gateway/main.ts:94`). It should print the
+no matter what host it was given (`services/u-lobby/main.ts:94`). It should print the
 address it is actually advertising — that line is what gets copied into the bat file.
 
 **How it came out.** `H5E_BIND` (default `0.0.0.0`) is what the gateway, the web and the
@@ -228,7 +239,7 @@ The number of U-LOBBY SERVICES is Ubisoft's — their lobby is split up and the 
 part separately. The port NUMBERS are ours: the client learns every one of them from
 the ini we serve, from the wait-module reply, from `PROXY_HANDLER` and from the
 join-lobby hand-off, all four of which read the endpoints wired at
-`services/gateway/main.ts:100-106`. Nothing in the client or in our code compares them
+`services/u-lobby/main.ts:100-106`. Nothing in the client or in our code compares them
 or assumes they differ. So a host that must open one port can have one port.
 
 What is in use, measured on the three-player run (`logs/gateway-latest.log`):
@@ -315,7 +326,7 @@ could actually mean here — the whole product on one number, plus the same numb
 **How it came out.** All five steps, in that order, one commit each. Fifteen sockets are
 two, and both are **`8080`**: TCP carries the ini, the router, the proxy, the lobby and
 chat; UDP carries the mirror and the CD-key window. The classifier is
-`services/gateway/u-lobby.ts`, driven in `tools/test-net.ts` by the KEY_EXCHANGE the client
+`services/u-lobby/classify.ts`, driven in `tools/test-net.ts` by the KEY_EXCHANGE the client
 really sent, a real wrapped IRC line, the recorded SRP SYN and FIN, and the halves of the
 first two; live, a key exchange in one write and in two, a NICK, a CD-key challenge and a
 SYN all landed at the right u-lobby service.
@@ -512,7 +523,7 @@ another pair's datagrams mixed in.
    refused — and a refusal looks exactly like a lobby that is quiet: the games fall
    back to talking directly, play perfectly, and prove nothing.
 3. **Substitute in the one place that builds the room description** (`infoOut` →
-   `probeEndpoints`, `services/gateway/lobby.ts`), the same substitution for every
+   `probeEndpoints`, `services/u-lobby/lobby.ts`), the same substitution for every
    recipient, on the way out and never in what is stored — the host resends his
    settings several times a second and the join button depends on telling a real change
    from a repeat.
@@ -568,7 +579,7 @@ already in both logs.
 ## 7. Small things to fix while passing through
 
 - ~~`docs/NETWORK_STATE.md` still tells the reader to run `node tools/net-server.ts`~~ —
-  fixed 14.08.2026; it names `services/gateway/main.ts` and the fleet target.
+  fixed 14.08.2026; it names `services/u-lobby/main.ts` and the fleet target.
 - ~~`deploy/README.md`'s health checks are written against `localhost`~~ — fixed
   14.08.2026; they say "from on the host", with the two public URLs beside them.
 - `startCore` now rejects instead of dying when it cannot have its socket. The other

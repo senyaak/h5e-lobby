@@ -12,7 +12,7 @@ own server, including behind CGNAT, and can find each other without keeping the 
 | | owns | talks to | must NOT |
 |---|---|---|---|
 | **core** | accounts, profiles, ladder, friends, presence, chat — and the rules over them | nobody; it is asked | speak the game's protocol |
-| **game gateway** | the GS u-lobby services: router, lobby, NAT, CD-key, IRC; the room settings blob | core | hold state of its own |
+| **u-lobby** | the GS u-lobby services: router, lobby, NAT, CD-key, IRC; the room settings blob | core | hold state of its own |
 | **web** | the browser UI and its API | core | reach the database |
 | **relay** | moving game datagrams between agents | core, **once per connection** | need anything at runtime |
 
@@ -33,7 +33,7 @@ than something written down:
 ```
 services/core/      main.ts server.ts core-service.ts chat.ts
                     rules/{accounts,ladder,friends,profiles,database}.ts
-services/gateway/   main.ts router-service.ts lobby.ts irc.ts gs-{data,message,xor}.ts
+services/u-lobby/   main.ts router-service.ts lobby.ts irc.ts gs-{data,message,xor}.ts
                     srp.ts blowfish{,-tables}.ts nat-service.ts cdkey-service.ts pkc.ts
                     address.ts structure.ts rules-wire.ts
 services/web/       main.ts web-service.ts index.html
@@ -43,7 +43,7 @@ shared/             config.ts log.ts websocket.ts core-protocol.ts core-client.t
 
 Two of those need saying. `shared/channels.ts` holds the three lobbies and the
 `#LobbyGrp<server>.<group>` name because the core publishes that list to the browser and
-the gateway serves it to the game — neither may own it. `services/gateway/rules-wire.ts`
+the u-lobby serves it to the game — neither may own it. `services/u-lobby/rules-wire.ts`
 holds `ladderPayload`, `matchResult` and `friendUpdate`: they are the client's shapes, so
 they sit on the protocol side, and with them gone `services/core/rules/` imports nothing
 of the game at all — which is what this document had been claiming while `ladder.ts` still
@@ -62,15 +62,15 @@ nothing is paid for it: the seam is still visible, `ladder.ts` / `accounts.ts` /
 `friends.ts` / `lobby.ts` hold rules and know nothing about the protocol, and
 `router-service.ts` holds protocol and no rules.
 
-**Chat is not fanned out by the core alone.** The gateway still delivers a player's line to
+**Chat is not fanned out by the core alone.** The u-lobby still delivers a player's line to
 the other game clients on its own process, and posts the same line to the core for storing
 and for the browser. So two players in one channel keep talking with the core stopped;
 what they lose is the history and the browser. The core's echo carries the id of the
-gateway that sent it, which is how the gateway knows not to draw its own line twice.
+u-lobby that sent it, which is how the u-lobby knows not to draw its own line twice.
 
 **The wire is a codepage, not UTF-8.** The game's IRC is one byte per character in the
-client's Windows ANSI page (1251 here), so the gateway converts at its own edge —
-`fromGameText` / `toGameText` in `services/gateway/irc.ts`. Read as latin1 and stored, a Russian
+client's Windows ANSI page (1251 here), so the u-lobby converts at its own edge —
+`fromGameText` / `toGameText` in `services/u-lobby/irc.ts`. Read as latin1 and stored, a Russian
 sentence becomes `:B>-=81C4L` and is lost; that is what the first live run did.
 
 ## Why the relay is not in the middle
@@ -120,7 +120,7 @@ endpoints, which its NAT service already observes, and the relay's address.
 
 An agent opens with seven bytes saying where its game plays — the address and port it
 takes off the socket it already has its hands on. The relay asks the core that one
-question, and the core answers it out of the room list the gateway sends: somebody is
+question, and the core answers it out of the room list the u-lobby sends: somebody is
 playing at that endpoint, or nobody is. No secret, no ticket, no file to distribute, and
 nothing on disk. A player becomes admissible by joining a game and stops being admissible
 when the game ends, which is exactly the lifetime that was wanted.
@@ -139,7 +139,7 @@ Two consequences worth having in front of you:
   tested against captured bytes, which is what makes that acceptable.
 - **Two players who declare the same address AND port cannot be told apart**, and are
   refused rather than guessed at. The port separates two behind one NAT; two colliding on
-  both is a hole the core cannot close, and the fix belongs in the gateway — an endpoint of
+  both is a hole the core cannot close, and the fix belongs in the u-lobby — an endpoint of
   its own per player in the room description (`SLICE_over_the_internet.md` §4.2).
 
 **The agent is C, inside the game** — a module of the existing native extension
@@ -250,7 +250,7 @@ Nothing that matters is compiled in.
 
 On a machine without systemd, `npm start` runs `tools/fleet.ts`, which spawns the same four
 and prefixes their output. Each service also writes `logs/<service>-latest.log`; the
-gateway keeps writing `logs/latest.log` as well, because that is the file that gets tailed.
+u-lobby keeps writing `logs/latest.log` as well, because that is the file that gets tailed.
 
 ## What to build first
 
@@ -265,9 +265,9 @@ gateway keeps writing `logs/latest.log` as well, because that is the file that g
    to be seen from inside the game.
 2. **The agent and the relay, locally**: three copies of the game, three agents, one
    relay, everything on `127.0.0.1`, no tunnel and no 443. In order:
-   - ~~**the lobby's half, which needs no game**~~ — **done 14.08.2026.** The gateway
+   - ~~**the lobby's half, which needs no game**~~ — **done 14.08.2026.** The u-lobby
      sends the core its whole room list whenever it changes (`rooms.replace`, on the event
-     and not on a clock — `services/gateway/state-feed.ts`), and the core answers the
+     and not on a clock — `services/u-lobby/state-feed.ts`), and the core answers the
      relay's one question out of that list alone: an agent says where its game plays, and
      somebody is playing there or nobody is. An endpoint in no room is refused, and so is
      one whose game has ended.

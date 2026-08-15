@@ -903,6 +903,70 @@ console.log('\nHosting a game, from the CREATE_ROOM the player really sent');
   check('and closing again drops nothing', lobby.close() === null);
 }
 
+console.log('\nA game that is gone leaves EVERY list, not only the host’s own');
+{
+  // The host was always told; nobody else was. His list dropped the game and theirs kept
+  // it, because the channel's GROUP_INFO is merged into what the client is drawing rather
+  // than replacing it — an absent game stays on screen. So every way a room can disappear
+  // is checked from the OTHER player's socket, which is where the bug was.
+  const service = new RouterService(
+    { address: '127.0.0.1', port: 40001 },
+    { address: '127.0.0.1', port: 40030 },
+    { address: '127.0.0.1', port: 40031 },
+    { address: '127.0.0.1', port: 40040 },
+    join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-net.db'),
+  );
+  const lobbyMsg = (body: GSValue[]): Buffer =>
+    build({ property: Property.GS, priority: 0, type: MessageType.LOBBY_MSG, sender: 4, receiver: 2, body });
+
+  const toWatcher: Buffer[] = [];
+  const host = service.session('lobby');
+  host.username = 'Senyaak';
+  const watcher = service.session('lobby');
+  watcher.username = 'Player2';
+  watcher.send = (bytes) => toWatcher.push(bytes);
+
+  /** The id GROUP_REMOVE names, or null if no such message was pushed at all. */
+  const removedId = (): string | null => {
+    const said = toWatcher
+      .map((bytes) => parse(bytes))
+      .find((m) => m?.body?.[0] === String(LobbyMsg.GROUP_REMOVE));
+    const args = said?.body?.[1] as GSValue[] | undefined;
+    return typeof args?.[0] === 'string' ? args[0] : null;
+  };
+
+  const opened = host.receive(capturedCreateRoom());
+  const first = String(((parse(opened[0]!.replies[0]!)?.body?.[1] as GSValue[])?.[1] as GSValue[])?.[0]);
+  const parentId = String(((parse(opened[0]!.replies[1]!)?.body?.[1] as GSValue[])?.[0] as GSValue[])?.[4] ?? '1');
+  // He has to be standing in the channel to be one of the people it is announced to.
+  watcher.receive(lobbyMsg([String(LobbyMsg.JOIN_LOBBY), [parentId]]));
+
+  // 1. The host recreates a game of the same name. To him it is one game replacing
+  //    another; to everybody else it is two games with one name unless the first is
+  //    withdrawn by id.
+  toWatcher.length = 0;
+  const remade = host.receive(capturedCreateRoom());
+  const second = String(((parse(remade[0]!.replies[0]!)?.body?.[1] as GSValue[])?.[1] as GSValue[])?.[0]);
+  check('a recreated game gets a new id', second !== first, `${first} then ${second}`);
+  check('and the one it replaces is withdrawn from the other screen', removedId() === first, String(removedId()));
+  check('which the log says', remade[0]!.note.includes('the one it replaces is gone'), remade[0]?.note);
+
+  // 2. The host backs out of the channel — what he really does when he abandons a game.
+  toWatcher.length = 0;
+  const left = host.receive(lobbyMsg([String(LobbyMsg.GROUP_LEAVE), [parentId]]));
+  check('a host leaving the channel takes his game off the other screen', removedId() === second, String(removedId()));
+  check('and the log counts who was told', left[0]!.note.includes('and so were 1 other(s)'), left[0]?.note);
+
+  // 3. And the case no message can carry: the socket simply died. Nothing is answered
+  //    here, so the news has nowhere to ride but a push.
+  const last = host.receive(capturedCreateRoom());
+  const third = String(((parse(last[0]!.replies[0]!)?.body?.[1] as GSValue[])?.[1] as GSValue[])?.[0]);
+  toWatcher.length = 0;
+  const dropped = host.close();
+  check('a host whose connection dies takes his game with it', removedId() === third, String(removedId()));
+  check('and that is in the log too', dropped?.includes('told it is gone') === true, String(dropped));
+}
+
 console.log('\nInside the room: his own info, and changing the settings');
 {
   const lobby = new RouterService(
@@ -1550,13 +1614,20 @@ console.log('\nTwo players in one channel, and what the other one is told');
   const hosted = two.receive(capturedCreateRoom());
   check('hosting tells the other player', first.length === 2, hosted[0]?.note);
   check('and says so in the log', hosted[0]!.note.includes('1 player(s) shown it'), hosted[0]?.note);
+  const hostedId = String(((parse(hosted[0]!.replies[0]!)?.body?.[1] as GSValue[])?.[1] as GSValue[])?.[0]);
   const withGame = pushed(first[1]);
   check('his channel now has a game in it', withGame.games.length === 1, JSON.stringify(withGame.games));
 
-  // And leaving takes both away again.
+  // And leaving takes both away again — in TWO messages, because they do two different
+  // things. The channel redrawn without the game is not enough on its own: the client
+  // adds a game row and never takes one away (NETWORK_STATE §"Still open"), so the game
+  // has to be withdrawn by id as well.
   const gone = two.receive(lobbyMsg([String(LobbyMsg.GROUP_LEAVE), ['1']]));
-  check('leaving tells him too', first.length === 3, gone[0]?.note);
-  const after = pushed(first[2]);
+  check('leaving tells him too', first.length === 4, gone[0]?.note);
+  const withdrawn = parse(first[2]!)?.body ?? [];
+  check('the game is withdrawn by id first', withdrawn[0] === String(LobbyMsg.GROUP_REMOVE), String(withdrawn[0]));
+  check('naming the room that died', (withdrawn[1] as GSValue[])?.[0] === hostedId, JSON.stringify(withdrawn[1]));
+  const after = pushed(first[3]);
   check('the game is gone from his channel', after.games.length === 0, JSON.stringify(after.games));
   check('and so is the player', !after.names.includes('Player2'), JSON.stringify(after.names));
 

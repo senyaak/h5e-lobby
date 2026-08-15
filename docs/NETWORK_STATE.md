@@ -1420,10 +1420,26 @@ before looking at mods.
    alone, which works because each copy here plays on a port of its own. Two players
    behind one relay both on 8888 need either a distinct address each or the port rewritten
    too — and the port is two bytes in the same record, under tag 2.
-7. **A finished game stays on the other players' screens.** Not a transport question, but
-   it will be constant online, where connections drop rather than say goodbye. The server
-   does its part: on the host's socket closing it removed the room and told the channel
-   (`Senyaak2 left — dropped "Сервер — Senyaak", 2 player(s) told`, 14.08.2026). The
-   client adds a game row and never takes one away — leaving the channel and coming back
-   clears it. So there is a message the client reads as "this game is gone" that we do not
-   send, and it has not been looked for.
+7. **A finished game stays on the other players' screens — and GROUP_REMOVE is now sent
+   at it, unproven.** Not a transport question, but it will be constant online, where
+   connections drop rather than say goodbye. The server did its part and it was not
+   enough: on the host's socket closing it removed the room and told the channel
+   (`Senyaak2 left — dropped "Сервер — Senyaak", 2 player(s) told`, 14.08.2026) and the
+   row stayed on both screens. The client adds a game row and never takes one away —
+   leaving the channel and coming back clears it. So there is a message it reads as "this
+   game is gone" that we were not sending.
+
+   The candidate is **GROUP_REMOVE (55)**, and it now goes to everybody in the channel and
+   not only to the player whose own message killed the room, at all three places a room
+   can die: the host leaving, the host recreating a game of the same name, and the socket
+   simply closing (`RouterSession.tellChannelRemoved`, checked from the other player's
+   socket in `tools/test-net.ts`).
+
+   **This is a guess and has to be looked at with two copies running.** 55 appears in no
+   capture and no game log in either direction; it is in the client's own table and it is
+   what we already send the leaver, and that is the whole of the case for it. Against it:
+   the two narrow siblings, MEMBER_JOIN (50) and NEW_GROUP (54), were both sent and drew
+   no reaction at all. If the row survives on the other screen after this, 55 is not the
+   message — the next place to look is `CGamesView2` (0x8DCE50 is `AddGame`; whatever
+   calls the removal beside it names the message that drives it), not a permutation of
+   55's arguments.

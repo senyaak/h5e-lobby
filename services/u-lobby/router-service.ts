@@ -367,10 +367,16 @@ export class RouterSession {
     const gone = this.rooms.hostedBy(this.username);
     for (const room of gone) this.rooms.remove(room.id);
     this.peers.delete(this);
+    // Each game by name, in the channel it stood in rather than the one he was last seen
+    // in — they are not always the same, and a connection that simply died sends no
+    // message whose answer could have carried the news.
+    let announced = 0;
+    for (const room of gone) announced += this.tellChannelRemoved(room.parentId, room.id);
     const told = wasIn === null ? 0 : this.tellChannel(wasIn);
     if (!gone.length) return told ? `${this.username} left — ${told} player(s) told` : null;
     return (
       `${this.username} left — dropped ${gone.map((room) => `"${room.name}"`).join(', ')}` +
+      (announced ? `, ${announced} told it is gone` : '') +
       (told ? `, ${told} player(s) told` : '')
     );
   }
@@ -409,6 +415,37 @@ export class RouterSession {
   private tellChannel(lobbyId: number): number {
     const others = this.othersIn(lobbyId);
     for (const peer of others) peer.send?.(peer.channelInfo(UNASKED, lobbyId));
+    return others.length;
+  }
+
+  /**
+   * A game is gone, said to everybody watching the channel it stood in.
+   *
+   * **`tellChannel` does not cover this, and that gap is measured, not guessed.** A
+   * channel's GROUP_INFO carries the games it has, and the client MERGES that list into
+   * the one it is drawing rather than replacing it: on 14.08.2026 the room was removed
+   * here and the channel sent to two players without it, and the row stayed on both
+   * screens — only leaving the channel and coming back cleared it (NETWORK_STATE, "Still
+   * open"). Clicking the dead game got "that game is gone" from the JOIN_ROOM refusal,
+   * which is the repair for a stale screen and not a substitute for not having one.
+   *
+   * **What is a guess is that GROUP_REMOVE (55) is the message that fixes it**, and it is
+   * the one worth trying: it is what this server already sends the player whose own
+   * message killed the room, and the only candidate the client's own table offers. But
+   * nothing has ever been seen to act on it — it appears in no capture and no game log in
+   * either direction, and its two narrow siblings, MEMBER_JOIN (50) and NEW_GROUP (54),
+   * were sent and drew no reaction at all. So if the row still survives on the other
+   * screen after this, 55 is not the message and the search moves on rather than the
+   * arguments to it being permuted.
+   *
+   * Bare and unwrapped, the same shape that goes to the leaver — a wrapped 38 puts the
+   * echoed subtype where the first argument should be, which is what made
+   * FINAL_MATCH_RESULTS unreadable.
+   */
+  private tellChannelRemoved(lobbyId: number, roomId: number): number {
+    const others = this.othersIn(lobbyId);
+    const bytes = build(reply(UNASKED, [String(LobbyMsg.GROUP_REMOVE), [String(roomId), '1']]));
+    for (const peer of others) peer.send?.(bytes);
     return others.length;
   }
 
@@ -1192,7 +1229,14 @@ export class RouterSession {
           // A host recreating his own game replaces it; nothing else is touched.
           const parentId = Number(text(0)) || 1;
           const existing = this.rooms.named(parentId, text(1));
-          if (existing && existing.master === this.username) this.rooms.remove(existing.id);
+          let replaced = 0;
+          if (existing && existing.master === this.username) {
+            this.rooms.remove(existing.id);
+            // The old id off every other screen before the new one lands there. To
+            // everybody else these are two games with one name, and the client refuses
+            // the second for exactly that reason.
+            replaced = this.tellChannelRemoved(parentId, existing.id);
+          }
           const blob = fields[6] instanceof Uint8Array ? fields[6] : new Uint8Array(0);
           const room = this.rooms.create({
             parentId,
@@ -1225,7 +1269,9 @@ export class RouterSession {
           return {
             note:
               `CREATE_ROOM "${room.name}" in channel ${room.parentId} — id ${room.id}, ` +
-              `up to ${room.maxPlayers} players` + (saw ? `, ${saw} player(s) shown it` : ''),
+              `up to ${room.maxPlayers} players` +
+              (replaced ? `, ${replaced} told the one it replaces is gone` : '') +
+              (saw ? `, ${saw} player(s) shown it` : ''),
             replies: [
               build(reply(message, [String(MessageType.GSSUCCESS), [subtype, [String(room.id), room.name, '1']]])),
               // And the room itself, so the channel it lives in shows it.
@@ -1637,11 +1683,14 @@ export class RouterSession {
           // Rooms that stopped existing, so the player can be told rather than left to
           // find out by clicking one.
           const removed: number[] = [];
+          // And the same news for everybody else's list, which nothing else takes it off.
+          let announced = 0;
           if (room) {
             room.members = room.members.filter((name) => name !== this.username);
             if (room.master === this.username) {
               this.rooms.remove(room.id);
               removed.push(room.id);
+              announced += this.tellChannelRemoved(room.parentId, room.id);
               note = `GROUP_LEAVE ${groupId} — the host left, "${room.name}" is gone`;
             } else {
               // The room lives on, so the people still in it get it back with one name
@@ -1663,6 +1712,7 @@ export class RouterSession {
             for (const r of gone) {
               this.rooms.remove(r.id);
               removed.push(r.id);
+              announced += this.tellChannelRemoved(r.parentId, r.id);
             }
             if (gone.length) {
               note = `GROUP_LEAVE ${groupId} — the host left the channel, ${gone
@@ -1678,7 +1728,9 @@ export class RouterSession {
           const left = this.tellChannel(room ? room.parentId : groupId);
           if (left) note += `, ${left} player(s) told`;
           return {
-            note: removed.length ? `${note} (told it is gone)` : note,
+            note: removed.length
+              ? `${note} (told it is gone${announced ? `, and so were ${announced} other(s)` : ''})`
+              : note,
             replies: [
               build(reply(message, [String(MessageType.GSSUCCESS), [subtype, [String(groupId)]]])),
               ...removed.map((id) => build(reply(message, [String(LobbyMsg.GROUP_REMOVE), [String(id), '1']]))),

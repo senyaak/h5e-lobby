@@ -20,6 +20,7 @@
     "probe-u-lobby": "node tools/probe-u-lobby.ts",
     "test-services": "node tools/test-services.ts",
     "net-decode": "node tools/net-decode.ts",
+    "diff-struct": "node tools/diff-struct.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

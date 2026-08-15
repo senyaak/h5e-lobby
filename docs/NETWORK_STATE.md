@@ -1420,6 +1420,32 @@ before looking at mods.
    alone, which works because each copy here plays on a port of its own. Two players
    behind one relay both on 8888 need either a distinct address each or the port rewritten
    too — and the port is two bytes in the same record, under tag 2.
+8. **The room settings are in the description and unnamed.** The host's document holds
+   around fifty fields and four have ever been identified — the two ids, the map path and
+   the player records. Everything on the room screen is in there somewhere and nothing says
+   which: difficulty, ghost mode, quick combat, turn time, simultaneous turns, how many
+   slots are human. What IS read today is the map path, the victory goal (tag 32) and the
+   named rule records (tag 27, `autosave_enabled` and its kind) — and the reader takes any
+   tag 27 by its own name, so a setting the client happens to write as a named rule appears
+   in the browser's (i) panel with no code written for it.
+
+   The rest is found by changing one and looking. The u-lobby now prints the whole document
+   as hex every time a host touches a setting (`GROUP_CONFIG_UPDATE_RES … for diff-struct`),
+   so two dumps come out of the log without starting a game, and `tools/diff-struct.ts`
+   says which tag moved between them:
+
+   ```
+   node tools/diff-struct.ts <hex from before> <hex from after>
+   ~ [1][24]
+       was 00
+       now 01
+   ```
+
+   **One setting at a time**, or the answer is a list instead of a name. Two things move on
+   their own and are not the setting: the player records, and tag 29 — the strongest
+   candidate for the checksum the host computes into `SGameInfo+0xC4` while composing the
+   description, which is zero in the RMG capture and the only non-trivial u32 in the other.
+
 7. ~~**A finished game stays on the other players' screens.**~~ **SETTLED 16.08.2026 —
    GROUP_REMOVE (55) is the message.** Sent to everybody in the channel it went out in a
    real game (`GROUP_LEAVE 100 — the host left … told it is gone, and so were 1 other(s)`)

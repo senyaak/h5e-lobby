@@ -1442,10 +1442,24 @@ export class RouterSession {
           // answered with another room — several a second until the game was closed.
           const different = !before.equals(Buffer.from(room.info));
           const told = different ? this.tellChannel(room.parentId) : 0;
+          // AND THE NEW DESCRIPTION IN FULL, whenever it actually changed.
+          //
+          // This is the message a host sends when he touches a setting in the room screen
+          // — difficulty, ghost mode, turn time, the lot — and what those settings ARE in
+          // this document is not known: some forty of its fields have never been matched
+          // to anything. Two rooms differing in one setting and nothing else is what
+          // matches them, and this line is how a person gets the second one without
+          // starting a game. `tools/diff-struct.ts` takes two of them and says which tag
+          // moved.
+          const dumped = different
+            ? `\n             the settings as he changed them, ${room.info.length} bytes, for diff-struct:\n` +
+              `             ${Buffer.from(room.info).toString('hex')}`
+            : '';
           return {
             note:
               `GROUP_CONFIG_UPDATE_RES ${roomId} — ${changed.length ? changed.join(', ') : `nothing we read (flags ${flags})`}` +
-              (told ? `, ${told} player(s) told` : different ? '' : ', the same settings as before — nobody told'),
+              (told ? `, ${told} player(s) told` : different ? '' : ', the same settings as before — nobody told') +
+              dumped,
             replies: [
               build(reply(message, [String(MessageType.GSSUCCESS), [subtype, [String(roomId)]]])),
               // The room back out, **without its members**. The settings changed, the

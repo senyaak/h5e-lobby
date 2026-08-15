@@ -1420,6 +1420,29 @@ before looking at mods.
    alone, which works because each copy here plays on a port of its own. Two players
    behind one relay both on 8888 need either a distinct address each or the port rewritten
    too — and the port is two bytes in the same record, under tag 2.
+7. ~~**A finished game stays on the other players' screens.**~~ **SETTLED 16.08.2026 —
+   GROUP_REMOVE (55) is the message.** Sent to everybody in the channel it went out in a
+   real game (`GROUP_LEAVE 100 — the host left … told it is gone, and so were 1 other(s)`)
+   and the game left the other player's screen as though it had never existed. Worth
+   keeping the history, because it was a guess when it was made and its two siblings were
+   not: MEMBER_JOIN (50) and NEW_GROUP (54) were both sent and drew no reaction at all,
+   and 55 appears in no capture in either direction either. It is the one of the three the
+   client acts on.
+
+   **How it was found.** Removing the room here and sending the channel without it is not
+   enough, and that was measured first: on the host's socket closing the room went and the
+   channel went out to two players without it (`Senyaak2 left — dropped "Сервер —
+   Senyaak", 2 player(s) told`, 14.08.2026) — and the row stayed on both screens. The
+   client adds a game row and never takes one away; leaving the channel and coming back
+   was the only thing that cleared it. So a message existed that we were not sending.
+
+   55 was already in this server, going to one person: the player whose own message killed
+   the room got it as a reply and everybody else got nothing. Sending the same message to
+   the rest of the channel is the whole of the fix — `RouterSession.tellChannelRemoved`,
+   at all three places a room can die (the host leaving, the host recreating a game of the
+   same name, and a socket that simply closed, which had no reply to ride on at all),
+   checked from the other player's socket in `tools/test-net.ts`.
+
 8. **The room settings are in the description and unnamed.** The host's document holds
    around fifty fields and four have ever been identified — the two ids, the map path and
    the player records. Everything on the room screen is in there somewhere and nothing says
@@ -1445,26 +1468,3 @@ before looking at mods.
    their own and are not the setting: the player records, and tag 29 — the strongest
    candidate for the checksum the host computes into `SGameInfo+0xC4` while composing the
    description, which is zero in the RMG capture and the only non-trivial u32 in the other.
-
-7. ~~**A finished game stays on the other players' screens.**~~ **SETTLED 16.08.2026 —
-   GROUP_REMOVE (55) is the message.** Sent to everybody in the channel it went out in a
-   real game (`GROUP_LEAVE 100 — the host left … told it is gone, and so were 1 other(s)`)
-   and the game left the other player's screen as though it had never existed. Worth
-   keeping the history, because it was a guess when it was made and its two siblings were
-   not: MEMBER_JOIN (50) and NEW_GROUP (54) were both sent and drew no reaction at all,
-   and 55 appears in no capture in either direction either. It is the one of the three the
-   client acts on.
-
-   **How it was found.** Removing the room here and sending the channel without it is not
-   enough, and that was measured first: on the host's socket closing the room went and the
-   channel went out to two players without it (`Senyaak2 left — dropped "Сервер —
-   Senyaak", 2 player(s) told`, 14.08.2026) — and the row stayed on both screens. The
-   client adds a game row and never takes one away; leaving the channel and coming back
-   was the only thing that cleared it. So a message existed that we were not sending.
-
-   55 was already in this server, going to one person: the player whose own message killed
-   the room got it as a reply and everybody else got nothing. Sending the same message to
-   the rest of the channel is the whole of the fix — `RouterSession.tellChannelRemoved`,
-   at all three places a room can die (the host leaving, the host recreating a game of the
-   same name, and a socket that simply closed, which had no reply to ride on at all),
-   checked from the other player's socket in `tools/test-net.ts`.

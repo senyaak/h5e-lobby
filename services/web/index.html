@@ -82,6 +82,43 @@
       /* A game nobody else can get into should not look like an invitation. */
       #games .seats.full { color: var(--dim); }
       #games .version { color: var(--dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+      .pill {
+        border: 1px solid var(--edge);
+        border-radius: 999px;
+        padding: 0 6px;
+        font-size: 11px;
+        color: var(--server);
+        white-space: nowrap;
+      }
+      button.more {
+        border: 1px solid var(--edge);
+        background: transparent;
+        color: var(--dim);
+        border-radius: 999px;
+        width: 20px;
+        height: 20px;
+        line-height: 1;
+        padding: 0;
+        font: inherit;
+        font-size: 12px;
+        font-style: italic;
+        cursor: pointer;
+      }
+      button.more:hover { color: var(--gold); border-color: var(--gold); }
+      #facts-box {
+        border: 1px solid var(--edge);
+        border-radius: 10px;
+        background: var(--panel);
+        color: var(--ink);
+        padding: 18px 20px;
+        max-width: min(560px, 90vw);
+      }
+      #facts-box::backdrop { background: rgba(0, 0, 0, 0.6); }
+      #facts-box h2 { margin: 0 0 12px; font-size: 15px; color: var(--gold); font-weight: 600; }
+      #facts { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 0 0 14px; }
+      #facts dt { color: var(--dim); font-size: 13px; }
+      #facts dd { margin: 0; word-break: break-word; }
+      #facts-box .aside { color: var(--dim); font-size: 12px; margin: 0 0 14px; }
       #no-games { color: var(--dim); font-size: 13px; margin: 0; padding: 10px 16px; }
       .line { display: flex; gap: 10px; padding: 2px 0; align-items: baseline; }
       .at { color: var(--dim); font-variant-numeric: tabular-nums; font-size: 12px; }
@@ -150,7 +187,7 @@
              it reads as a list that failed to load. -->
         <table id="games" hidden>
           <thead>
-            <tr><th>Game</th><th>Host</th><th class="seats">Players</th><th>Playing</th><th>Version</th></tr>
+            <tr><th>Game</th><th>Map</th><th>Host</th><th class="seats">Players</th><th>Playing</th><th>Version</th><th></th></tr>
           </thead>
           <tbody id="games-rows"></tbody>
         </table>
@@ -174,6 +211,16 @@
         <button class="go" type="submit">Send</button>
       </form>
     </footer>
+
+    <!-- What the host's own description of a game says, for whoever wants to know before
+         he joins. `dialog` and not a div: Escape closes it and the focus is trapped for
+         free, and this page has no framework to do either. -->
+    <dialog id="facts-box">
+      <h2>“<span id="facts-name"></span>”</h2>
+      <dl id="facts"></dl>
+      <p class="aside">Everything here is what the host's client said when it opened the game.</p>
+      <form method="dialog"><button class="go" type="submit">Close</button></form>
+    </dialog>
 
     <div id="gate">
       <form id="signin">
@@ -310,17 +357,76 @@
           // them reads as two people.
           const guests = game.players.filter((player) => player !== game.master);
           const full = game.players.length >= game.seats;
+          // A generated map has no name to show — what stands there is its template, so it
+          // is labelled as one rather than passed off as a map somebody could go and find.
+          const map = document.createElement('td');
+          if (!game.map) {
+            map.className = 'waiting';
+            map.textContent = 'not said';
+          } else if (game.generated) {
+            map.append(tag('RMG'), document.createTextNode(` ${game.map}`));
+          } else {
+            map.textContent = game.map;
+          }
           row.append(
             cell(game.name, 'name'),
+            map,
             cell(game.master),
             cell(`${game.players.length}/${game.seats}`, full ? 'seats full' : 'seats'),
             guests.length ? cell(guests.join(', '), 'players') : cell('waiting for someone', 'waiting'),
             cell(game.version, 'version'),
+            more(game),
           );
           rows.append(row);
         }
         $('games').hidden = games.length === 0;
         $('no-games').hidden = games.length > 0;
+      }
+
+      /** A small label, for the things that are a kind rather than a value. */
+      function tag(text) {
+        const span = document.createElement('span');
+        span.className = 'pill';
+        span.textContent = text;
+        return span;
+      }
+
+      /**
+       * The (i), and what is behind it.
+       *
+       * Everything the server could read out of the host's own description of the game.
+       * That is a short list on purpose — the description holds around forty more fields
+       * and nobody has worked out what they mean, so they are not shown as anything.
+       */
+      function more(game) {
+        const td = document.createElement('td');
+        if (!game.facts.length) return td;
+        const button = document.createElement('button');
+        button.className = 'more';
+        button.type = 'button';
+        button.textContent = 'i';
+        button.title = `What the host said about "${game.name}"`;
+        button.addEventListener('click', () => showFacts(game));
+        td.append(button);
+        return td;
+      }
+
+      function showFacts(game) {
+        $('facts-name').textContent = game.name;
+        const list = $('facts');
+        list.replaceChildren();
+        const say = (name, value) => {
+          const dt = document.createElement('dt');
+          dt.textContent = name;
+          const dd = document.createElement('dd');
+          dd.textContent = value;
+          list.append(dt, dd);
+        };
+        say('host', game.master);
+        say('players', `${game.players.length} of ${game.seats} — ${game.players.join(', ')}`);
+        say('version', game.version);
+        for (const fact of game.facts) say(fact.name, fact.value);
+        $('facts-box').showModal();
       }
 
       function draw(line) {

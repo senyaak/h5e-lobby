@@ -63,6 +63,26 @@ export interface RoomInfo {
   /** How many the host opened it for, so `members.length` of this reads as "2 of 3". */
   maxPlayers: number;
   /**
+   * The map, read out of the host's description — its folder, or its RMG template when he
+   * had the game make it. Empty when the description did not give it up.
+   *
+   * A folder and not a name, because a name is not on the wire at all: the client resolves
+   * one from the `.xdb` on its own disk, which is why a room whose map you do not have
+   * shows an empty Map column in the game itself.
+   */
+  mapName: string;
+  /** True when the map was generated rather than chosen. */
+  mapGenerated: boolean;
+  /**
+   * Everything else identified in that description — the map's full path, the victory goal,
+   * the rules the host set. Short, and it is meant to be: the document holds some forty
+   * more fields nobody has worked out, and a list of `[24] = 00` teaches nobody anything.
+   *
+   * Nothing here is ever a player's address. Those are in the same document and they stay
+   * in `endpoints`, which is the relay's and no one else's.
+   */
+  facts: RoomFact[];
+  /**
    * The game's own version string, as the host's client stated it when it made the room.
    *
    * Here because it is the one thing that decides whether somebody can join at all: the
@@ -82,6 +102,12 @@ export interface RoomInfo {
    * the relay handing a datagram to the only other agent in the room.
    */
   endpoints: PeerEndpoint[];
+}
+
+/** One thing the host's description says about his game, in words a person can read. */
+export interface RoomFact {
+  name: string;
+  value: string;
 }
 
 export interface PeerEndpoint {

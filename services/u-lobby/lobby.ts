@@ -20,8 +20,9 @@
 // browser, so it lives in shared/channels.ts where neither service owns it.
 
 import type { Lobby } from '../../shared/channels.ts';
+import type { RoomFact } from '../../shared/core-protocol.ts';
 import { type GSValue } from './gs-data.ts';
-import { looksLikeFields, readFields, writeFields, type Field } from './structure.ts';
+import { findField, looksLikeFields, readFields, writeFields, type Field } from './structure.ts';
 import { mirrorPort } from './nat-service.ts';
 
 /**
@@ -493,6 +494,119 @@ export function roomEndpoints(info: Uint8Array): Array<{ nick: string; address: 
     at += shape.length;
   }
   return found;
+}
+
+/** What a person can be told about the map, out of the host's own description. */
+export interface RoomMap {
+  /** What to put on a screen: the map's folder, or its template when it was generated. */
+  name: string;
+  /** True when the host had the game make the map rather than choosing one. */
+  generated: boolean;
+  /** The path as it stands in the description — the whole of what the wire actually says. */
+  path: string;
+}
+
+/**
+ * The map a room is played on, as far as the wire can say.
+ *
+ * **The description does not carry the map's NAME.** It carries its path — tag 15,
+ * `/Maps/Multiplayer/Rules Test/map.xdb#xpointer(/AdvMapDesc)` — and the client resolves a
+ * display name out of the `.xdb` file on its own disk. That is visible in the game itself:
+ * a room whose map the other player does not have shows an EMPTY Map column on his screen
+ * while a map he does have shows its name. So the folder is what there is, and the folder
+ * is a fair name for it.
+ *
+ * A generated map has no folder worth reading — `/Maps/RMG/154B0BEB-E9FD-…/` — so what is
+ * shown instead is the TEMPLATE, `/RMG/Templates/S1P2Z2M1.xdb`, which is in the same
+ * document and which players read as a matter of course: S1 is the size, P2 the players,
+ * Z2 the zones, M1 the monsters. It says more than the word "random" does.
+ *
+ * Found by its shape, for the reason `roomEndpoints` is: a field walk over this document
+ * stops at the first part it does not understand, and this one is full of them. Here that
+ * is easier than there — a path is plain text and `/Maps/` is not a byte sequence that
+ * turns up by accident.
+ */
+export function roomMap(info: Uint8Array): RoomMap | null {
+  const buf = Buffer.from(info);
+  const at = buf.indexOf('/Maps/', 0, 'utf8');
+  if (at < 0) return null;
+  // To `.xdb` and no further: what follows is `#xpointer(…)`, which is the client telling
+  // itself which part of the file to read and says nothing to anybody else.
+  const end = buf.indexOf('.xdb', at, 'utf8');
+  if (end < 0) return null;
+  const path = buf.subarray(at, end + 4).toString('utf8');
+  const generated = path.startsWith('/Maps/RMG/');
+  const folder = path.split('/').at(-2) ?? '';
+
+  if (!generated) return { name: folder, generated, path };
+
+  // The template, from the same document. Its absence is not a failure: the recipe is
+  // written into the description as the game is made, and a room caught before that
+  // happened has the RMG path and not yet the template.
+  const templateAt = buf.indexOf('/RMG/Templates/', 0, 'utf8');
+  const templateEnd = templateAt < 0 ? -1 : buf.indexOf('.xdb', templateAt, 'utf8');
+  const template = templateEnd < 0 ? '' : buf.subarray(templateAt + 15, templateEnd).toString('utf8');
+  return { name: template || 'random', generated, path };
+}
+
+/** A field's payload as text, if it reads as text at all. */
+function asText(value: Buffer): string {
+  const text = value.toString('utf8').replace(/\0+$/, '');
+  return /^[^ --]*$/.test(text) ? text : '';
+}
+
+/**
+ * What the description says about the game, for somebody who wants to know before joining.
+ *
+ * **Only the fields that have been identified**, which is a short list: the map's two
+ * paths, the victory goal (tag 32) and the named rule records (tag 27, `autosave_enabled`
+ * and its kind). The document holds some forty more fields and what they mean is not known
+ * — see NETWORK_STATE — so they are not shown as anything. A panel of `[24] = 00` teaches
+ * nobody anything and invites reading meaning into a byte.
+ *
+ * Tolerant twice over. The field walk is in a `try`, because this document is exactly the
+ * one that does not always divide into fields to its end, and a map path read by shape is
+ * worth having even when the walk gives up. And nothing here reaches for a player record:
+ * those hold addresses, and this goes to a browser.
+ */
+export function roomFacts(info: Uint8Array): RoomFact[] {
+  const facts: RoomFact[] = [];
+  const map = roomMap(info);
+  if (map) {
+    facts.push({ name: 'map', value: map.path });
+    if (map.generated && map.name !== 'random') facts.push({ name: 'template', value: map.name });
+  }
+
+  let inner: Field[] = [];
+  try {
+    const document = findField(readFields(Buffer.from(info)), 1);
+    if (!document) return facts;
+    inner = readFields(document);
+  } catch {
+    return facts;
+  }
+
+  for (const field of inner) {
+    if (field.tag === 32) {
+      const goal = asText(field.value);
+      if (goal) facts.push({ name: 'goal', value: goal });
+      continue;
+    }
+    // A rule the host set, as a name and whatever it was set to: `[1]` is the name and
+    // `[2]` holds the value twice, once as a float and once as the text of it.
+    if (field.tag !== 27) continue;
+    try {
+      const rule = readFields(field.value);
+      const name = asText(findField(rule, 1) ?? Buffer.alloc(0));
+      const held = findField(rule, 2);
+      const value = held ? asText(findField(readFields(held), 3) ?? Buffer.alloc(0)) : '';
+      if (name) facts.push({ name, value });
+    } catch {
+      // A rule record that does not read is one rule missing from a panel, not a reason
+      // to lose the ones that did.
+    }
+  }
+  return facts;
 }
 
 export function probeEndpoints(info: Uint8Array): Uint8Array {

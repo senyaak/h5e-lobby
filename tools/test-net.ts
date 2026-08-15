@@ -17,7 +17,7 @@ import { KEY_BLOB_SIZE, decryptWith, encryptTo, generateKeyPair, parsePublicKey,
 import { GUEST, GUEST_LOBBY, RouterService, type RouterSession } from '../services/u-lobby/router-service.ts';
 import { Blowfish } from '../services/u-lobby/blowfish.ts';
 import { CdKeyRequest, CdKeyService } from '../services/u-lobby/cdkey-service.ts';
-import { GAME_PORT, LobbyMsg, Lsm, RoomUpdate, playerInfo, roomEndpoints, withRating } from '../services/u-lobby/lobby.ts';
+import { GAME_PORT, LobbyMsg, Lsm, RoomUpdate, playerInfo, roomEndpoints, roomFacts, roomMap, withRating } from '../services/u-lobby/lobby.ts';
 import { findField, readFields, writeFields } from '../services/u-lobby/structure.ts';
 import { FACTIONS, LADDER_KEYS, Ladder, STARTING_RATING } from '../services/core/rules/ladder.ts';
 import { Accounts } from '../services/core/rules/accounts.ts';
@@ -2163,6 +2163,42 @@ console.log('\nwhere the players are, out of the room description');
   check('and nothing is invented out of noise', roomEndpoints(Buffer.alloc(64, 0xab)).length === 0);
 }
 
+console.log('\nwhat the description says about the game, for somebody deciding whether to join');
+{
+  // The same two captures, read for the other thing they hold. Real bytes and not a
+  // fixture written to match the reader: the whole point of the shape search is that it
+  // survives a document full of parts we do not understand.
+  const body = parse(capturedCreateRoom())?.body ?? [];
+  const fields = (body[1] as GSValue[]) ?? [];
+  const description = fields.find((f) => f instanceof Uint8Array && f.length > 200) as Uint8Array;
+  check('the capture carries the host s description', description?.length === 555, String(description?.length));
+
+  const chosen = roomMap(description);
+  // The folder, because a NAME is not on the wire: the client resolves one from the .xdb
+  // on its own disk, which is why a map you do not have shows an empty column in the game.
+  check('a chosen map is named by its folder', chosen?.name === 'Rules Test', JSON.stringify(chosen));
+  check('and is not marked generated', chosen?.generated === false, JSON.stringify(chosen?.generated));
+  check('the path stops at .xdb, without the client s xpointer', chosen?.path === '/Maps/Multiplayer/Rules Test/map.xdb', String(chosen?.path));
+
+  const said = roomFacts(description);
+  const value = (name: string): string => said.find((one) => one.name === name)?.value ?? '';
+  check('the goal is read', value('goal') === 'goal_default', JSON.stringify(said));
+  check('and the rules the host set, by name and value', value('autosave_enabled') === '1', JSON.stringify(said));
+  // The fields nobody has worked out stay out of it. A panel of `[24] = 00` teaches
+  // nobody anything, and this is what says so if somebody ever pours the document in.
+  check('and nothing that has not been identified', said.length === 3, JSON.stringify(said.map((one) => one.name)));
+
+  // A generated map: no folder worth reading, so it is marked as generated instead. This
+  // capture is a 300-byte slice that starts after the settings, so it has the RMG path
+  // and not the template — which is the "caught before the recipe was written" case.
+  const generated = roomMap(capturedRoomPlayers());
+  check('a generated map is recognised by its path', generated?.generated === true, JSON.stringify(generated));
+  check('and says so when there is no template in reach', generated?.name === 'random', String(generated?.name));
+
+  check('noise is not a map', roomMap(Buffer.alloc(64, 0xab)) === null);
+  check('and gives up no facts', roomFacts(Buffer.alloc(64, 0xab)).length === 0);
+}
+
 console.log('\nthe state feed, which decides when the core hears about a room');
 {
   // The timer is ours, so the window is run out rather than waited out. Nothing here
@@ -2192,6 +2228,9 @@ console.log('\nthe state feed, which decides when the core hears about a room');
     // What this block is about is which list goes out and when, not what is in a room.
     maxPlayers: 2,
     gameVersion: '',
+    mapName: '',
+    mapGenerated: false,
+    facts: [],
     endpoints: [],
   });
 

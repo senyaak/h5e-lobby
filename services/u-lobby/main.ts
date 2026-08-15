@@ -31,7 +31,7 @@ import { NatService, setMirrorPort } from './nat-service.ts';
 import { GUEST, GUEST_LOBBY, RouterService } from './router-service.ts';
 import { CdKeyService } from './cdkey-service.ts';
 import { IrcConnection, IrcService, chatLine, frame, fromGameText, toGameText } from './irc.ts';
-import { probePeerAddress, probeRoomFields, roomEndpoints } from './lobby.ts';
+import { probePeerAddress, probeRoomFields, roomEndpoints, roomFacts, roomMap } from './lobby.ts';
 import { classifyDatagram, classifyUService, type UService } from './classify.ts';
 import { carryULobby } from './tunnel.ts';
 import { StateFeed } from './state-feed.ts';
@@ -292,18 +292,24 @@ function presenceNow(): PresenceEntry[] {
 }
 
 function roomsNow(): RoomInfo[] {
-  return router.openRooms.map((room) => ({
-    id: room.id,
-    name: room.name,
-    master: room.master,
-    members: [...room.members],
-    maxPlayers: room.maxPlayers,
-    gameVersion: room.gameVersion,
-    // Where each of them is playing, out of the host's own description. Empty
-    // when it does not parse, and that is a working state: with two players the
-    // relay has only one other agent to hand a datagram to.
-    endpoints: roomEndpoints(room.info),
-  }));
+  return router.openRooms.map((room) => {
+    const map = roomMap(room.info);
+    return {
+      id: room.id,
+      name: room.name,
+      master: room.master,
+      members: [...room.members],
+      maxPlayers: room.maxPlayers,
+      gameVersion: room.gameVersion,
+      mapName: map?.name ?? '',
+      mapGenerated: map?.generated ?? false,
+      facts: roomFacts(room.info),
+      // Where each of them is playing, out of the host's own description. Empty
+      // when it does not parse, and that is a working state: with two players the
+      // relay has only one other agent to hand a datagram to.
+      endpoints: roomEndpoints(room.info),
+    };
+  });
 }
 
 const feed = new StateFeed({

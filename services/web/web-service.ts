@@ -28,7 +28,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CoreClient } from '../../shared/core-client.ts';
-import type { ChannelInfo, ChatMessage, PresenceEntry, RoomInfo } from '../../shared/core-protocol.ts';
+import type { ChannelInfo, ChatMessage, PresenceEntry, RoomFact, RoomInfo } from '../../shared/core-protocol.ts';
 import { serveWebSocket, type WebSocketPeer } from '../../shared/websocket.ts';
 
 /**
@@ -72,6 +72,10 @@ interface OpenGame {
   players: string[];
   seats: number;
   version: string;
+  map: string;
+  generated: boolean;
+  /** What the host's description said, for the panel behind the (i). Never an address. */
+  facts: RoomFact[];
 }
 
 function asOpenGame(room: RoomInfo): OpenGame {
@@ -82,6 +86,9 @@ function asOpenGame(room: RoomInfo): OpenGame {
     players: room.members,
     seats: room.maxPlayers,
     version: room.gameVersion,
+    map: room.mapName,
+    generated: room.mapGenerated,
+    facts: room.facts,
   };
 }
 

@@ -56,9 +56,9 @@ outside Node itself.
 
 ## On this machine: the same five inside senyaak's fleet
 
-The `/opt` install above is for a host of its own. Here the five run as **user** units,
-next to the MCP servers and their tunnels in `~/Projects/tunnels` — same repository
-checkout, no root, and `./fleet` manages them like everything else:
+The `/opt` install above is for a host of its own. Here the five run as **user** units out
+of this same checkout — no root, and `~/Projects/tunnels/fleet` manages them alongside the
+MCP servers and their tunnels:
 
 | unit | what it runs |
 |---|---|
@@ -67,7 +67,7 @@ checkout, no root, and `./fleet` manages them like everything else:
 | `senyaak-h5e-web` | `services/web/main.ts` |
 | `senyaak-h5e-relay` | `services/relay/main.ts` |
 | `senyaak-h5e-u-lobby` | `services/u-lobby/main.ts` |
-| `senyaak-h5e-tunnel` | cloudflared: `h5e-lobby.example.com` → `:8081`, `relay-h5e.example.com` → `:40200`; the u-lobby tunnel wants a third ingress to `:40300` |
+| `senyaak-h5e-tunnel` | cloudflared: `h5e-lobby.example.com` → `:8081`, `relay-h5e.example.com` → `:40200`, `u-lobby-h5e.example.com` → `:40300` |
 
 ```bash
 systemctl --user start   senyaak-h5e.target    # the six, one command
@@ -78,10 +78,28 @@ journalctl --user -u senyaak-h5e-gateway -f
 ```
 
 `Restart=always` on every one of them, and `loginctl enable-linger` is already on, so
-they come back after a crash and after a reboot without anyone logging in. The units are
-files in `~/Projects/tunnels/systemd/`, symlinked into `~/.config/systemd/user/`;
+they come back after a crash and after a reboot without anyone logging in.
+
+**The units are files in `deploy/systemd/senyaak/` — in THIS repository**, symlinked into
+`~/.config/systemd/user/`. They lived in `~/Projects/tunnels/systemd/` until 15.08.2026 and
+that is what moved them: the fleet repository is a generic one, it knows how to run and
+tunnel anything and nothing about this game. A unit's ports, its ordering and its
+description are facts about the lobby and change when the lobby's code changes — kept over
+there they went stale silently, which is exactly what the `desk` → `u-lobby` rename did to
+them. `./fleet` never cared where the files are: it finds units by the `senyaak-*` glob
+through systemd, and a symlink is a symlink.
+
 `H5E_HOST` and `H5E_BIND` live in `~/.config/h5e-lobby.env`, which is in neither
 repository.
+
+Installing them, once:
+
+```bash
+ln -sfn "$PWD"/deploy/systemd/senyaak/senyaak-h5e-*.service ~/.config/systemd/user/
+ln -sfn "$PWD"/deploy/systemd/senyaak/senyaak-h5e.target    ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now senyaak-h5e.target
+```
 
 **The tunnel carries what speaks its language, and the game does not speak it.** cloudflared
 speaks HTTP and WebSocket; the game's u-lobby services are raw TCP and UDP, and its one HTTP request

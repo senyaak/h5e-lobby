@@ -60,6 +60,16 @@ export interface RoomInfo {
   /** Who is hosting. He is in `members` too. */
   master: string;
   members: string[];
+  /** How many the host opened it for, so `members.length` of this reads as "2 of 3". */
+  maxPlayers: number;
+  /**
+   * The game's own version string, as the host's client stated it when it made the room.
+   *
+   * Here because it is the one thing that decides whether somebody can join at all: the
+   * client refuses a game whose version is not one it knows, and a person looking at a
+   * list wants to see that before he clicks rather than after.
+   */
+  gameVersion: string;
   /**
    * Where each player's game is, as the host's own description of the room says.
    *

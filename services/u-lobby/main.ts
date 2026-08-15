@@ -297,6 +297,8 @@ function roomsNow(): RoomInfo[] {
     name: room.name,
     master: room.master,
     members: [...room.members],
+    maxPlayers: room.maxPlayers,
+    gameVersion: room.gameVersion,
     // Where each of them is playing, out of the host's own description. Empty
     // when it does not parse, and that is a working state: with two players the
     // relay has only one other agent to hand a datagram to.

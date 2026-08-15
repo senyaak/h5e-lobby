@@ -2189,6 +2189,9 @@ console.log('\nthe state feed, which decides when the core hears about a room');
     name: `room ${id}`,
     master: members[0] ?? '',
     members,
+    // What this block is about is which list goes out and when, not what is in a room.
+    maxPlayers: 2,
+    gameVersion: '',
     endpoints: [],
   });
 

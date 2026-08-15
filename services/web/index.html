@@ -78,6 +78,10 @@
       #games .name { color: var(--gold); font-weight: 600; }
       #games .players { color: var(--dim); }
       #games .waiting { color: var(--dim); font-style: italic; }
+      #games .seats { font-variant-numeric: tabular-nums; white-space: nowrap; }
+      /* A game nobody else can get into should not look like an invitation. */
+      #games .seats.full { color: var(--dim); }
+      #games .version { color: var(--dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
       #no-games { color: var(--dim); font-size: 13px; margin: 0; padding: 10px 16px; }
       .line { display: flex; gap: 10px; padding: 2px 0; align-items: baseline; }
       .at { color: var(--dim); font-variant-numeric: tabular-nums; font-size: 12px; }
@@ -146,7 +150,7 @@
              it reads as a list that failed to load. -->
         <table id="games" hidden>
           <thead>
-            <tr><th>Game</th><th>Host</th><th>Playing</th></tr>
+            <tr><th>Game</th><th>Host</th><th class="seats">Players</th><th>Playing</th><th>Version</th></tr>
           </thead>
           <tbody id="games-rows"></tbody>
         </table>
@@ -305,10 +309,13 @@
           // Everybody but the host, because he has his own column and a name in two of
           // them reads as two people.
           const guests = game.players.filter((player) => player !== game.master);
+          const full = game.players.length >= game.seats;
           row.append(
             cell(game.name, 'name'),
             cell(game.master),
+            cell(`${game.players.length}/${game.seats}`, full ? 'seats full' : 'seats'),
             guests.length ? cell(guests.join(', '), 'players') : cell('waiting for someone', 'waiting'),
+            cell(game.version, 'version'),
           );
           rows.append(row);
         }

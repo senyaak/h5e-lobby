@@ -70,10 +70,19 @@ interface OpenGame {
   name: string;
   master: string;
   players: string[];
+  seats: number;
+  version: string;
 }
 
 function asOpenGame(room: RoomInfo): OpenGame {
-  return { id: room.id, name: room.name, master: room.master, players: room.members };
+  return {
+    id: room.id,
+    name: room.name,
+    master: room.master,
+    players: room.members,
+    seats: room.maxPlayers,
+    version: room.gameVersion,
+  };
 }
 
 interface Browser {

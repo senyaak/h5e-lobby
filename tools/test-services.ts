@@ -357,6 +357,8 @@ uLobby.replaceRooms([
     name: 'Сервер — Senyaak',
     master: 'Senyaak',
     members: ['Senyaak', 'Player2'],
+    maxPlayers: 3,
+    gameVersion: '3.1',
     endpoints: [
       { nick: 'Senyaak', address: '10.44.253.104', port: 8888 },
       { nick: 'Player2', address: '10.44.253.104', port: 8889 },
@@ -441,8 +443,17 @@ console.log('\nthe relay');
 // Nothing is enrolled and nothing is issued. An agent says where its game plays and the
 // room list is what turns that into a player — so these are the rooms first, and the
 // agents afterwards know nothing but their own address and port.
+/**
+ * The parts of a room the RELAY never reads, so the fixtures below can leave them out.
+ *
+ * Seats and version are for a person looking at a list; what the relay wants is who is at
+ * which endpoint. Spelling them out in every fixture down here would say they mattered.
+ */
+const anyGame = { maxPlayers: 2, gameVersion: '' };
+
 uLobby.replaceRooms([
   {
+    ...anyGame,
     id: 7,
     name: 'a duel',
     master: 'PlayerA',
@@ -453,6 +464,7 @@ uLobby.replaceRooms([
     ],
   },
   {
+    ...anyGame,
     id: 9,
     name: 'somewhere else',
     master: 'PlayerC',
@@ -462,7 +474,7 @@ uLobby.replaceRooms([
   // A room the host's description said nothing readable about. It has a member and no
   // endpoint, which under this rule means nobody in it can be admitted at all — the old
   // secret would have let him in and left the relay shouting into the room.
-  { id: 11, name: 'a room we cannot read', master: 'PlayerE', members: ['PlayerE'], endpoints: [] },
+  { ...anyGame, id: 11, name: 'a room we cannot read', master: 'PlayerE', members: ['PlayerE'], endpoints: [] },
 ]);
 await until(() => false, 100);
 
@@ -575,6 +587,7 @@ check('a player in a room with no endpoints cannot be admitted at all', await un
 // And when the game ends, the room goes — the next connection has nothing to join.
 uLobby.replaceRooms([
   {
+    ...anyGame,
     id: 9,
     name: 'somewhere else',
     master: 'PlayerC',
@@ -669,6 +682,7 @@ console.log('\nthree in a room, each datagram to the one it names');
 
   uLobby.replaceRooms([
     {
+      ...anyGame,
       id: 12,
       name: 'three of us',
       master: 'PlayerA',
@@ -732,6 +746,7 @@ console.log('\nthe relay with the core away');
   await until(() => feed.connected);
   feed.replaceRooms([
     {
+      ...anyGame,
       id: 5,
       name: 'a game in progress',
       master: 'PlayerA',

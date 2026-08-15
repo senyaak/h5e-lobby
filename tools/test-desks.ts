@@ -51,8 +51,8 @@ function streamFrame(type: number, id: number, payload?: Buffer): Buffer {
   return out;
 }
 
-function datagramFrame(payload: Buffer): Buffer {
-  return Buffer.concat([Buffer.from([FRAME_DATAGRAM]), payload]);
+function datagramFrame(id: number, payload: Buffer): Buffer {
+  return streamFrame(FRAME_DATAGRAM, id, payload);
 }
 
 // ---------------------------------------------------------------------------------
@@ -99,7 +99,7 @@ interface Client {
   heard: Buffer[];
   /** The text of every stream frame, by stream id. */
   onStream(id: number): string;
-  datagrams(): string[];
+  datagrams(id?: number): string[];
   closed(id: number): boolean;
 }
 
@@ -117,7 +117,10 @@ async function connect(): Promise<Client> {
         .filter((frame) => frame[0] === FRAME_DATA && frame.readUInt16BE(1) === id)
         .map((frame) => frame.subarray(3).toString())
         .join(''),
-    datagrams: () => heard.filter((frame) => frame[0] === FRAME_DATAGRAM).map((frame) => frame.subarray(1).toString()),
+    datagrams: (id?: number) =>
+      heard
+        .filter((frame) => frame[0] === FRAME_DATAGRAM && (id === undefined || frame.readUInt16BE(1) === id))
+        .map((frame) => frame.subarray(3).toString()),
     closed: (id) => heard.some((frame) => frame[0] === FRAME_CLOSE && frame.readUInt16BE(1) === id),
   };
 }
@@ -152,10 +155,27 @@ check(
   `${servedSeven} and ${servedNine}`,
 );
 
-one.socket.send(datagramFrame(Buffer.from('ask')));
-await until(() => one.datagrams().length > 0);
-const firstMirror = one.datagrams()[0] ?? '';
+one.socket.send(datagramFrame(1, Buffer.from('ask')));
+await until(() => one.datagrams(1).length > 0);
+const firstMirror = one.datagrams(1)[0] ?? '';
 check('a datagram crosses and comes back', firstMirror.startsWith('mirror:ask@'), firstMirror);
+
+// A SECOND channel from the same client. This is why a datagram carries a channel at all:
+// the game asks two UDP desks, may well ask them from two sockets of its own, and each
+// answer has to come back to the socket that asked.
+one.socket.send(datagramFrame(2, Buffer.from('other')));
+await until(() => one.datagrams(2).length > 0);
+const secondMirror = one.datagrams(2)[0] ?? '';
+check('a second channel is its own conversation', secondMirror.startsWith('mirror:other@'), secondMirror);
+check('and the first channel did not hear it', one.datagrams(1).length === 1, `${String(one.datagrams(1).length)} on channel 1`);
+
+const sourceOfOne = firstMirror.split('@')[1] ?? '';
+const sourceOfTwo = secondMirror.split('@')[1] ?? '';
+check(
+  'two channels are two sockets at the desk',
+  sourceOfOne !== '' && sourceOfTwo !== '' && sourceOfOne !== sourceOfTwo,
+  `${sourceOfOne || '(nothing)'} and ${sourceOfTwo || '(nothing)'}`,
+);
 
 // ---------------------------------------------------------------------------------
 // A second client. This is the check the per-connection UDP socket exists for: two
@@ -163,11 +183,13 @@ check('a datagram crosses and comes back', firstMirror.startsWith('mirror:ask@')
 // ---------------------------------------------------------------------------------
 
 const two = await connect();
-two.socket.send(datagramFrame(Buffer.from('theirs')));
+// Channel 1 again, deliberately: ids are the client's own and two clients using the same
+// number must still be two conversations.
+two.socket.send(datagramFrame(1, Buffer.from('theirs')));
 await until(() => two.datagrams().length > 0);
 
 check('the second client hears its own datagram', (two.datagrams()[0] ?? '').startsWith('mirror:theirs@'), two.datagrams()[0] ?? '');
-check('and the first client did not hear it', one.datagrams().length === 1, `${String(one.datagrams().length)} datagrams`);
+check('and the first client did not hear it', one.datagrams().length === 2, `${String(one.datagrams().length)} datagrams`);
 
 const portOfOne = firstMirror.split('@')[1] ?? '';
 const portOfTwo = (two.datagrams()[0] ?? '').split('@')[1] ?? '';

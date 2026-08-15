@@ -20,12 +20,19 @@
 //   0x01 [id:u16] payload   bytes on a TCP stream, either direction
 //   0x02 [id:u16]           open a stream                        (client -> server)
 //   0x03 [id:u16]           the stream ended, either direction
-//   0x04 payload            one datagram, either direction
+//   0x04 [id:u16] payload   one datagram, on a channel, either direction
 //
-// Stream ids are the client's to choose and are unique within one connection; nothing here
-// hands them out, so a client can open a stream and write to it in the same breath without
+// Ids are the client's to choose and are unique within one connection; nothing here hands
+// them out, so a client can open a stream and write to it in the same breath without
 // waiting for an answer. The ids of two different clients never meet: each connection has
-// its own table.
+// its own table. Streams and channels are numbered apart — one table each.
+//
+// WHY A DATAGRAM CARRIES A CHANNEL AND NOT JUST ITSELF. Two of the game's desks are UDP —
+// the NAT mirror and the CD-key window — and the client may well ask them from two sockets
+// of its own. An answer has to come back to the socket that asked, and once it has crossed
+// a WebSocket the only thing that can say which one that was is a number the client put
+// there. So each of the client's source addresses is a channel, and each channel gets a
+// datagram socket of its own here.
 //
 // Exports:
 //   startDeskTunnel(options) -> RunningDeskTunnel
@@ -56,22 +63,14 @@ const FRAME_OPEN = 0x02;
 const FRAME_CLOSE = 0x03;
 const FRAME_DATAGRAM = 0x04;
 
-/** Type and stream id. A datagram carries the type alone, so its header is one byte. */
-const STREAM_HEADER = 3;
-const DATAGRAM_HEADER = 1;
+/** Type and id, the same three bytes in front of every frame there is. */
+const HEADER = 3;
 
-function streamFrame(type: number, id: number, payload?: Buffer): Buffer {
-  const out = Buffer.alloc(STREAM_HEADER + (payload?.length ?? 0));
+function frame(type: number, id: number, payload?: Buffer): Buffer {
+  const out = Buffer.alloc(HEADER + (payload?.length ?? 0));
   out[0] = type;
   out.writeUInt16BE(id, 1);
-  payload?.copy(out, STREAM_HEADER);
-  return out;
-}
-
-function datagramFrame(payload: Buffer): Buffer {
-  const out = Buffer.alloc(DATAGRAM_HEADER + payload.length);
-  out[0] = FRAME_DATAGRAM;
-  payload.copy(out, DATAGRAM_HEADER);
+  payload?.copy(out, HEADER);
   return out;
 }
 
@@ -101,21 +100,23 @@ export function startDeskTunnel(options: DeskTunnelOptions): Promise<RunningDesk
     const streams = new Map<number, Socket>();
 
     /**
-     * This client's datagrams, and only this client's.
+     * A datagram socket per channel, and every one of them this client's alone.
      *
-     * One socket per connection rather than one for the service: the desks answer the
-     * address a datagram came from, and the NAT mirror keeps a conversation per address
-     * (`services/gateway/nat-service.ts`). Sharing one socket would merge every player's
-     * mirror into one and there would be no way to tell whose answer came back.
+     * Never one for the service and never even one for the connection: the desks answer
+     * the address a datagram came from, and the NAT mirror keeps a conversation per
+     * address (`services/gateway/nat-service.ts`). One socket for everybody would merge
+     * every player's mirror into one; one socket per connection would merge the two desks
+     * a single player asks from two sockets of his own.
      */
-    let udp: UdpSocket | null = null;
+    const channels = new Map<number, UdpSocket>();
 
-    const datagrams = (): UdpSocket => {
-      if (udp) return udp;
+    const datagrams = (id: number): UdpSocket => {
+      const existing = channels.get(id);
+      if (existing) return existing;
       const socket = createSocket('udp4');
-      socket.on('message', (data: Buffer) => peer.send(datagramFrame(data)));
-      socket.on('error', (error: Error) => log(`desks ${who} udp error: ${error.message}`));
-      udp = socket;
+      socket.on('message', (data: Buffer) => peer.send(frame(FRAME_DATAGRAM, id, data)));
+      socket.on('error', (error: Error) => log(`desks ${who} channel ${id} error: ${error.message}`));
+      channels.set(id, socket);
       return socket;
     };
 
@@ -126,11 +127,11 @@ export function startDeskTunnel(options: DeskTunnelOptions): Promise<RunningDesk
       // client open a stream and send its first message without a round trip.
       const socket = createConnection({ host: options.deskHost, port: options.deskPort });
       socket.setNoDelay(true);
-      socket.on('data', (data: Buffer) => peer.send(streamFrame(FRAME_DATA, id, data)));
+      socket.on('data', (data: Buffer) => peer.send(frame(FRAME_DATA, id, data)));
       socket.on('error', (error: Error) => log(`desks ${who} stream ${id} error: ${error.message}`));
       socket.on('close', () => {
         if (!streams.delete(id)) return;
-        peer.send(streamFrame(FRAME_CLOSE, id));
+        peer.send(frame(FRAME_CLOSE, id));
         log(`desks ${who} stream ${id} closed by the desk`);
       });
       streams.set(id, socket);
@@ -138,20 +139,17 @@ export function startDeskTunnel(options: DeskTunnelOptions): Promise<RunningDesk
     };
 
     peer.onMessage((bytes) => {
-      if (!bytes.length) return;
+      if (bytes.length < HEADER) {
+        log(`desks ${who} sent ${bytes.length} bytes, which is not a frame — ignored`);
+        return;
+      }
       const type = bytes[0];
-
-      if (type === FRAME_DATAGRAM) {
-        datagrams().send(bytes.subarray(DATAGRAM_HEADER), options.deskPort, options.deskHost);
-        return;
-      }
-
-      if (bytes.length < STREAM_HEADER) {
-        log(`desks ${who} sent ${bytes.length} bytes of a stream frame, which is not one — ignored`);
-        return;
-      }
       const id = bytes.readUInt16BE(1);
 
+      if (type === FRAME_DATAGRAM) {
+        datagrams(id).send(bytes.subarray(HEADER), options.deskPort, options.deskHost);
+        return;
+      }
       if (type === FRAME_OPEN) {
         open(id);
         log(`desks ${who} opened stream ${id}`);
@@ -162,7 +160,7 @@ export function startDeskTunnel(options: DeskTunnelOptions): Promise<RunningDesk
         // one. The alternative is dropping the first message of a connection because two
         // frames crossed, and a dropped first message is exactly what the desk classifier
         // has no way to recover from.
-        open(id).write(bytes.subarray(STREAM_HEADER));
+        open(id).write(bytes.subarray(HEADER));
         return;
       }
       if (type === FRAME_CLOSE) {
@@ -177,8 +175,8 @@ export function startDeskTunnel(options: DeskTunnelOptions): Promise<RunningDesk
       clients--;
       for (const [, socket] of streams) socket.destroy();
       streams.clear();
-      udp?.close();
-      udp = null;
+      for (const [, socket] of channels) socket.close();
+      channels.clear();
       log(`desks ${who} gone (${clients} carrying)`);
     });
   });

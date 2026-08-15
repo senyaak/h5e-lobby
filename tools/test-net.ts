@@ -2173,6 +2173,17 @@ console.log('\nwhat the description says about the game, for somebody deciding w
   const description = fields.find((f) => f instanceof Uint8Array && f.length > 200) as Uint8Array;
   check('the capture carries the host s description', description?.length === 555, String(description?.length));
 
+  // WHERE THE BUILD COMES FROM, and why it is not `gameVersion`. Field 8 is the game
+  // version and the client sends it EMPTY — which is what left a Version column blank on
+  // the page. What it does state is two `HEROES_<hash>` strings with different hashes:
+  // field 2, which the room is titled with, and field 9, the GS one. The first is what
+  // goes in the list; both are in the panel, because which of them two copies must match
+  // on is not settled and showing one as "the" version would settle it by accident.
+  check('CREATE_ROOM carries eleven fields', fields.length === 11, String(fields.length));
+  check('and its version field is empty', fields[8] === '', JSON.stringify(fields[8]));
+  check('while the room s own build is stated', String(fields[2]).startsWith('HEROES_'), String(fields[2]));
+  check('and the GS build beside it, a different hash', String(fields[9]).startsWith('HEROES_') && fields[9] !== fields[2], String(fields[9]));
+
   const chosen = roomMap(description);
   // The folder, because a NAME is not on the wire: the client resolves one from the .xdb
   // on its own disk, which is why a map you do not have shows an empty column in the game.
@@ -2227,7 +2238,9 @@ console.log('\nthe state feed, which decides when the core hears about a room');
     members,
     // What this block is about is which list goes out and when, not what is in a room.
     maxPlayers: 2,
+    build: '',
     gameVersion: '',
+    gsVersion: '',
     mapName: '',
     mapGenerated: false,
     facts: [],

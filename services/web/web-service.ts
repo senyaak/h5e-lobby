@@ -71,7 +71,9 @@ interface OpenGame {
   master: string;
   players: string[];
   seats: number;
-  version: string;
+  /** The build strings the client states — see RoomInfo.build for why there are two. */
+  build: string;
+  gsBuild: string;
   map: string;
   generated: boolean;
   /** What the host's description said, for the panel behind the (i). Never an address. */
@@ -85,7 +87,8 @@ function asOpenGame(room: RoomInfo): OpenGame {
     master: room.master,
     players: room.members,
     seats: room.maxPlayers,
-    version: room.gameVersion,
+    build: room.build,
+    gsBuild: room.gsVersion,
     map: room.mapName,
     generated: room.mapGenerated,
     facts: room.facts,

@@ -83,13 +83,23 @@ export interface RoomInfo {
    */
   facts: RoomFact[];
   /**
-   * The game's own version string, as the host's client stated it when it made the room.
+   * Which build of the game this room is for — `HEROES_29988429c481f219`.
    *
-   * Here because it is the one thing that decides whether somebody can join at all: the
-   * client refuses a game whose version is not one it knows, and a person looking at a
-   * list wants to see that before he clicks rather than after.
+   * **This and not `gameVersion`, which the client sends EMPTY.** CREATE_ROOM has eleven
+   * fields and field 8 — the game version — is `""` in the capture, which is why a Version
+   * column drawn from it was blank. What the client does state is two `HEROES_<hash>`
+   * strings with different hashes: field 2, which the room is titled with, and field 9,
+   * the GS one. This is the first.
+   *
+   * Which of them two copies must agree on to play together is NOT settled, so both are
+   * carried and the panel shows both. Calling one of them "the version" would settle it
+   * by accident.
    */
+  build: string;
+  /** Field 8. Empty in the capture — kept because the wire has a slot for it. */
   gameVersion: string;
+  /** Field 9, the other `HEROES_<hash>`. */
+  gsVersion: string;
   /**
    * Where each player's game is, as the host's own description of the room says.
    *

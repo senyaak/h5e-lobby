@@ -81,7 +81,7 @@
       #games .seats { font-variant-numeric: tabular-nums; white-space: nowrap; }
       /* A game nobody else can get into should not look like an invitation. */
       #games .seats.full { color: var(--dim); }
-      #games .version { color: var(--dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+      #games .build { color: var(--dim); font-family: ui-monospace, monospace; font-size: 12px; white-space: nowrap; }
       .pill {
         border: 1px solid var(--edge);
         border-radius: 999px;
@@ -90,21 +90,25 @@
         color: var(--server);
         white-space: nowrap;
       }
+      /* Solid rather than an outline: at 20px an outlined glyph in --dim on --panel is a
+         smudge, and this is the only thing in the row anybody is meant to click. */
       button.more {
-        border: 1px solid var(--edge);
-        background: transparent;
-        color: var(--dim);
+        border: 1px solid var(--gold);
+        background: var(--gold);
+        color: var(--back);
         border-radius: 999px;
-        width: 20px;
-        height: 20px;
+        width: 22px;
+        height: 22px;
         line-height: 1;
         padding: 0;
         font: inherit;
-        font-size: 12px;
+        font-size: 13px;
+        font-weight: 700;
         font-style: italic;
         cursor: pointer;
       }
-      button.more:hover { color: var(--gold); border-color: var(--gold); }
+      button.more:hover { filter: brightness(1.15); }
+      button.more:focus-visible { outline: 2px solid var(--web); outline-offset: 2px; }
       #facts-box {
         border: 1px solid var(--edge);
         border-radius: 10px;
@@ -187,7 +191,7 @@
              it reads as a list that failed to load. -->
         <table id="games" hidden>
           <thead>
-            <tr><th>Game</th><th>Map</th><th>Host</th><th class="seats">Players</th><th>Playing</th><th>Version</th><th></th></tr>
+            <tr><th>Game</th><th>Map</th><th>Host</th><th class="seats">Players</th><th>Playing</th><th>Build</th><th></th></tr>
           </thead>
           <tbody id="games-rows"></tbody>
         </table>
@@ -374,13 +378,33 @@
             cell(game.master),
             cell(`${game.players.length}/${game.seats}`, full ? 'seats full' : 'seats'),
             guests.length ? cell(guests.join(', '), 'players') : cell('waiting for someone', 'waiting'),
-            cell(game.version, 'version'),
+            build(game.build),
             more(game),
           );
           rows.append(row);
         }
         $('games').hidden = games.length === 0;
         $('no-games').hidden = games.length > 0;
+      }
+
+      /**
+       * The build, short.
+       *
+       * `HEROES_29988429c481f219` is a whole column of hexadecimal nobody reads, and what
+       * it is FOR is comparison: mine against his. Eight characters settle that as well as
+       * twenty-three do, and the whole of it is a hover and in the panel.
+       */
+      function build(text) {
+        const td = document.createElement('td');
+        td.className = 'build';
+        if (!text) {
+          td.className = 'waiting';
+          td.textContent = 'not said';
+          return td;
+        }
+        td.textContent = text.replace(/^HEROES_/, '').slice(0, 8);
+        td.title = text;
+        return td;
       }
 
       /** A small label, for the things that are a kind rather than a value. */
@@ -424,7 +448,9 @@
         };
         say('host', game.master);
         say('players', `${game.players.length} of ${game.seats} — ${game.players.join(', ')}`);
-        say('version', game.version);
+        // Both, because which one two copies must match on is not settled.
+        if (game.build) say('build', game.build);
+        if (game.gsBuild) say('gs build', game.gsBuild);
         for (const fact of game.facts) say(fact.name, fact.value);
         $('facts-box').showModal();
       }

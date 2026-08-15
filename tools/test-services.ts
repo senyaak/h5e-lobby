@@ -736,15 +736,33 @@ console.log('\nthe chat line, in and out of the game s wrapper');
   const bare = parseChatLine('just a sentence');
   check('something that is not in that shape is all text', bare.text === 'just a sentence' && bare.nick === '', JSON.stringify(bare));
 
-  // The codepage. IRC here is one byte per character in the client's own Windows ANSI
-  // page, so a Russian sentence has to be converted at the gateway's edge or it is stored
-  // as `:B>-=81C4L` and lost — which is exactly what the first live run did.
+  // The encoding. The game's chat is UTF-8 — captured 15.08.2026, a player typed Cyrillic
+  // and it arrived as `d0b9 d186 d0b2`. It was read as windows-1251 for a year without
+  // anyone noticing, because game-to-game the two errors cancel: UTF-8 misread as 1251 is
+  // mojibake, and mojibake written back as 1251 is the original bytes again. Only the
+  // stored copy was wrong — until the browser put real UTF-8 into the history.
   const russian = 'кто-нибудь тут есть?';
   const wire = toGameText(russian);
-  check('Cyrillic goes out as one byte a character', wire.length === russian.length, `${wire.length} vs ${russian.length}`);
+  check('Cyrillic goes out as UTF-8, two bytes a letter', wire.length === Buffer.byteLength(russian, 'utf8'), `${wire.length} vs ${russian.length} char(s)`);
   check('and comes back as what was typed', fromGameText(wire) === russian, fromGameText(wire));
   check('ASCII is untouched in both directions', toGameText('gg wp') === 'gg wp' && fromGameText('gg wp') === 'gg wp');
-  check('and a character the codepage has no room for becomes a question mark', toGameText('nice 🙂') === 'nice ?', toGameText('nice 🙂'));
+  check('and nothing has to be dropped — an emoji survives the round trip', fromGameText(toGameText('nice 🙂')) === 'nice 🙂', fromGameText(toGameText('nice 🙂')));
+
+  // THE LINE THAT KILLED THE CLIENT.
+  //
+  // A sentence typed in the BROWSER is stored as the UTF-8 it is, and then replayed into
+  // the game when somebody joins that channel. Under 1251 it left as `e4 f0 e0 f2 f3 f2 e5`
+  // — a byte sequence that is not valid UTF-8 in any reading — and the client did not draw
+  // it, it died on it: every copy that entered #LobbyGrp1.2 on 15.08.2026 was reset within
+  // 1.2 seconds of the replay. What goes out must be decodable by the thing decoding it.
+  const fromBrowser = 'дратуте';
+  const sent = Buffer.from(toGameText(fromBrowser), 'latin1');
+  check(
+    'a browser-typed line reaches the game as valid UTF-8',
+    Buffer.from(sent.toString('utf8'), 'utf8').equals(sent),
+    sent.toString('hex'),
+  );
+  check('and says what was typed', sent.toString('utf8') === fromBrowser, sent.toString('utf8'));
 
   // What the gateway watches for: an IRC connection that says what was said and where.
   const connection = new IrcConnection();

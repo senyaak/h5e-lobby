@@ -60,40 +60,42 @@ export function unframe(buf: Buffer): { lines: string[]; rest: Buffer } {
 const SERVER = 'homm5.local';
 
 /**
- * The codepage the game's chat is in.
+ * The encoding the game's chat is in, which is **UTF-8** — measured, not assumed.
  *
- * IRC here is bytes, one per character, and the client writes whatever its Windows ANSI
- * codepage is — 1251 on a Russian machine. Read as latin1 (which is what `unframe` does,
- * because that is the only way to get the bytes back unharmed) a Russian sentence comes
- * out as `:B>-=81C4L`, and stored that way it is lost. So the gateway converts at its own
- * edge: bytes in, UTF-8 out, and back again for anything it sends.
+ * IRC here is bytes, and `unframe` reads them as latin1 because that is the only way to
+ * get them back unharmed. What those bytes mean was guessed at first: "whatever the
+ * client's Windows ANSI codepage is, 1251 on a Russian machine". That was wrong, and the
+ * capture of 15.08.2026 says so in one line — a player typed Cyrillic in the game and it
+ * arrived as `71 77 64 d0b9 d186 d0b2`, which is `qwd` followed by UTF-8, not 1251.
  *
- * `H5E_GAME_CODEPAGE` changes it for a client running under a different one.
+ * The guess survived for a year because it CANCELS ITSELF when both ends are the game:
+ * UTF-8 bytes read as 1251 became mojibake in the database, and mojibake written back as
+ * 1251 became the same UTF-8 bytes again, so the game always drew the right letters and
+ * only the stored copy was wrong. The browser lobby is what broke the symmetry — it puts
+ * real UTF-8 into the history, and 1251 turned that into a byte sequence which is not
+ * valid UTF-8 at all (`дратуте` -> `e4 f0 e0 f2 f3 f2 e5`). The client does not draw that;
+ * it dies on it, and every player entering that channel died with it.
+ *
+ * There is no setting for this and no table of codepages any more. Every client that has
+ * ever been measured here sends UTF-8, and none has been seen sending anything else; a
+ * knob for "a client that speaks something else" would be an assumption of exactly the
+ * kind that cost a year, kept alive on the strength of nobody having tested it. If one
+ * ever turns up, the evidence will arrive with it — and so will the branch.
  */
-const GAME_CODEPAGE = process.env['H5E_GAME_CODEPAGE'] ?? 'windows-1251';
 
-/** Byte value -> the character it means, for all 256 of them. */
-const FROM_BYTE = new TextDecoder(GAME_CODEPAGE).decode(Uint8Array.from({ length: 256 }, (_, i) => i));
-const TO_BYTE = new Map([...FROM_BYTE].map((char, byte) => [char, byte]));
-
-/** What the client typed, as text: the bytes off the wire read in its codepage. */
+/** What the client typed, as text: the bytes off the wire, which are UTF-8. */
 export function fromGameText(wire: string): string {
-  let out = '';
-  for (let i = 0; i < wire.length; i += 1) out += FROM_BYTE[wire.charCodeAt(i) & 0xff] ?? '?';
-  return out;
+  return Buffer.from(wire, 'latin1').toString('utf8');
 }
 
 /**
- * And back: text into the bytes the client can draw.
+ * And back: text into the bytes the client draws.
  *
- * A character the codepage has no room for becomes a question mark rather than nothing —
- * the game would draw the raw byte as a random letter, and a message with a hole in it is
- * harder to understand than one with a `?` where somebody's emoji was.
+ * Nothing has to be dropped or replaced on the way — a codepage had characters it could
+ * not hold and turned them into `?`, and UTF-8 holds every one of them.
  */
 export function toGameText(text: string): string {
-  let out = '';
-  for (const char of text) out += String.fromCharCode(TO_BYTE.get(char) ?? 0x3f);
-  return out;
+  return Buffer.from(text, 'utf8').toString('latin1');
 }
 
 export interface IrcEvent {

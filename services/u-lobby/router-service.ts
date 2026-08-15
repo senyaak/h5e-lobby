@@ -429,14 +429,13 @@ export class RouterSession {
    * open"). Clicking the dead game got "that game is gone" from the JOIN_ROOM refusal,
    * which is the repair for a stale screen and not a substitute for not having one.
    *
-   * **What is a guess is that GROUP_REMOVE (55) is the message that fixes it**, and it is
-   * the one worth trying: it is what this server already sends the player whose own
-   * message killed the room, and the only candidate the client's own table offers. But
-   * nothing has ever been seen to act on it — it appears in no capture and no game log in
-   * either direction, and its two narrow siblings, MEMBER_JOIN (50) and NEW_GROUP (54),
-   * were sent and drew no reaction at all. So if the row still survives on the other
-   * screen after this, 55 is not the message and the search moves on rather than the
-   * arguments to it being permuted.
+   * **GROUP_REMOVE (55) is that message, and it is now measured.** It went out to the
+   * other player in a real game on 16.08.2026 (`GROUP_LEAVE 100 — the host left … told it
+   * is gone, and so were 1 other(s)`) and the game left his screen as though it had never
+   * existed. Worth writing down because it was a guess when it was made: 55 appears in no
+   * capture in either direction, and its two narrow siblings, MEMBER_JOIN (50) and
+   * NEW_GROUP (54), were both sent and drew no reaction at all. It is the one of the three
+   * the client acts on.
    *
    * Bare and unwrapped, the same shape that goes to the leaver — a wrapped 38 puts the
    * echoed subtype where the first argument should be, which is what made

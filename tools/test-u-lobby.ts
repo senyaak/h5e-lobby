@@ -11,8 +11,12 @@
 //
 // Usage: `node tools/test-u-lobby.ts`
 
-import { createServer as createTcpServer, type Socket } from 'node:net';
+import { createServer as createTcpServer, createConnection, type Socket } from 'node:net';
 import { createSocket } from 'node:dgram';
+import { spawn } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { startULobbyTunnel } from '../services/u-lobby/tunnel.ts';
 
 const WATCHDOG_MS = 60 * 1000;
@@ -220,6 +224,124 @@ await until(() => tunnel.clients() === 0);
 await tunnel.close();
 await new Promise<void>((done) => tcpService.close(() => done()));
 udpService.close();
+
+// ---------------------------------------------------------------------------------
+// And now against a REAL gateway.
+//
+// Everything above is the carrying, checked against a stub on purpose. This is the
+// seam nothing else holds: a stream that crosses the tunnel and lands on the gateway
+// has to be a connection the gateway cannot tell from one the game dialled itself —
+// its own classifier reading the first message, its own answer coming back.
+//
+// The server list is what to ask for. It opens no session, logs nobody in, and the
+// answer is a document with a shape: `[Servers]`, and every address in it the one the
+// gateway was told to advertise. A live run of this over the internet found nothing
+// wrong and would still not belong here — a suite that needs a laptop and Cloudflare
+// goes red when the laptop sleeps, which is noise. The trip this checks is the same
+// one minus the tunnel provider, which is not our code.
+// ---------------------------------------------------------------------------------
+
+console.log('\nthe same, against the gateway itself');
+
+/** A port nothing is on, by taking one and giving it straight back. */
+async function freePort(): Promise<number> {
+  const server = createTcpServer();
+  await new Promise<void>((ready) => server.listen(0, '127.0.0.1', () => ready()));
+  const port = (server.address() as { port: number }).port;
+  await new Promise<void>((shut) => server.close(() => shut()));
+  return port;
+}
+
+const realGatewayPort = await freePort();
+const scratch = mkdtempSync(join(tmpdir(), 'h5e-u-lobby-'));
+
+// Its own database and its own log directory: this must not touch the repository's.
+// No core is started — the gateway says so and carries on, which is exactly the
+// promise `deploy/README.md` makes about `Wants=` rather than `Requires=`.
+const gateway = spawn(
+  process.execPath,
+  ['services/gateway/main.ts', '--http', String(realGatewayPort), '--bind', '127.0.0.1', '--host', '127.0.0.1'],
+  {
+    cwd: join(import.meta.dirname, '..'),
+    env: {
+      ...process.env,
+      H5E_DATABASE: join(scratch, 'lobby.db'),
+      H5E_LOG_DIR: scratch,
+      H5E_CORE_URL: 'ws://127.0.0.1:1/core',
+    },
+    stdio: 'ignore',
+  },
+);
+
+/** Wait for it to be listening, rather than guess how long it takes. */
+async function listening(port: number, ms = 20_000): Promise<boolean> {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    const open = await new Promise<boolean>((answer) => {
+      const probe = createConnection({ host: '127.0.0.1', port });
+      probe.on('connect', () => { probe.destroy(); answer(true); });
+      probe.on('error', () => answer(false));
+    });
+    if (open) return true;
+    await new Promise((done) => setTimeout(done, 50));
+  }
+  return false;
+}
+
+const up = await listening(realGatewayPort);
+check('the gateway came up on a port of its own', up, `127.0.0.1:${String(realGatewayPort)}`);
+
+if (up) {
+  const live = await startULobbyTunnel({
+    bind: '127.0.0.1',
+    port: 0,
+    gatewayHost: '127.0.0.1',
+    gatewayPort: realGatewayPort,
+    log: () => {},
+  });
+
+  const client = new WebSocket(`ws://127.0.0.1:${String(live.port())}/u-lobby`);
+  client.binaryType = 'arraybuffer';
+  const back: Buffer[] = [];
+  let ended = false;
+  client.addEventListener('message', (event) => {
+    const bytes = Buffer.from(event.data as ArrayBuffer);
+    if (bytes.length < 3) return;
+    if (bytes[0] === FRAME_DATA) back.push(bytes.subarray(3));
+    if (bytes[0] === FRAME_CLOSE) ended = true;
+  });
+  await new Promise<void>((open) => client.addEventListener('open', () => open(), { once: true }));
+
+  // Absolute-form, the way the game's curl asks a proxy. The gateway answers any GET
+  // and reads neither the path nor the query.
+  client.send(streamFrame(FRAME_OPEN, 1));
+  client.send(streamFrame(FRAME_DATA, 1, Buffer.from(
+    'GET http://gsconnect.ubisoft.com/gsinit.php?dp=HEROES_29988429c481f219 HTTP/1.1\r\n'
+    + 'Host: gsconnect.ubisoft.com\r\nAccept: */*\r\nConnection: close\r\n\r\n', 'latin1',
+  )));
+
+  await until(() => ended, 15_000);
+  const answer = Buffer.concat(back).toString('latin1');
+  check('the gateway answered a stream that came through the tunnel', ended, `${String(answer.length)} bytes`);
+  check('and what came back is a server list', /\r\n\[Servers\]\r\n/.test(answer), answer.split('\r\n')[0] ?? '');
+  check(
+    'naming the address the gateway was told to advertise',
+    /RouterIP0=127\.0\.0\.1/.test(answer) && /IRCIP0=127\.0\.0\.1/.test(answer),
+    (/RouterIP0=[^\r]*/.exec(answer) ?? ['(no RouterIP0)'])[0],
+  );
+  check(
+    'and its own port, which is not the tunnel\'s',
+    answer.includes(`RouterPort0=${String(realGatewayPort)}`),
+    (/RouterPort0=[^\r]*/.exec(answer) ?? ['(no RouterPort0)'])[0],
+  );
+
+  client.close();
+  await live.close();
+}
+
+gateway.kill();
+await new Promise((done) => setTimeout(done, 200));
+rmSync(scratch, { recursive: true, force: true });
 
 console.log(failures === 0 ? '\nall good\n' : `\n${String(failures)} FAILED\n`);
 process.exit(failures === 0 ? 0 : 1);

@@ -115,6 +115,10 @@ export class CoreService {
         // Whoever it was speaking for is no longer here — say so before anything is
         // drawn stale. A player list that keeps ghosts is worse than an empty one.
         if (client.presence.length) this.tellEveryone({ kind: 'presence', entries: this.presence() });
+        // And his games went with him. A gateway that died is a gateway whose rooms are
+        // not being played any more, and a browser left showing them invites people into
+        // games that are not there.
+        if (client.rooms.length) this.tellEveryone({ kind: 'rooms', rooms: this.rooms() });
       },
     };
   }
@@ -136,6 +140,10 @@ export class CoreService {
       this.log(`core  ${client.service} connected`);
       client.send(encode({ kind: 'welcome', protocol: CORE_PROTOCOL, channels: this.channels }));
       client.send(encode({ kind: 'presence', entries: this.presence() }));
+      // Both pictures at once, because a service that has just connected has neither and
+      // nothing else will happen until somebody moves. A web service started while a game
+      // is already up would otherwise show an empty list until the next room changed.
+      client.send(encode({ kind: 'rooms', rooms: this.rooms() }));
       return;
     }
 
@@ -171,10 +179,13 @@ export class CoreService {
         return;
       }
       case 'rooms.replace': {
-        // Nobody is told: the only reader is the relay, and it asks one question about
-        // one agent when a connection opens. Pushing a room list at three services that
-        // do not draw rooms would be chatter.
+        // Told to everybody, the same as presence. This used to go no further than here,
+        // on the argument that the relay was the only reader and it asks its one question
+        // when an agent connects — but the browser draws the games now, and the list it
+        // draws them from is this one. Cheap to send: the gateway only says this when the
+        // list is not what it sent last (services/gateway/state-feed.ts).
         client.rooms = message.rooms;
+        this.tellEveryone({ kind: 'rooms', rooms: this.rooms() });
         this.log(
           `core  ${client.service} has ${message.rooms.length} room(s): ` +
             (message.rooms.map((room) => `${room.id} "${room.name}" [${room.members.join(', ')}]`).join('; ') || '—'),

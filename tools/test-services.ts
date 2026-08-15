@@ -345,6 +345,50 @@ check(
 // not listen anywhere but loopback, and THAT is checked above, with its sabotage half.
 
 // ---------------------------------------------------------------------------------
+console.log('\nthe games list the browser draws, and the half of it it must not get');
+// ---------------------------------------------------------------------------------
+
+// The gateway's part, played here by the u-lobby client: the whole list, whenever it
+// changes. `endpoints` is in it because the relay needs it — that is the field this
+// section exists to keep off the page.
+uLobby.replaceRooms([
+  {
+    id: 100,
+    name: 'Сервер — Senyaak',
+    master: 'Senyaak',
+    members: ['Senyaak', 'Player2'],
+    endpoints: [
+      { nick: 'Senyaak', address: '10.44.253.104', port: 8888 },
+      { nick: 'Player2', address: '10.44.253.104', port: 8889 },
+    ],
+  },
+]);
+// The LAST such message, not the first: an empty one arrives with the welcome, and a test
+// that waits for "a games message" is satisfied by it and then reads nothing.
+const drawnNow = (): Record<string, unknown>[] | undefined =>
+  senya.of('games').at(-1)?.['games'] as Record<string, unknown>[] | undefined;
+check('a game opened in the game reaches the browser', await until(() => drawnNow()?.length === 1));
+const drawn = drawnNow() ?? [];
+check('as one game', drawn.length === 1, JSON.stringify(drawn));
+check('with the name the host gave it', drawn[0]?.['name'] === 'Сервер — Senyaak', String(drawn[0]?.['name']));
+check('and who is playing it', JSON.stringify(drawn[0]?.['players']) === '["Senyaak","Player2"]', JSON.stringify(drawn[0]?.['players']));
+
+// THE POINT OF THIS SECTION. The page is served over the tunnel to anybody with an
+// account, and `endpoints` is every player's address and the port his game is on. It is
+// not filtered out of the core's shape — the browser is given a different shape that
+// never had it — and this is what says so if anybody ever widens that again.
+check('the address of nobody is in it', !('endpoints' in (drawn[0] ?? {})), JSON.stringify(Object.keys(drawn[0] ?? {})));
+check(
+  'and no field of it carries one, under any name',
+  !JSON.stringify(drawn).includes('10.44.253.104') && !JSON.stringify(drawn).includes('8888'),
+  JSON.stringify(drawn),
+);
+
+// And it empties the same way it filled: the whole list, never a change to apply.
+uLobby.replaceRooms([]);
+check('a game that ends empties the list', await until(() => drawnNow()?.length === 0), JSON.stringify(drawnNow()));
+
+// ---------------------------------------------------------------------------------
 console.log('\nsessions that run out, and sockets that hold them open');
 // ---------------------------------------------------------------------------------
 {

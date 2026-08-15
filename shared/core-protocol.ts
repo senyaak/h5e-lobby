@@ -143,6 +143,15 @@ export type FromCore =
   | { kind: 'welcome'; protocol: number; channels: ChannelInfo[] }
   | { kind: 'chat.message'; message: ChatMessage; sender?: string }
   | { kind: 'presence'; entries: PresenceEntry[] }
+  /**
+   * The games being hosted, everywhere, as one list — the same shape and the same rule as
+   * presence: replaced whole, sent when it differs, never a delta.
+   *
+   * **This carries `endpoints`, which is where each player's game is.** It goes to
+   * services, all of which are on the loopback with the core; whoever forwards any of this
+   * to a person is the one that has to take that field out first. The web service does.
+   */
+  | { kind: 'rooms'; rooms: RoomInfo[] }
   | {
       kind: 'reply';
       id: number;

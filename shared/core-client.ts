@@ -42,6 +42,8 @@ export class CoreClient {
   /** Set by whoever owns this client; both are optional and both may be replaced. */
   onChat: (message: ChatMessage, sender?: string) => void = () => {};
   onPresence: (entries: PresenceEntry[]) => void = () => {};
+  /** The games being hosted — the whole list, whenever it changes. */
+  onRooms: (rooms: RoomInfo[]) => void = () => {};
   onConnected: (channels: ChannelInfo[]) => void = () => {};
 
   private readonly options: CoreClientOptions;
@@ -103,6 +105,9 @@ export class CoreClient {
           return;
         case 'presence':
           this.onPresence(message.entries);
+          return;
+        case 'rooms':
+          this.onRooms(message.rooms);
           return;
         case 'reply': {
           const pending = this.waiting.get(message.id);

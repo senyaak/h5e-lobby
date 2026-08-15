@@ -28,7 +28,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CoreClient } from '../../shared/core-client.ts';
-import type { ChannelInfo, ChatMessage, PresenceEntry } from '../../shared/core-protocol.ts';
+import type { ChannelInfo, ChatMessage, PresenceEntry, RoomInfo } from '../../shared/core-protocol.ts';
 import { serveWebSocket, type WebSocketPeer } from '../../shared/websocket.ts';
 
 /**
@@ -51,7 +51,30 @@ type ToBrowser =
   | { kind: 'history'; channel: string; messages: ChatMessage[] }
   | { kind: 'message'; message: ChatMessage }
   | { kind: 'presence'; entries: PresenceEntry[] }
+  | { kind: 'games'; games: OpenGame[] }
   | { kind: 'core'; connected: boolean };
+
+/**
+ * A game as a person may see it, which is not all of one.
+ *
+ * The core's `RoomInfo` carries `endpoints` — every player's address and the port his game
+ * plays on. That is there for the relay, which has to know whose datagram it is holding,
+ * and it has no business on a page: this one is served over the tunnel to anybody with an
+ * account, and a game list that hands out the addresses of the people in it is a game list
+ * that doxxes them. So the shape the browser is given is a NEW one rather than the core's
+ * with a field deleted — a deletion is a line somebody can drop in a refactor and never
+ * notice, and this way there is nothing to drop.
+ */
+interface OpenGame {
+  id: number;
+  name: string;
+  master: string;
+  players: string[];
+}
+
+function asOpenGame(room: RoomInfo): OpenGame {
+  return { id: room.id, name: room.name, master: room.master, players: room.members };
+}
 
 interface Browser {
   peer: WebSocketPeer;
@@ -155,6 +178,8 @@ export function startWeb(options: WebOptions): Promise<RunningWeb> {
   const sessions = new Map<string, { name: string; usedAt: number }>();
   const failures = new Map<string, number[]>();
   let channels: ChannelInfo[] = [];
+  /** The last game list the core sent, kept so a page that opens late is not blank. */
+  let games: OpenGame[] = [];
 
   const core = new CoreClient({ url: options.coreUrl, service: 'web', log });
 
@@ -220,6 +245,10 @@ export function startWeb(options: WebOptions): Promise<RunningWeb> {
   };
   core.onChat = (message) => tellEveryone({ kind: 'message', message }, message.channel);
   core.onPresence = (entries) => tellEveryone({ kind: 'presence', entries });
+  core.onRooms = (rooms) => {
+    games = rooms.map(asOpenGame);
+    tellEveryone({ kind: 'games', games });
+  };
   core.start();
 
   function readBody(request: IncomingMessage): Promise<string> {
@@ -402,6 +431,9 @@ export function startWeb(options: WebOptions): Promise<RunningWeb> {
         if (message.channel) browser.channel = message.channel;
         log(`web  ${browser.nick} is watching ${browser.channel}`);
         send(browser, { kind: 'welcome', nick: browser.nick, channels, core: core.connected });
+        // What is already being played, before anything moves. Presence comes back the
+        // same way, out of `pushPresence` by way of the core.
+        send(browser, { kind: 'games', games });
         openHistory(browser.channel);
         pushPresence();
         return;

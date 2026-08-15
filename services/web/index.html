@@ -67,6 +67,9 @@
       aside li { padding: 2px 0; }
       aside li.web { color: var(--web); }
       aside li.game { color: var(--gold); }
+      aside li.open-game { display: flex; flex-direction: column; padding: 4px 0; }
+      .game-name { color: var(--gold); font-weight: 600; word-break: break-word; }
+      .game-who { color: var(--dim); font-size: 12px; }
       aside p { color: var(--dim); font-size: 13px; margin: 0; }
       footer { padding: 10px 16px; border-top: 1px solid var(--edge); background: var(--panel); }
       #composer { display: flex; gap: 8px; }
@@ -112,6 +115,12 @@
     <main>
       <div id="log"></div>
       <aside>
+        <!-- Games first: they are the reason to have this page open. Note they are every
+             channel's, while the two lists below are this channel's only — the core's room
+             list does not say which channel a game is in, and nobody has wanted it to. -->
+        <h2>Games open</h2>
+        <ul id="games"></ul>
+        <p id="no-games">No games are open.</p>
         <h2>In the game</h2>
         <ul id="in-game"></ul>
         <h2>In the browser</h2>
@@ -239,7 +248,33 @@
           log.scrollTop = log.scrollHeight;
         } else if (message.kind === 'presence') {
           drawPresence(message.entries);
+        } else if (message.kind === 'games') {
+          drawGames(message.games);
         }
+      }
+
+      /**
+       * The games being hosted. The whole list every time, never a change to apply — which
+       * is why nothing here can go stale the way the game's own list did: there is no row
+       * to leave behind, the panel is rebuilt.
+       */
+      function drawGames(games) {
+        const list = $('games');
+        list.replaceChildren();
+        for (const game of games) {
+          const item = document.createElement('li');
+          item.className = 'open-game';
+          const name = document.createElement('span');
+          name.className = 'game-name';
+          name.textContent = game.name;
+          const who = document.createElement('span');
+          who.className = 'game-who';
+          const others = game.players.filter((player) => player !== game.master);
+          who.textContent = others.length ? `${game.master} vs ${others.join(', ')}` : `${game.master} — waiting`;
+          item.append(name, who);
+          list.append(item);
+        }
+        $('no-games').hidden = games.length > 0;
       }
 
       function draw(line) {

@@ -107,11 +107,12 @@ goes through `http_proxy`, which has to be a routable address. So the relay reac
 internet as `wss://relay-h5e.example.com/agent` while the game still dials `H5E_HOST`
 directly — SLICE §1.
 
-`h5e-u-lobby` is the way out of that, and **only half of it exists**: the service is here and
-tested, but the half that would speak to it lives in the game and is not written yet
-(homm5-editor, branch `net/multiplayer`). Until it is, this service listens and carries
-nothing, exactly as the relay did before its agent. What the tunnel costs the host today is
-therefore unchanged: one number rather than fifteen
+`h5e-u-lobby` is the way out of that, and **both halves now exist**: this service, and the
+mod's own lobby half (homm5-editor, branch `net/multiplayer`, `native/net/lobby.c`), which
+holds the game's u-lobby sockets on its loopback and carries them here. No game has been
+through it yet — what is proved is the trip, by `tools/test-u-lobby.ts` against a gateway
+it spawns and by `tools/probe-u-lobby.ts` against this deployment. What the tunnel costs
+the host for a client that does NOT run the mod is unchanged: one number rather than fifteen
 sockets: `8080`, in TCP and UDP, because the u-lobby services are told apart by what a connection
 says first (`services/gateway/u-lobby.ts`) and not by the port it arrived on. That one number
 is what a firewall has to allow, if there is one — on this machine `ufw` is installed but
@@ -132,7 +133,7 @@ tunnel's hostnames and the third is nobody's business:
 ```bash
 curl -s localhost:8081/health           # web    — also https://h5e-lobby.example.com/health
 curl -s localhost:40200/health          # relay  — also https://relay-h5e.example.com/health
-curl -s localhost:40300/health          # u-lobby services  — needs its own ingress before it is public
+curl -s localhost:40300/health          # u-lobby — also https://u-lobby-h5e.example.com/health
 curl -s localhost:40100/health          # core   — loopback, and only ever loopback
 ```
 

@@ -109,9 +109,11 @@ directly — SLICE §1.
 
 `h5e-u-lobby` is the way out of that, and **both halves now exist**: this service, and the
 mod's own lobby half (homm5-editor, branch `net/multiplayer`, `native/net/lobby.c`), which
-holds the game's u-lobby sockets on its loopback and carries them here. No game has been
-through it yet — what is proved is the trip, by `tools/test-u-lobby.ts` against a gateway
-it spawns and by `tools/probe-u-lobby.ts` against this deployment. What the tunnel costs
+holds the game's u-lobby sockets on its loopback and carries them here. **Two copies of
+the game have played through it** (15.08.2026): the lobby over
+`wss://u-lobby-h5e.example.com/u-lobby`, the peers over the relay, and nothing dialled
+directly. The trip itself is checked without a game by `tools/test-u-lobby.ts`, which
+spawns a gateway of its own, and against this deployment by `tools/probe-u-lobby.ts`. What the tunnel costs
 the host for a client that does NOT run the mod is unchanged: one number rather than fifteen
 sockets: `8080`, in TCP and UDP, because the u-lobby services are told apart by what a connection
 says first (`services/gateway/u-lobby.ts`) and not by the port it arrived on. That one number

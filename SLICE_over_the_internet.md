@@ -1,5 +1,25 @@
 # SLICE — The lobby off this machine, and then onto the internet
 
+> **Status, 15.08.2026, later the same day: A GAME HAS NOW PLAYED WITH BOTH HALVES
+> THROUGH THE TUNNEL, and nothing was dialled directly.** Two copies, each with the
+> mod's u-lobby half on its own loopback port (8080 and 8081), reached the lobby
+> over `wss://u-lobby-h5e.example.com/u-lobby` and each other over the relay. No
+> bat file, no `http_proxy`, no address of the laptop anywhere on the game side:
+> the extension rewrites the one URL the game fetches its server list from, then
+> answers that request itself, and everything after it crosses a WebSocket.
+>
+> Measured: twelve u-lobby streams opened, one relay connection each and NO
+> closures — against twenty-eight connections and twenty-seven refusals in the run
+> before it — and the peer traffic mirrored, 101 out against 100 in on one side and
+> 81 against 80 on the other. `H5E_HOST` is back at its default `127.0.0.1`, which
+> is correct for a tunnelled client and is what the laptop's env no longer
+> overrides.
+>
+> **What that run did NOT settle** is §4.2 below: both copies were on one machine,
+> so both announced `192.168.178.27` and were told apart by their ports. Two players
+> behind different NATs can announce the same address AND the same port `8888`, and
+> nothing yet gives them different ones.
+>
 > **Status, 15.08.2026: STAGE ONE AND STAGE TWO ARE DONE, and three players proved it.**
 > The lobby runs on the laptop as `senyaak-h5e-*` user units in the `~/Projects/tunnels`
 > fleet (`systemctl --user start senyaak-h5e.target`, `deploy/README.md`); the gateway is

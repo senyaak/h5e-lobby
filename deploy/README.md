@@ -7,17 +7,17 @@ and prefixes their output.
 | unit | what it is | listens on |
 |---|---|---|
 | `h5e-core` | accounts, ladder, friends, presence, chat and its history | `40100` (loopback) |
-| `h5e-gateway` | the desks the game connects to | `8080`, TCP and UDP: the ini and every desk in one, the NAT mirror and the CD-key window in the other |
+| `h5e-gateway` | the u-lobby the game connects to | `8080`, TCP and UDP: the ini and every u-lobby service in one, the NAT mirror and the CD-key window in the other |
 | `h5e-web` | the browser lobby | `8081` |
 | `h5e-relay` | game datagrams between agents | `40200` |
-| `h5e-desks` | the same desks, for a game that reaches us through a tunnel | `40300` |
+| `h5e-u-lobby` | the same u-lobby, for a game that reaches us through a tunnel | `40300` |
 
-Only the gateway, the web, the relay and the desk tunnel are ever reached from outside.
+Only the gateway, the web, the relay and the u-lobby tunnel are ever reached from outside.
 The core is loopback: everything that talks to it is on the same host.
 
-**The gateway and the desk tunnel are two doors into one room.** A game on this network
+**The gateway and the u-lobby tunnel are two doors into one room.** A game on this network
 dials `8080` itself; a game that cannot — because a tunnel carries HTTP and WebSocket and
-nothing else — hands its desk sockets to the tunnel, which opens ordinary loopback
+nothing else — hands its u-lobby sockets to the tunnel, which opens ordinary loopback
 connections to `8080` on its behalf. The gateway is not told which door a client came
 through and does not change either way.
 
@@ -66,8 +66,8 @@ checkout, no root, and `./fleet` manages them like everything else:
 | `senyaak-h5e-gateway` | `services/gateway/main.ts` |
 | `senyaak-h5e-web` | `services/web/main.ts` |
 | `senyaak-h5e-relay` | `services/relay/main.ts` |
-| `senyaak-h5e-desks` | `services/desks/main.ts` |
-| `senyaak-h5e-tunnel` | cloudflared: `h5e-lobby.example.com` → `:8081`, `relay-h5e.example.com` → `:40200`; the desk tunnel wants a third ingress to `:40300` |
+| `senyaak-h5e-u-lobby` | `services/u-lobby/main.ts` |
+| `senyaak-h5e-tunnel` | cloudflared: `h5e-lobby.example.com` → `:8081`, `relay-h5e.example.com` → `:40200`; the u-lobby tunnel wants a third ingress to `:40300` |
 
 ```bash
 systemctl --user start   senyaak-h5e.target    # the six, one command
@@ -84,25 +84,25 @@ files in `~/Projects/tunnels/systemd/`, symlinked into `~/.config/systemd/user/`
 repository.
 
 **The tunnel carries what speaks its language, and the game does not speak it.** cloudflared
-speaks HTTP and WebSocket; the game's desks are raw TCP and UDP, and its one HTTP request
+speaks HTTP and WebSocket; the game's u-lobby services are raw TCP and UDP, and its one HTTP request
 goes through `http_proxy`, which has to be a routable address. So the relay reaches the
 internet as `wss://relay-h5e.example.com/agent` while the game still dials `H5E_HOST`
 directly — SLICE §1.
 
-`h5e-desks` is the way out of that, and **only half of it exists**: the service is here and
+`h5e-u-lobby` is the way out of that, and **only half of it exists**: the service is here and
 tested, but the half that would speak to it lives in the game and is not written yet
 (homm5-editor, branch `net/multiplayer`). Until it is, this service listens and carries
 nothing, exactly as the relay did before its agent. What the tunnel costs the host today is
 therefore unchanged: one number rather than fifteen
-sockets: `8080`, in TCP and UDP, because the desks are told apart by what a connection
-says first (`services/gateway/desk.ts`) and not by the port it arrived on. That one number
+sockets: `8080`, in TCP and UDP, because the u-lobby services are told apart by what a connection
+says first (`services/gateway/u-lobby.ts`) and not by the port it arrived on. That one number
 is what a firewall has to allow, if there is one — on this machine `ufw` is installed but
 `ENABLED=no`, so nothing is filtered.
 
 ## Day to day
 
 ```bash
-systemctl status h5e-core h5e-gateway h5e-web h5e-relay h5e-desks
+systemctl status h5e-core h5e-gateway h5e-web h5e-relay h5e-u-lobby
 journalctl -u h5e-gateway -f            # or tail logs/gateway-latest.log
 systemctl restart h5e-core              # the others reconnect; a running game does not notice
 systemctl restart h5e.target            # all five
@@ -114,7 +114,7 @@ tunnel's hostnames and the third is nobody's business:
 ```bash
 curl -s localhost:8081/health           # web    — also https://h5e-lobby.example.com/health
 curl -s localhost:40200/health          # relay  — also https://relay-h5e.example.com/health
-curl -s localhost:40300/health          # desks  — needs its own ingress before it is public
+curl -s localhost:40300/health          # u-lobby services  — needs its own ingress before it is public
 curl -s localhost:40100/health          # core   — loopback, and only ever loopback
 ```
 

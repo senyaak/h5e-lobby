@@ -1,4 +1,4 @@
-// The persistent-storage desk — where the game keeps a player's profile.
+// The persistent-storage service — where the game keeps a player's profile.
 //
 // `persistantdata` is one of the modules the client asks the router for, and it
 // speaks the module request/reply protocol: request 0x401 reads a record, 0x402

@@ -1,8 +1,8 @@
 [Unit]
-Description=h5e-lobby desk tunnel — carries a game's own desk sockets over one WebSocket
+Description=h5e-lobby u-lobby tunnel — carries a game's own u-lobby sockets over one WebSocket
 Documentation=file:/opt/h5e-lobby/docs/ARCHITECTURE.md
 # The gateway and not the core: every stream this opens lands on the gateway's TCP port,
-# and a tunnel that is up before the desks are just refuses connections until they are.
+# and a tunnel that is up before the u-lobby services are just refuses connections until they are.
 After=network-online.target h5e-gateway.service
 Wants=network-online.target h5e-gateway.service
 PartOf=h5e.target
@@ -13,7 +13,7 @@ User=h5e
 Group=h5e
 WorkingDirectory=/opt/h5e-lobby
 EnvironmentFile=-/etc/h5e-lobby.env
-ExecStart=/usr/bin/node services/desks/main.ts
+ExecStart=/usr/bin/node services/u-lobby/main.ts
 Restart=on-failure
 RestartSec=2
 

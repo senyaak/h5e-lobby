@@ -352,7 +352,7 @@ export const probeRoomFields = { on: false };
  * The duel of 14.08.2026 was captured on the loopback adapter and settled what the peers
  * dial: `192.168.178.27:8888 <-> 192.168.178.27:8889`, UDP, one socket each, 451 packets
  * in 186 seconds. Not `127.0.0.1` — the machine's **LAN** address, the one the client
- * declares about itself in LOBBYSERVERLOGIN. The NAT desk had mirrored `127.0.0.1` back
+ * declares about itself in LOBBYSERVERLOGIN. The NAT service had mirrored `127.0.0.1` back
  * to both of them and neither dialled it.
  *
  * That address reaches the other client by two roads and the capture cannot tell them

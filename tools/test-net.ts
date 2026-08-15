@@ -24,7 +24,7 @@ import { Accounts } from '../services/core/rules/accounts.ts';
 import { Friends } from '../services/core/rules/friends.ts';
 import { openDatabase } from '../services/core/rules/database.ts';
 import { IrcService, chatLine, frame, unframe } from '../services/gateway/irc.ts';
-import { classifyDatagram, classifyDesk } from '../services/gateway/desk.ts';
+import { classifyDatagram, classifyUService } from '../services/gateway/u-lobby.ts';
 import { StateFeed } from '../services/gateway/state-feed.ts';
 import type { PresenceEntry, RoomInfo } from '../shared/core-protocol.ts';
 import { lobbyChannel } from '../shared/channels.ts';
@@ -286,38 +286,38 @@ console.log('\nRSA key blobs, against the key a real client sent');
   check('a session key encrypted to us comes back', decryptWith(pair.privateKey, encryptTo(pair.publicKey, secret)).equals(secret));
 }
 
-console.log('\nWhich desk a connection is, from what it says first');
+console.log('\nWhich u-lobby service a connection is, from what it says first');
 {
-  // The four TCP desks share one port now (SLICE §2.3), so this is what decides which of
+  // The four TCP u-lobby services share one port now (SLICE §2.3), so this is what decides which of
   // them a connection wants. The router's case is the recorded packet itself; the others
-  // are built from the type each desk was measured opening with, which is the only part
+  // are built from the type each u-lobby service was measured opening with, which is the only part
   // of the message the classifier is allowed to look at.
   const opener = (type: number): Buffer =>
     build({ property: Property.GS, priority: 0, type, sender: 8, receiver: 2, body: ['senyaak', 'secret'] });
 
-  check('the recorded KEY_EXCHANGE is the router', classifyDesk(ROUTER_KEY_EXCHANGE).desk === 'Router', classifyDesk(ROUTER_KEY_EXCHANGE).note);
-  check('a LOGIN is the proxy', classifyDesk(opener(MessageType.LOGIN)).desk === 'Proxy');
-  check('and so is a LOGINWAITMODULE', classifyDesk(opener(MessageType.LOGINWAITMODULE)).desk === 'Proxy');
-  check('a LOBBYSERVERLOGIN is the lobby', classifyDesk(opener(MessageType.LOBBYSERVERLOGIN)).desk === 'Lobby');
-  check('the ini fetch is HTTP', classifyDesk(Buffer.from('GET http://ubi.com/servers.ini HTTP/1.1\r\n', 'latin1')).desk === 'HTTP');
+  check('the recorded KEY_EXCHANGE is the router', classifyUService(ROUTER_KEY_EXCHANGE).service === 'Router', classifyUService(ROUTER_KEY_EXCHANGE).note);
+  check('a LOGIN is the proxy', classifyUService(opener(MessageType.LOGIN)).service === 'Proxy');
+  check('and so is a LOGINWAITMODULE', classifyUService(opener(MessageType.LOGINWAITMODULE)).service === 'Proxy');
+  check('a LOBBYSERVERLOGIN is the lobby', classifyUService(opener(MessageType.LOBBYSERVERLOGIN)).service === 'Lobby');
+  check('the ini fetch is HTTP', classifyUService(Buffer.from('GET http://ubi.com/servers.ini HTTP/1.1\r\n', 'latin1')).service === 'HTTP');
 
   // Chat is what is left, and it has to survive being read as a GS header: the frame's
   // u16 length in the top two bytes makes a size far bigger than the bytes that arrived.
   const nick = frame('NICK Senyaak');
-  check('a wrapped IRC line is chat', classifyDesk(nick).desk === 'IRC', classifyDesk(nick).note);
+  check('a wrapped IRC line is chat', classifyUService(nick).service === 'IRC', classifyUService(nick).note);
   check('and it is not mistaken for a size that fits', ((nick[0]! << 16) | (nick[1]! << 8) | nick[2]!) > nick.length);
 
   // Half a header decides nothing, and neither does half a message.
-  check('two bytes are not enough to say', classifyDesk(ROUTER_KEY_EXCHANGE.subarray(0, 2)).wait);
-  check('a GET still arriving is not chat', classifyDesk(Buffer.from('GE', 'latin1')).wait);
+  check('two bytes are not enough to say', classifyUService(ROUTER_KEY_EXCHANGE.subarray(0, 2)).wait);
+  check('a GET still arriving is not chat', classifyUService(Buffer.from('GE', 'latin1')).wait);
   const half = ROUTER_KEY_EXCHANGE.subarray(0, 20);
-  check('a message still arriving waits rather than falls through', classifyDesk(half).wait, classifyDesk(half).note);
-  check('and the wait says how much is still to come', classifyDesk(half).note.includes('20 here so far'), classifyDesk(half).note);
+  check('a message still arriving waits rather than falls through', classifyUService(half).wait, classifyUService(half).note);
+  check('and the wait says how much is still to come', classifyUService(half).note.includes('20 here so far'), classifyUService(half).note);
 
-  // The one thing it refuses: a message that IS a GS message but opens no desk. Guessing
+  // The one thing it refuses: a message that IS a GS message but opens no u-lobby service. Guessing
   // would put it in somebody's conversation and the log would not say which.
-  const alive = classifyDesk(Buffer.from('000006003a41', 'hex'));
-  check('a STILLALIVE opens no desk and is refused, not guessed at', alive.desk === null && !alive.wait, alive.note);
+  const alive = classifyUService(Buffer.from('000006003a41', 'hex'));
+  check('a STILLALIVE opens no service and is refused, not guessed at', alive.service === null && !alive.wait, alive.note);
   check('and the refusal names the type, for whoever reads the log', alive.note.includes('STILLALIVE'), alive.note);
 }
 
@@ -511,7 +511,7 @@ console.log('\nCD-key service');
   check('the same request gets the same answer', first.equals(again));
 }
 
-console.log('\nThe proxy desk answers differently, because the client asked it to');
+console.log('\nThe proxy service answers differently, because the client asked it to');
 {
   const proxy = new RouterService(
     { address: '127.0.0.1', port: 40001 },
@@ -541,7 +541,7 @@ console.log('\nThe proxy desk answers differently, because the client asked it t
 
 console.log('\nThe lobby, as far as the wait module goes');
 {
-  const desk = new RouterService(
+  const lobbyService = new RouterService(
     { address: '127.0.0.1', port: 40001 },
     { address: '127.0.0.1', port: 40030 },
     { address: '127.0.0.1', port: 40031 },
@@ -553,7 +553,7 @@ console.log('\nThe lobby, as far as the wait module goes');
     build({ property: Property.GS, priority: 0, type: MessageType.LOBBY_MSG, sender: 4, receiver: 1, body: [String(subtype), inner] });
 
   // Verbatim from the wire: the client logs in to the lobby naming the game.
-  const loggedIn = desk.receive(lobbyMessage(LobbyMsg.LOGIN, ['HEROES_29988429c481f219']));
+  const loggedIn = lobbyService.receive(lobbyMessage(LobbyMsg.LOGIN, ['HEROES_29988429c481f219']));
   const ok = parse(loggedIn[0]!.replies[0]!);
   // Two answers: the success, and the channels behind it — the client asks for
   // neither, it just waits, which is how the first channel screen came up empty.
@@ -568,7 +568,7 @@ console.log('\nThe lobby, as far as the wait module goes');
     String((channels?.[0] as GSValue[])?.[8]),
   );
 
-  const listed = desk.receive(lobbyMessage(LobbyMsg.CHANGE_REQUESTED_LOBBIES, ['HEROES_29988429c481f219']));
+  const listed = lobbyService.receive(lobbyMessage(LobbyMsg.CHANGE_REQUESTED_LOBBIES, ['HEROES_29988429c481f219']));
   const info = parse(listed[0]!.replies[0]!);
   const groups = (info?.body?.[1] as GSValue[])?.[3] as GSValue[];
   check('the lobby list comes back as GROUP_INFO', info?.body?.[0] === String(LobbyMsg.GROUP_INFO), listed[0]?.note);
@@ -577,7 +577,7 @@ console.log('\nThe lobby, as far as the wait module goes');
   check('each is fourteen fields', ranked.length === 14, String(ranked.length));
   check('Ranked is named and rated', ranked[1] === 'Ranked' && ranked[11] === '1', `${String(ranked[1])}, mode ${String(ranked[11])}`);
 
-  const joined = desk.receive(lobbyMessage(LobbyMsg.JOIN_SERVER, ['1']));
+  const joined = lobbyService.receive(lobbyMessage(LobbyMsg.JOIN_SERVER, ['1']));
   const where = (parse(joined[0]!.replies[0]!)?.body?.[1] as GSValue[])?.[1] as GSValue[];
   check('joining a server hands over the lobby address', where?.[1] === '2130706433' && where?.[2] === '40040', JSON.stringify(where));
 }
@@ -1337,10 +1337,10 @@ console.log('\nThe profile, from the read the client really asked for');
   // never queued at all — measured by the probe: the ladder's two copies produced ONE
   // queued message, and the profile answer, sent only on the proxy's wait module, was
   // never seen. So when a router connection is open, that is where the answer goes.
-  // The desk is named 'Router' and not 'RouterLauncher' since the wait module moved onto
+  // The u-lobby service is named 'Router' and not 'RouterLauncher' since the wait module moved onto
   // the router's own port (SLICE §2.3): one socket, so one name.
   const onRouter: Buffer[] = [];
-  proxy.desks.set('Router', (bytes) => onRouter.push(bytes));
+  proxy.services.set('Router', (bytes) => onRouter.push(bytes));
   const routed = session.receive(
     build({
       property: Property.GS,
@@ -1359,7 +1359,7 @@ console.log('\nThe profile, from the read the client really asked for');
     parse(onRouter[0]!)?.type === MessageType.PROXY_HANDLER && (parse(onRouter[0]!)?.body?.[1] as GSValue[])?.[0] === '1025',
     JSON.stringify(parse(onRouter[0]!)?.body),
   );
-  proxy.desks.delete('Router');
+  proxy.services.delete('Router');
 
   // A write, then a read: we are a store, so what comes back is what went in — byte
   // for byte, with no opinion about what a profile means.
@@ -1506,7 +1506,7 @@ console.log('\nTwo players in one channel, and what the other one is told');
     build({ property: Property.GS, priority: 0, type: MessageType.LOBBY_MSG, sender: 4, receiver: 2, body });
 
   // Two lobby connections, each with somewhere to write — which is the whole of what
-  // the desks map could not do: it holds ONE socket per desk name, so the second
+  // the services map could not do: it holds ONE socket per u-lobby service name, so the second
   // player's Lobby socket replaced the first's and nothing could reach him.
   const first: Buffer[] = [];
   const second: Buffer[] = [];
@@ -2059,7 +2059,7 @@ console.log('\nThe login on the wire, which is where an account is made');
     build({ property: Property.GS, priority: 0, type: MessageType.LOGIN, sender: 8, receiver: 1, body: ['Senyaak'] }),
   );
   check('the proxy login is not a second password check', parse(onProxy[0]!.replies[0]!)?.type === MessageType.GSSUCCESS, onProxy[0]?.note);
-  check('and it says so', onProxy[0]!.note.includes('not the credential desk'), onProxy[0]?.note);
+  check('and it says so', onProxy[0]!.note.includes('not the credential service'), onProxy[0]?.note);
 }
 
 // ---------------------------------------------------------------------------------

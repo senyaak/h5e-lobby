@@ -15,7 +15,7 @@
 > either side of it (see `docs/ARCHITECTURE.md`, Identity).
 >
 > **BE EXACT ABOUT WHAT CROSSED WHAT.** Two halves went two different ways, and only one of
-> them left the house. The desks went over the **LAN**: `http_proxy` in each copy's bat file
+> them left the house. The u-lobby services went over the **LAN**: `http_proxy` in each copy's bat file
 > names `192.168.178.23:8080`, so login, chat and the room list never left the switch. The
 > peer traffic went **through the tunnel**: the agents dial
 > `wss://relay-h5e.example.com/agent`, so every game datagram went out to Cloudflare and
@@ -25,7 +25,7 @@
 > The firewall is not in the way here — `ufw` is installed and disabled — and what would
 > need opening is one port in two protocols.
 >
-> What is NOT done is everything from stage three: the desks have never been reached from
+> What is NOT done is everything from stage three: the u-lobby services have never been reached from
 > off this LAN.
 >
 > What IS built and measured is the local half — four services, three copies of the game,
@@ -51,10 +51,10 @@ something inside the game can.**
 
 > **Answered on 15.08.2026, and not yet proved by a game.** Everything below this
 > box is still true of a tunnel ON ITS OWN, and that is why it stays. What changed
-> is that the desks no longer have to reach the tunnel by themselves: the mod's
+> is that the u-lobby services no longer have to reach the tunnel by themselves: the mod's
 > lobby half (`native/net/lobby.c`, editor branch `net/multiplayer`) holds them on
 > the loopback and carries them out over one WebSocket, the way the peer half
-> already carries datagrams — and `services/desks` unwraps them into ordinary
+> already carries datagrams — and `services/u-lobby` unwraps them into ordinary
 > connections to this gateway, which is not told and does not change.
 >
 > Three things follow, and the third is the point:
@@ -63,10 +63,10 @@ something inside the game can.**
 >   the game fetches its server list from, and then answers that request itself,
 >   so `http_proxy` is gone and the port cannot disagree with anything;
 > - `H5E_HOST` stops having to be an address anybody can dial. For a tunnelled
->   client every desk is at its own `127.0.0.1`, which is this variable's default —
+>   client every u-lobby service is at its own `127.0.0.1`, which is this variable's default —
 >   so the laptop's override is what has to go, not something that has to be added;
 > - **§4.1 below is no longer the only way out.** A VPS, a port forward or a VPN
->   were the three answers to "the desks need an address the game can dial"; a
+>   were the three answers to "the u-lobby services need an address the game can dial"; a
 >   tunnelled client does not dial one. The VPS is still what a lobby for people
 >   who are not us wants, for the reasons in that section, but stage three no
 >   longer waits on it.
@@ -78,7 +78,7 @@ something inside the game can.**
 > session already carries its own copy of them.
 
 The game speaks HTTP to us exactly once, and raw TCP and UDP for everything after
-that: ten desks, of which `40000/40001/40010/40020/40021` are TCP **and** UDP, `6667`
+that: ten u-lobby services, of which `40000/40001/40010/40020/40021` are TCP **and** UDP, `6667`
 is the IRC socket, and `40030/40031/40040` are TCP. Cloudflared — and every tunnel of
 that family — carries HTTP and WebSocket. There is no port of the game's own transport
 it can carry.
@@ -94,12 +94,12 @@ So there are two transports and they get two different answers:
 
 | what | how it gets out |
 |---|---|
-| relay (`40200`), browser lobby (`8081`), desk tunnel (`40300`) | tunnel, `wss://` and `https://` |
+| relay (`40200`), browser lobby (`8081`), u-lobby tunnel (`40300`) | tunnel, `wss://` and `https://` |
 | everything the game itself dials, WITHOUT the mod's lobby half | a routable address: port forwarding, a VPS, or a private network |
-| the same, WITH it | the mod's own `wss://` to `services/desks`, and nothing to open |
+| the same, WITH it | the mod's own `wss://` to `services/u-lobby`, and nothing to open |
 
 How many ports that second row costs is a separate question with a good answer — one
-number since §2.3, `8080` in both protocols, and the ten desks below are ten protocols now
+number since §2.3, `8080` in both protocols, and the ten u-lobby services below are ten protocols now
 rather than ten numbers — but it is never zero, and no tunnel of this kind changes that.
 
 The agent already supports its half: `relay.c` accepts `ws://` and `wss://`, takes the
@@ -186,7 +186,7 @@ Two corrections to the paragraph above, learnt by doing it:
   host; nothing arrives at them from outside. The only firewall question is the gateway's
   ports — which is exactly why §2.3 is worth doing before anything is opened at all.
 - The firewall here turns out not to be one: `ufw`'s unit is `active`, but the tool is
-  `ENABLED=no` and enforces nothing. The desks are reachable from the LAN as they stand.
+  `ENABLED=no` and enforces nothing. The u-lobby services are reachable from the LAN as they stand.
   An earlier line here said the opposite, on the strength of the unit's state and the
   default policy in `/etc/default/ufw` — neither of which means a rule is loaded.
 
@@ -198,7 +198,7 @@ only), and how a player's peer traffic gets out (the agent and the relay, done a
 measured). Neither waits on the other, and a change here must not turn into a change
 there.
 
-The number of DESKS is Ubisoft's — their lobby is split up and the client dials each
+The number of U-LOBBY SERVICES is Ubisoft's — their lobby is split up and the client dials each
 part separately. The port NUMBERS are ours: the client learns every one of them from
 the ini we serve, from the wait-module reply, from `PROXY_HANDLER` and from the
 join-lobby hand-off, all four of which read the endpoints wired at
@@ -207,7 +207,7 @@ or assumes they differ. So a host that must open one port can have one port.
 
 What is in use, measured on the three-player run (`logs/gateway-latest.log`):
 
-| desk | proto | in that run |
+| u-lobby service | proto | in that run |
 |---|---|---|
 | the ini itself (`8080`) | TCP | 3 requests, one per client |
 | `Lobby:40040` | TCP | 255 connections |
@@ -221,15 +221,15 @@ What is in use, measured on the three-player run (`logs/gateway-latest.log`):
 
 Five more sockets we open saw nothing at all: TCP on `NATServer` and `CDKeyServer`, UDP
 on `Router`, `RouterLauncher` and `CDKeyServerLauncher` — `main.ts` binds UDP for every
-`tcp+udp` desk whether a handler exists or not, and for three of them none does.
+`tcp+udp` u-lobby service whether a handler exists or not, and for three of them none does.
 
 **The client always speaks first.** All eighteen connections in that capture opened with
-the client's message; no desk waits to be greeted. IRC is the slowest by far — about
+the client's message; no u-lobby service waits to be greeted. IRC is the slowest by far — about
 eleven seconds of silence after connecting — but it speaks unprompted in the end. That
 is what makes one listener possible at all: there is always something to read before
 anything has to be decided.
 
-And what there is to read separates cleanly. The GS desks share a six-byte header whose
+And what there is to read separates cleanly. The GS u-lobby services share a six-byte header whose
 **type** byte says which one it is: `219` KEY_EXCHANGE is the router, `102` LOGIN or
 `77` LOGINWAITMODULE is the proxy, `210` LOBBYSERVERLOGIN is the lobby. HTTP announces
 itself with `GET `. IRC is what is left, and it fails the GS test twice over — its
@@ -241,8 +241,8 @@ twelve bytes as a keep-alive, so that fallback has to be tried last.
 
 Two of the merges need no sniffing whatsoever: `Router` and `RouterLauncher` are served
 by byte-identical code, and so are `Proxy` and `ProxyLauncher` — the handler picks its
-behaviour from the role, and the role comes from the desk, never from the port. Giving
-each pair one number is an edit to the desk table plus renaming one lookup key
+behaviour from the role, and the role comes from the u-lobby service, never from the port. Giving
+each pair one number is an edit to the u-lobby table plus renaming one lookup key
 (`main.ts:320`, `router-service.ts:571`), about ten lines, and six TCP numbers become
 four.
 
@@ -253,14 +253,14 @@ Do it in this order, because each step can fail on its own and say why:
    connection it is already on. Nothing in the code or the notes answers that, and this
    is the cheapest way to ask.
 2. **Drop the five dead sockets.** Closing them is how it gets proved they were dead.
-3. **Sniff-demux the remaining four TCP desks** onto one listener. The work is that the
+3. **Sniff-demux the remaining four TCP u-lobby services** onto one listener. The work is that the
    session object is built at connect time today, before any byte has arrived, so it has
    to move behind a classify step that buffers the first message and then replays it.
-   Keep the detected role in the log line — "which desk" is the diagnostic this project
+   Keep the detected role in the log line — "which u-lobby service" is the diagnostic this project
    runs on, and losing it would be a real regression. The classifier belongs in its own
    exported function so `tools/test-net.ts` can drive it with the first packets recorded
    in `logs/gateway-latest.log`: a regression test that needs no game.
-4. **Merge the two UDP desks** onto one socket, CD-key tested before the short-datagram
+4. **Merge the two UDP u-lobby services** onto one socket, CD-key tested before the short-datagram
    echo.
 5. **Fold the ini's HTTP server in** as well. Then `http_proxy=http://<host>:<port>`
    names the same port as everything else.
@@ -271,14 +271,14 @@ and a scatter of one-line edits — `nat-service.ts:67` and `lobby.ts:669` both 
 change, and nothing in `router-service.ts`'s message handling moves** — the roles
 already exist; only the way a connection is given one changes.
 
-**The game side needs almost nothing for any of this.** Every desk port reaches the
-client through the ini, so it takes whatever we say. The agent keeps a list of desk
-ports to tell a desk from a player, reads it from the same ini, matches by number alone
+**The game side needs almost nothing for any of this.** Every u-lobby port reaches the
+client through the ini, so it takes whatever we say. The agent keeps a list of u-lobby service
+ports to tell a u-lobby service from a player, reads it from the same ini, matches by number alone
 and already refuses a duplicate (`native/net/agent.c:88-95`), so nine numbers collapsing
 to one leaves it with a one-entry list and nothing to change. Two small things do follow
 from that, though: `run-net.bat`'s `http_proxy` names the ini's port by hand, so it
-changes if the last step folds HTTP in; and because the agent separates desks from peers
-**by port and nothing else**, the number chosen for the desks must not be one a game
+changes if the last step folds HTTP in; and because the agent separates u-lobby services from peers
+**by port and nothing else**, the number chosen for the u-lobby services must not be one a game
 also listens on for peers (`8888` upward here).
 
 Worth noticing at the end of it: the browser lobby and the relay are both reached by an
@@ -289,15 +289,15 @@ could actually mean here — the whole product on one number, plus the same numb
 **How it came out.** All five steps, in that order, one commit each. Fifteen sockets are
 two, and both are **`8080`**: TCP carries the ini, the router, the proxy, the lobby and
 chat; UDP carries the mirror and the CD-key window. The classifier is
-`services/gateway/desk.ts`, driven in `tools/test-net.ts` by the KEY_EXCHANGE the client
+`services/gateway/u-lobby.ts`, driven in `tools/test-net.ts` by the KEY_EXCHANGE the client
 really sent, a real wrapped IRC line, the recorded SRP SYN and FIN, and the halves of the
 first two; live, a key exchange in one write and in two, a NICK, a CD-key challenge and a
-SYN all landed at the right desk.
+SYN all landed at the right u-lobby service.
 
 Four things worth knowing, three of them departures from the plan above:
 
 - **The shared number is the ini's, `8080`, not the router's `40000`.** `http_proxy` is
-  written by hand into each copy's `run-net.bat`, every desk address is read out of the
+  written by hand into each copy's `run-net.bat`, every u-lobby address is read out of the
   ini we serve — so keeping the hand-written one means the game side needs **no edit at
   all**, where the other way round wanted three bat files changed.
 - **UDP is the same number**, which took one more turn than the five steps. `lobby.ts`
@@ -308,10 +308,10 @@ Four things worth knowing, three of them departures from the plan above:
 - **`CDKeyServerLauncher` on `40021` went too**, which is the sixth dead socket — the
   table above accounts for five. Nothing is advertised at a port that does not answer: the
   ini names `8080` for it like everything else. That is also what settles the worry about
-  the CD-key desk being early in the sequence — it is third, after the ini and the mirror,
+  the CD-key service being early in the sequence — it is third, after the ini and the mirror,
   and it is **UDP**, which is answered on the number the ini gives. The TCP socket that
   went was one the client was never measured dialling and which had no handler behind it
-  anyway; and now that every desk shares one number, even a TCP attempt at the CD-key desk
+  anyway; and now that every u-lobby service shares one number, even a TCP attempt at the CD-key service
   lands on the listener and is logged, where before it would have been a refusal we could
   not see.
 - **The CD-key type byte does not decide.** `cdkey-service.ts` reads the request out of
@@ -362,7 +362,7 @@ while the game plays fine is the tell.
 
 The first is `H5E_HOST` from `~/.config/h5e-lobby.env` and has to be an address the game
 can dial — it changes here and in the bat file together. Its **port** does not change any
-more, which is why §2.3 put every desk on the ini's own number: `8080` is now the whole
+more, which is why §2.3 put every u-lobby service on the ini's own number: `8080` is now the whole
 of what the game dials in TCP. The second is already the internet one, so the relay half
 of this stage needs no LAN at all.
 
@@ -372,7 +372,7 @@ Same three readings as the local runs, and they are all in logs we already write
 
 - the gateway answers the ini over the LAN (`200`, `[Servers]` with the laptop's
   address in it) — **the half of this that needs no game is done**: fetched from a
-  container on another interface, `200` with `RouterIP0=192.168.178.23` and every desk on
+  container on another interface, `200` with `RouterIP0=192.168.178.23` and every u-lobby service on
   `8080` — the game logs in and chat reaches the browser;
 - `rooms -> core: … at [Senyaak@<lan>:8888, …]` in `logs/gateway-latest.log` — the
   endpoints are what lets the relay address anybody;
@@ -420,7 +420,7 @@ Manager buys the second level; a hyphen is free.
 A phone hotspot for one copy is enough to make it real: two NATs, no shared subnet.
 This is where the remaining design work is, and there are two separate problems.
 
-### 4.1. The desks need an address the game can dial
+### 4.1. The u-lobby services need an address the game can dial
 
 With §2.3 done this is one TCP port and the same number in UDP, which makes every option
 below cheaper — but it is still an address that has to exist. Three ways, and they are
@@ -478,7 +478,7 @@ already in both logs.
 
 ## 6. What not to do
 
-- **Do not try to CONFIGURE the game's desks behind the tunnel.** Section 1; it is
+- **Do not try to CONFIGURE the game's u-lobby services behind the tunnel.** Section 1; it is
   not a configuration problem, and it was not solved by finding a better setting —
   it was solved by holding the sockets inside the game, which is code and lives in
   the mod.

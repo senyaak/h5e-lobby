@@ -1,6 +1,6 @@
 // The router — the TCP door every online session comes through.
 //
-// It is the GS front desk: key exchange, then a login, then a hand-off to the
+// It is the GS front u-lobby service: key exchange, then a login, then a hand-off to the
 // next service. Nothing about a game happens here; what happens is that the
 // client stops being anonymous and gets told where to go. The order, as the
 // client drives it:
@@ -64,7 +64,7 @@ export interface Endpoint {
 }
 
 /**
- * Which desk this connection is.
+ * Which u-lobby service this connection is.
  *
  * The same protocol serves four of them — the router, its wait module, the proxy
  * a module lives behind, and the proxy's own wait module — and the client opens a
@@ -296,12 +296,12 @@ export class RouterSession {
   private readonly friends: Friends;
   /** And the accounts, which is what a login is checked against. */
   private readonly accounts: Accounts;
-  /** The other open connections, by desk — see `RouterService.desks`. */
-  private readonly desks: Map<string, (bytes: Buffer) => void>;
+  /** The other open connections, by service — see `RouterService.services`. */
+  private readonly services: Map<string, (bytes: Buffer) => void>;
   /**
    * Every session this server has open, this one among them.
    *
-   * The desks map holds one connection per DESK NAME, which was enough while there was
+   * The u-lobby services map holds one connection per SERVICE NAME, which was enough while there was
    * one player: with two, his Lobby socket and the other player's are the same name and
    * the second one replaced the first. What a second player needs is not a better map
    * but the sessions themselves — who is on the other end of each, and which channel he
@@ -331,11 +331,11 @@ export class RouterSession {
     profiles: PersistentStore,
     friends: Friends,
     accounts: Accounts,
-    desks: Map<string, (bytes: Buffer) => void>,
+    services: Map<string, (bytes: Buffer) => void>,
     peers: Set<RouterSession>,
     ghosts = false,
   ) {
-    this.desks = desks;
+    this.services = services;
     this.peers = peers;
     this.profiles = profiles;
     this.friends = friends;
@@ -378,7 +378,7 @@ export class RouterSession {
   /**
    * Everybody else looking at this channel — the connections that draw it.
    *
-   * The lobby desk and no other: a player has four connections open and only one of
+   * The lobby service and no other: a player has four connections open and only one of
    * them is the one his channel screen listens on.
    */
   private othersIn(lobbyId: number): RouterSession[] {
@@ -557,8 +557,8 @@ export class RouterSession {
    * the protocol's, not ours.
    */
   private answerModule(bytes: Buffer): { replies: Buffer[]; where: string } {
-    // HIS router connection, not whichever one happens to be open. The desks map holds
-    // one socket per desk name, so with two players the second one's RouterLauncher
+    // HIS router connection, not whichever one happens to be open. The u-lobby services map holds
+    // one socket per u-lobby service name, so with two players the second one's RouterLauncher
     // replaced the first's — and this answer, which is a profile or a rating, would have
     // gone to the wrong player's screen. The sessions know whose they are; ask them.
     const his = [...this.peers].find(
@@ -569,8 +569,8 @@ export class RouterSession {
       return { replies: [], where: `on ${this.username}'s router connection` };
     }
     // 'Router' and not 'RouterLauncher': the wait module now shares the router's own
-    // port, so there is one desk of that name (SLICE §2.3, services/gateway/main.ts).
-    const onRouter = this.desks.get('Router');
+    // port, so there is one u-lobby service of that name (SLICE §2.3, services/gateway/main.ts).
+    const onRouter = this.services.get('Router');
     if (!onRouter) return { replies: [bytes], where: 'here, with no router connection open' };
     onRouter(bytes);
     return { replies: [], where: 'on the router connection' };
@@ -719,7 +719,7 @@ export class RouterSession {
         const said = `the body was ${JSON.stringify(message.body, bodyForLog)}`;
         if (this.role !== 'router' || !this.username) {
           return {
-            note: `LOGIN as "${this.username}" on the ${this.role} — not the credential desk, ${said}`,
+            note: `LOGIN as "${this.username}" on the ${this.role} — not the credential service, ${said}`,
             replies: [build(reply(message, body, MessageType.GSSUCCESS))],
           };
         }
@@ -778,7 +778,7 @@ export class RouterSession {
       }
       // Once the client is told where to go it opens a SECOND connection — the
       // "wait module" — and speaks the same protocol on it, key exchange and all.
-      // The same desk answers both; only the address it was given differs.
+      // The same u-lobby service answers both; only the address it was given differs.
       case MessageType.LOGINWAITMODULE: {
         const name = message.body?.[0];
         if (typeof name === 'string' && name) this.username = name;
@@ -1842,7 +1842,7 @@ export class RouterService {
   get openRooms(): readonly Room[] {
     return this.rooms.all();
   }
-  /** Shared by every desk, because a rating belongs to the player, not the socket. */
+  /** Shared by every service, because a rating belongs to the player, not the socket. */
   readonly ladder: Ladder;
   /** Likewise: who is in which channel is the same fact on every connection. */
   readonly presence = new Presence();
@@ -1850,7 +1850,7 @@ export class RouterService {
   readonly profiles: PersistentStore;
   /** Friendships, likewise: added once, still there next launch. */
   readonly friends: Friends;
-  /** Who a name belongs to. Every desk shares one set of accounts. */
+  /** Who a name belongs to. Every service shares one set of accounts. */
   readonly accounts: Accounts;
   /** The database under all of them, for anything that wants to look for itself. */
   readonly database: import('node:sqlite').DatabaseSync;
@@ -1865,9 +1865,9 @@ export class RouterService {
    * a lone player ever needed. Two things need more: telling the people already in a
    * channel that somebody has joined, and — right now — answering a module request on
    * the module's own connection instead of the one it was asked on. The server fills
-   * this in as sockets open; `null` means that desk has nobody on it.
+   * this in as sockets open; `null` means that u-lobby service has nobody on it.
    */
-  readonly desks = new Map<string, (bytes: Buffer) => void>();
+  readonly services = new Map<string, (bytes: Buffer) => void>();
   /**
    * Every open session, which is what a second player made necessary.
    *
@@ -1899,7 +1899,7 @@ export class RouterService {
     seatGuest(this.ladder, this.presence);
   }
 
-  /** A connection on one of the four desks. */
+  /** A connection on one of the four services. */
   session(role: Role = 'router'): RouterSession {
     const waitModule = role === 'proxy' ? this.proxyWaitModule : this.waitModule;
     const session = new RouterSession(
@@ -1914,7 +1914,7 @@ export class RouterService {
       this.profiles,
       this.friends,
       this.accounts,
-      this.desks,
+      this.services,
       this.sessions,
       this.ghosts,
     );

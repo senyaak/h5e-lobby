@@ -1,11 +1,11 @@
-// The game gateway: the desks the game itself connects to.
+// The game gateway: the u-lobby the game itself connects to.
 //
 //   node services/gateway/main.ts [--host 127.0.0.1] [--bind 0.0.0.0] [--http 8080] [--ghosts] [--quiet-bot]
 //
 // This was `tools/net-server.ts`, the one process that was everything. What left it is
 // chat, which now belongs to the core so that a browser can be in the same conversation;
 // what stayed is every byte of the game's own protocol — the server list, NAT, the CD-key
-// desk, the router and its wait modules, the proxy and the lobby.
+// u-lobby service, the router and its wait modules, the proxy and the lobby.
 //
 // The game decides where to play by fetching one URL (docs/NETWORK.md), and its libcurl
 // 7.14 honours the `http_proxy` environment variable — so a game started with
@@ -27,7 +27,7 @@ import { GUEST, GUEST_LOBBY, RouterService } from './router-service.ts';
 import { CdKeyService } from './cdkey-service.ts';
 import { IrcConnection, IrcService, chatLine, frame, fromGameText, toGameText } from './irc.ts';
 import { probePeerAddress, probeRoomFields, roomEndpoints } from './lobby.ts';
-import { classifyDatagram, classifyDesk, type Desk } from './desk.ts';
+import { classifyDatagram, classifyUService, type UService } from './u-lobby.ts';
 import { StateFeed } from './state-feed.ts';
 import { DEFAULT_LOBBIES, lobbyChannel } from '../../shared/channels.ts';
 
@@ -43,7 +43,7 @@ function arg(name: string, fallback: string): string {
  * it is what goes into the ini and into the endpoints, and no socket is bound to it.
  */
 const host = arg('host', settings.host);
-/** What the desks actually bind — every interface unless `H5E_BIND` says otherwise. */
+/** What the u-lobby binds — every interface unless `H5E_BIND` says otherwise. */
 const bind = arg('bind', settings.bind);
 const httpPort = Number(arg('http', String(settings.httpPort)));
 
@@ -51,10 +51,10 @@ const httpPort = Number(arg('http', String(settings.httpPort)));
  * What the ini advertises. `launcher` is only read for Router and CDKeyServer
  * (`%sLauncherPort%i`); what it is for is not known yet.
  *
- * A launcher port equal to its desk's own is deliberate and is the first step of
- * SLICE §2.3: the wait module and the desk that hands it out run byte-identical
+ * A launcher port equal to its u-lobby service's own is deliberate and is the first step of
+ * SLICE §2.3: the wait module and the u-lobby service that hands it out run byte-identical
  * code — the handler takes its behaviour from the role, and the role comes from the
- * desk, never from the port — so one number serves both and one socket is bound.
+ * u-lobby service, never from the port — so one number serves both and one socket is bound.
  * The client is told the launcher's address twice over (the ini, the wait-module
  * reply, `PROXY_HANDLER`, the join hand-off) and nothing in it or in us compares
  * the two.
@@ -64,8 +64,8 @@ interface Service {
   port: number;
   launcher: number | null;
   /**
-   * Which sockets are opened. Not what the desk could conceivably speak — what it was
-   * measured speaking, and what there is a handler for here. The ini advertises a desk
+   * Which sockets are opened. Not what the u-lobby service could conceivably speak — what it was
+   * measured speaking, and what there is a handler for here. The ini advertises a u-lobby service
    * once; whether that address answers in TCP, in UDP or in both is ours to say, and the
    * client only ever dials one of them.
    */
@@ -73,38 +73,38 @@ interface Service {
 }
 
 /**
- * The one number every TCP desk is at. It was five — `8080` for the ini and then `40000`,
- * `6667`, `40030`, `40040` — and they are one, because the desk a connection wants is in
- * the first thing it says and not in the port it said it on (`services/gateway/desk.ts`).
+ * The one number every TCP service is at. It was five — `8080` for the ini and then `40000`,
+ * `6667`, `40030`, `40040` — and they are one, because the u-lobby service a connection wants is in
+ * the first thing it says and not in the port it said it on (`services/gateway/u-lobby.ts`).
  *
  * The number is the ini's, not the router's, and that is the whole reason to prefer it:
- * `http_proxy` is set by hand in each game copy's `run-net.bat`, while every desk address
+ * `http_proxy` is set by hand in each game copy's `run-net.bat`, while every u-lobby address
  * is read out of the ini we serve. Keep the hand-written one and the rest follow by
  * themselves; keep the router's instead and three bat files have to be edited.
  *
  * It must not be a number a game listens on for its peers — `8888` upward here — because
- * the agent tells a desk from a player by port and nothing else.
+ * the agent tells a u-lobby service from a player by port and nothing else.
  */
-const DESKS = httpPort;
+const U_LOBBY_PORT = httpPort;
 
 // The mirror answers on it too, and `lobby.ts` writes that number into the room
 // description as the address the other players are told to dial. One writer, at startup.
-setMirrorPort(DESKS);
+setMirrorPort(U_LOBBY_PORT);
 
 const SERVICES: Service[] = [
-  { prefix: 'Router', port: DESKS, launcher: DESKS, listens: ['tcp'] },
-  { prefix: 'NATServer', port: DESKS, launcher: null, listens: ['udp'] },
-  { prefix: 'CDKeyServer', port: DESKS, launcher: DESKS, listens: ['udp'] },
-  { prefix: 'IRC', port: DESKS, launcher: null, listens: ['tcp'] },
+  { prefix: 'Router', port: U_LOBBY_PORT, launcher: U_LOBBY_PORT, listens: ['tcp'] },
+  { prefix: 'NATServer', port: U_LOBBY_PORT, launcher: null, listens: ['udp'] },
+  { prefix: 'CDKeyServer', port: U_LOBBY_PORT, launcher: U_LOBBY_PORT, listens: ['udp'] },
+  { prefix: 'IRC', port: U_LOBBY_PORT, launcher: null, listens: ['tcp'] },
 ];
 
 // Not in the ini: the client is told where this one lives when it asks for a
 // module (PROXY_HANDLER). It is where persistent data and the ladder sit.
-const PROXY: Service = { prefix: 'Proxy', port: DESKS, launcher: DESKS, listens: ['tcp'] };
+const PROXY: Service = { prefix: 'Proxy', port: U_LOBBY_PORT, launcher: U_LOBBY_PORT, listens: ['tcp'] };
 
 // Also not in the ini: where the lobby itself lives, handed over when the client
 // asks to join a lobby server.
-const LOBBY: Service = { prefix: 'Lobby', port: DESKS, launcher: null, listens: ['tcp'] };
+const LOBBY: Service = { prefix: 'Lobby', port: U_LOBBY_PORT, launcher: null, listens: ['tcp'] };
 
 function serversIni(): string {
   const lines = ['[Servers]'];
@@ -126,8 +126,8 @@ function serve(res: ServerResponse, body: string): void {
 /**
  * The server list, answered by Node's own HTTP parser — but on no port of its own.
  *
- * The last step of §2.3: a `GET ` is one of the things a desk connection can turn out to
- * be, so the ini is served on the desks' port like everything else, and this server is
+ * The last step of §2.3: a `GET ` is one of the things a u-lobby connection can turn out to
+ * be, so the ini is served on the u-lobby's port like everything else, and this server is
  * never listened on. `iniServer.emit('connection', socket)` is how a socket that has
  * already been read from is handed over; the bytes that were read to classify it go back
  * on the stream first with `unshift`, so the parser sees the request whole.
@@ -366,20 +366,20 @@ async function replayHistory(channel: string, socket: Socket): Promise<void> {
 }
 
 /**
- * One listener, every TCP desk.
+ * One listener, every TCP u-lobby service.
  *
- * The desk is not the port any more — it is what the connection says first
- * (`services/gateway/desk.ts`). Nothing can be built at connect time, then: the session
+ * The u-lobby service is not the port any more — it is what the connection says first
+ * (`services/gateway/u-lobby.ts`). Nothing can be built at connect time, then: the session
  * or the chat connection is made once the first message has been read, and that first
  * message is then handed on as if it had arrived afterwards. The rest of this is what it
  * always was; only the way a connection is given its role changed.
  */
-function openDeskListener(port: number): void {
+function openULobbyListener(port: number): void {
   createTcpServer((socket: Socket) => {
     const id = ++connections;
     const peer = `${socket.remoteAddress}:${socket.remotePort}`;
     log(`TCP  #${id} :${port} <- ${peer} connected`);
-    /** Set the moment the desk is known; until then every read goes into `waiting`. */
+    /** Set the moment the service is known; until then every read goes into `waiting`. */
     let take: ((data: Buffer) => void) | null = null;
     let waiting: Buffer | null = null;
 
@@ -389,12 +389,12 @@ function openDeskListener(port: number): void {
         return;
       }
       waiting = waiting ? Buffer.concat([waiting, data]) : data;
-      const verdict = classifyDesk(waiting);
+      const verdict = classifyUService(waiting);
       if (verdict.wait) {
         log(`TCP  #${id} :${port} <- ${waiting.length} bytes, undecided — ${verdict.note}`);
         return;
       }
-      if (verdict.desk === 'HTTP') {
+      if (verdict.service === 'HTTP') {
         log(`TCP  #${id} HTTP:${port} — ${verdict.note}`);
         // Ours no longer: the bytes go back on the stream, our reader steps off it, and
         // Node's HTTP server takes the socket as if it had just been accepted.
@@ -405,13 +405,13 @@ function openDeskListener(port: number): void {
         socket.resume();
         return;
       }
-      if (!verdict.desk) {
+      if (!verdict.service) {
         log(`TCP  #${id} :${port} !! ${verdict.note} — closing\n${hexDump(waiting)}`);
         socket.end();
         return;
       }
-      log(`TCP  #${id} ${verdict.desk}:${port} — ${verdict.note}`);
-      take = attach(verdict.desk, socket, id, port);
+      log(`TCP  #${id} ${verdict.service}:${port} — ${verdict.note}`);
+      take = attach(verdict.service, socket, id, port);
       const first = waiting;
       waiting = null;
       take(first);
@@ -419,19 +419,19 @@ function openDeskListener(port: number): void {
 
     socket.on('error', (err: Error) => log(`TCP  #${id} :${port} error: ${err.message}`));
   })
-    .on('error', (err: Error) => log(`TCP  desks:${port} listen failed: ${err.message}`))
-    .listen(port, bind, () => log(`tcp  desks on ${bind}:${port}`));
+    .on('error', (err: Error) => log(`TCP  u-lobby:${port} listen failed: ${err.message}`))
+    .listen(port, bind, () => log(`tcp  u-lobby on ${bind}:${port}`));
 }
 
 /**
- * Give a classified connection its desk, and hand back how to feed it.
+ * Give a classified connection its u-lobby service, and hand back how to feed it.
  *
  * Everything here used to happen at connect time, when the label came from the port.
  * The only change is when it runs — after the first message rather than before it.
  */
-function attach(label: Desk, socket: Socket, id: number, port: number): (data: Buffer) => void {
+function attach(label: UService, socket: Socket, id: number, port: number): (data: Buffer) => void {
   {
-    // Four desks speak the GS protocol; the chat one speaks IRC in a wrapper.
+    // Four u-lobby services speak the GS protocol; the chat one speaks IRC in a wrapper.
     const session =
       label === 'Router'
         ? router.session('router')
@@ -440,24 +440,24 @@ function attach(label: Desk, socket: Socket, id: number, port: number): (data: B
           : label === 'Lobby'
             ? router.session('lobby')
             : null;
-    // Which desk this socket is, so a reply can go out on a connection other than
-    // the one that asked. Only the newest socket per desk is kept: with one player
+    // Which u-lobby service this socket is, so a reply can go out on a connection other than
+    // the one that asked. Only the newest socket per u-lobby service is kept: with one player
     // there is only ever one of each.
     if (session) {
       // How to write on THIS connection — which is what a second player needs and the
-      // desks map cannot give: it holds one socket per desk name, so two players'
+      // u-lobby services map cannot give: it holds one socket per u-lobby service name, so two players'
       // Lobby sockets are the same name and the second replaced the first.
       session.send = (bytes: Buffer) => {
         socket.write(bytes);
         log(`TCP  #${id} ${label}:${port} -> ${bytes.length} bytes, sent unasked\n${hexDump(bytes)}`);
       };
-      router.desks.set(label, (bytes: Buffer) => {
+      router.services.set(label, (bytes: Buffer) => {
         socket.write(bytes);
-        log(`TCP  #${id} ${label}:${port} -> ${bytes.length} bytes, asked for by another desk\n${hexDump(bytes)}`);
+        log(`TCP  #${id} ${label}:${port} -> ${bytes.length} bytes, asked for by another service\n${hexDump(bytes)}`);
       });
       socket.on('close', () => {
         session.send = null;
-        if (router.desks.get(label)) router.desks.delete(label);
+        if (router.services.get(label)) router.services.delete(label);
       });
     }
     const chat = label === 'IRC' ? irc.connection() : null;
@@ -525,8 +525,8 @@ function attach(label: Desk, socket: Socket, id: number, port: number): (data: B
 /**
  * One socket, both UDP windows.
  *
- * The same trick as the TCP desks and a smaller one: a datagram carries no connection to
- * remember, so every one of them is classified on its own (`services/gateway/desk.ts`).
+ * The same trick as the TCP u-lobby services and a smaller one: a datagram carries no connection to
+ * remember, so every one of them is classified on its own (`services/gateway/u-lobby.ts`).
  * Each window keeps its own state, so the two services are made once here rather than
  * per datagram.
  */
@@ -567,14 +567,14 @@ function openUdpWindow(port: number): void {
   udp.bind(port, bind, () => log(`udp  windows on ${bind}:${port}`));
 }
 
-// A desk opens the sockets it was measured using and no others (SLICE §2.3, step 2).
+// A u-lobby service opens the sockets it was measured using and no others (SLICE §2.3, step 2).
 // The ones we used to bind and nobody ever spoke to — TCP on the NAT mirror and on the
 // CD-key window, UDP on the router and on the launchers — are gone, and closing them is
 // how it gets proved they were dead. A client that turns up at one now hears a refusal
 // instead of a silence, which is the loudest way there is of being told.
 //
-// And the TCP desks share a number now (step 3), so this is one listener however many
-// desks name it. `Set` on the numbers, not on the desks: if a desk is ever moved back to
+// And the TCP u-lobby services share a number now (step 3), so this is one listener however many
+// u-lobby services name it. `Set` on the numbers, not on the u-lobby services: if a u-lobby service is ever moved back to
 // one of its own, this loop opens a second listener for it and nothing else changes.
 const tcpPorts = new Set<number>();
 const udpPorts = new Set<number>();
@@ -584,7 +584,7 @@ for (const service of [...SERVICES, PROXY, LOBBY]) {
     if (service.listens.includes('udp')) udpPorts.add(port);
   }
 }
-for (const port of tcpPorts) openDeskListener(port);
+for (const port of tcpPorts) openULobbyListener(port);
 for (const port of udpPorts) openUdpWindow(port);
 
 log(`chat goes through the core at ${settings.coreUrl} — game clients here still hear each other if it is away`);

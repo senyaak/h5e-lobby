@@ -12,7 +12,7 @@ own server, including behind CGNAT, and can find each other without keeping the 
 | | owns | talks to | must NOT |
 |---|---|---|---|
 | **core** | accounts, profiles, ladder, friends, presence, chat — and the rules over them | nobody; it is asked | speak the game's protocol |
-| **game gateway** | the GS desks: router, lobby, NAT, CD-key, IRC; the room settings blob | core | hold state of its own |
+| **game gateway** | the GS u-lobby services: router, lobby, NAT, CD-key, IRC; the room settings blob | core | hold state of its own |
 | **web** | the browser UI and its API | core | reach the database |
 | **relay** | moving game datagrams between agents | core, **once per connection** | need anything at runtime |
 
@@ -97,7 +97,7 @@ property must survive every future change to it.
 
 Two facts force it:
 
-- **cloudflared carries HTTP and nothing else.** The game's own desks are raw TCP and UDP
+- **cloudflared carries HTTP and nothing else.** The game's own u-lobby services are raw TCP and UDP
   on six ports. Behind a tunnel they cannot be reached at all, so the game's lobby traffic
   has to travel inside a WebSocket.
 - **the game dials a peer directly, over UDP, at an address it is told.** Over the
@@ -109,12 +109,12 @@ already makes:
 ```
 game's own socket calls ─┬─ agent ──UDP────────→ peer          when a hole punch works
                          └─ agent ──WS─────────→ relay         when it does not
-game's desk connections ─── agent ──WS─────────→ core          always: login, channel, room
+game's u-lobby connections ─── agent ──WS─────────→ core          always: login, channel, room
 ```
 
 The path choice is invisible to the game and to the core, so the agent may change its mind
 mid-game. The core's part is to hand out the materials for the choice — the peers' public
-endpoints, which its NAT desk already observes, and the relay's address.
+endpoints, which its NAT service already observes, and the relay's address.
 
 **Identity: the lobby says who may be let in, and there is nothing to hand out.**
 
@@ -128,7 +128,7 @@ when the game ends, which is exactly the lifetime that was wanted.
 There WAS a long-lived secret here, hashed in the core's database, issued by
 `npm run issue-agent` and written into the extension's config. Сеня cut it on 14.08.2026
 and the reason is the one that ends the argument: **nobody outside the three copies on his
-desk could ever have obtained one.** The doc had answered "where does it come from" with a
+u-lobby service could ever have obtained one.** The doc had answered "where does it come from" with a
 launcher that does not exist and is not planned.
 
 Two consequences worth having in front of you:
@@ -189,7 +189,7 @@ patching first and never find out.
 The point is not a second client — a browser cannot play. It is that finding an opponent
 should not require the game to be running. Which makes it mostly free, because the core
 already owns what it needs: accounts, channels, who is present, and the chat that the
-game's IRC desk carries. A browser client is another participant on the same chat and the
+game's IRC service carries. A browser client is another participant on the same chat and the
 same presence list, so both sides see each other.
 
 **Chat history is a requirement, not a nicety** — a message written while nobody is in the

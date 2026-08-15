@@ -33,7 +33,7 @@ export interface Config {
   bind: string;
   /**
    * The gateway's one TCP port: the server list (`http_proxy` points here) and, since
-   * SLICE §2.3, every desk the game dials — they are told apart by what a connection
+   * SLICE §2.3, every u-lobby service the game dials — they are told apart by what a connection
    * says first, not by the number it said it on.
    */
   httpPort: number;
@@ -46,16 +46,16 @@ export interface Config {
   /** Where agents connect to have their datagrams carried. */
   relayPort: number;
   /**
-   * Where a game's DESK traffic arrives when it comes through a tunnel rather than
+   * Where a game's U-LOBBY SERVICE traffic arrives when it comes through a tunnel rather than
    * straight at `httpPort`.
    *
    * A tunnel of the cloudflared family carries HTTP and WebSocket and nothing else, and
    * everything the game dials after its one HTTP request is raw TCP and UDP
-   * (SLICE_over_the_internet.md §1). So the desk half gets carried the same way the peer
+   * (SLICE_over_the_internet.md §1). So the u-lobby half gets carried the same way the peer
    * half already is: the game's own copy of the mod holds those sockets locally and this
    * is where it hands them over.
    */
-  desksPort: number;
+  uLobbyPort: number;
   /** The one database. The core owns it; see docs/ARCHITECTURE.md for the seam. */
   database: string;
   /** Where every service writes its log. */
@@ -70,7 +70,7 @@ const DEFAULTS: Config = {
   coreUrl: 'ws://127.0.0.1:40100/core',
   webPort: 8081,
   relayPort: 40200,
-  desksPort: 40300,
+  uLobbyPort: 40300,
   database: 'data/lobby.db',
   logDir: 'logs',
 };
@@ -84,7 +84,7 @@ const FROM_ENV: Record<keyof Config, string> = {
   coreUrl: 'H5E_CORE_URL',
   webPort: 'H5E_WEB_PORT',
   relayPort: 'H5E_RELAY_PORT',
-  desksPort: 'H5E_DESKS_PORT',
+  uLobbyPort: 'H5E_U_LOBBY_PORT',
   database: 'H5E_DATABASE',
   logDir: 'H5E_LOG_DIR',
 };

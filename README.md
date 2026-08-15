@@ -5,7 +5,7 @@ Our own Ubi.com for **Heroes of Might and Magic V: Tribes of the East**.
 Ubisoft's Game Service was switched off years ago, and the game's whole online menu
 hangs from one HTTP request to a host that no longer answers. This is the other end
 of that request: everything the client asks for — the server list, NAT traversal, the
-CD-key desk, the router and its wait modules, the proxy, the lobby, and chat — plus a
+CD-key service, the router and its wait modules, the proxy, the lobby, and chat — plus a
 browser lobby sitting in the same chat, because finding an opponent should not require
 the game to be running. A player can log in with any name, enter a channel and host a
 game.
@@ -20,7 +20,7 @@ service at this machine.
 | | what it is | where |
 |---|---|---|
 | **core** | accounts, ladder, friends, presence, chat and its history | `services/core/main.ts`, loopback `40100` |
-| **gateway** | the desks the game itself connects to | `services/gateway/main.ts`, `8080` + the game's ports |
+| **gateway** | the u-lobby the game itself connects to | `services/gateway/main.ts`, `8080` + the game's ports |
 | **web** | the browser lobby | `services/web/main.ts`, `8081` |
 | **relay** | game datagrams between agents | `services/relay/main.ts`, `40200` |
 

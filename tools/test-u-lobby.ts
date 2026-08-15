@@ -1,19 +1,19 @@
-// The desk tunnel, driven without a game.
+// The u-lobby tunnel, driven without a game.
 //
 // What it proves is the thing the tunnel exists for: bytes that would have gone straight
 // at the gateway's TCP and UDP sockets arrive there anyway, having crossed a WebSocket,
 // and come back to the client that sent them AND NOT TO ANOTHER ONE.
 //
-// The desks themselves are a stub here — a TCP server and a UDP socket that echo what they
+// The u-lobby services themselves are a stub here — a TCP server and a UDP socket that echo what they
 // are given with a mark of their own. That is deliberate: what is being tested is the
 // carrying, and a real gateway would drag the core, the database and the whole protocol
 // into a test whose subject is a socket.
 //
-// Usage: `node tools/test-desks.ts`
+// Usage: `node tools/test-u-lobby.ts`
 
 import { createServer as createTcpServer, type Socket } from 'node:net';
 import { createSocket } from 'node:dgram';
-import { startDeskTunnel } from '../services/desks/desk-tunnel.ts';
+import { startULobbyTunnel } from '../services/u-lobby/tunnel.ts';
 
 const WATCHDOG_MS = 60 * 1000;
 setTimeout(() => {
@@ -56,36 +56,36 @@ function datagramFrame(id: number, payload: Buffer): Buffer {
 }
 
 // ---------------------------------------------------------------------------------
-// The desks, stubbed: a TCP server that answers `desk:<what it heard>` and a UDP socket
+// The u-lobby services, stubbed: a TCP server that answers `service<n>:<what it heard>` and a UDP socket
 // that answers `mirror:<what it heard>@<the port it heard it from>`. The port is in the
 // answer because that is what tells one client's mirror from another's, which is the whole
 // reason a datagram socket is opened per connection rather than per service.
 // ---------------------------------------------------------------------------------
 
-const deskConnections: Socket[] = [];
-const tcpDesk = createTcpServer((socket) => {
+const serviceConnections: Socket[] = [];
+const tcpService = createTcpServer((socket) => {
   // Each connection answers under its own number. Counting connections is not enough to
   // say two streams got two of them — a tunnel that put the second stream on the wrong id
   // still opens two — so the answer has to say WHICH connection served it.
-  const mine = deskConnections.push(socket);
-  socket.on('data', (data: Buffer) => socket.write(Buffer.from(`desk${String(mine)}:${data.toString()}`)));
+  const mine = serviceConnections.push(socket);
+  socket.on('data', (data: Buffer) => socket.write(Buffer.from(`service${String(mine)}:${data.toString()}`)));
   socket.on('error', () => {});
 });
-await new Promise<void>((done) => tcpDesk.listen(0, '127.0.0.1', () => done()));
-const deskPort = (tcpDesk.address() as { port: number }).port;
+await new Promise<void>((done) => tcpService.listen(0, '127.0.0.1', () => done()));
+const gatewayPort = (tcpService.address() as { port: number }).port;
 
-const udpDesk = createSocket('udp4');
-udpDesk.on('message', (data, from) => {
+const udpService = createSocket('udp4');
+udpService.on('message', (data, from) => {
   const answer = Buffer.from(`mirror:${data.toString()}@${String(from.port)}`);
-  udpDesk.send(answer, from.port, from.address);
+  udpService.send(answer, from.port, from.address);
 });
-await new Promise<void>((done) => udpDesk.bind(deskPort, '127.0.0.1', () => done()));
+await new Promise<void>((done) => udpService.bind(gatewayPort, '127.0.0.1', () => done()));
 
-const tunnel = await startDeskTunnel({
+const tunnel = await startULobbyTunnel({
   bind: '127.0.0.1',
   port: 0,
-  deskHost: '127.0.0.1',
-  deskPort,
+  gatewayHost: '127.0.0.1',
+  gatewayPort,
   log: () => {},
 });
 
@@ -104,7 +104,7 @@ interface Client {
 }
 
 async function connect(): Promise<Client> {
-  const socket = new WebSocket(`ws://127.0.0.1:${String(tunnel.port())}/desks`);
+  const socket = new WebSocket(`ws://127.0.0.1:${String(tunnel.port())}/u-lobby`);
   socket.binaryType = 'arraybuffer';
   const heard: Buffer[] = [];
   socket.addEventListener('message', (event) => heard.push(Buffer.from(event.data as ArrayBuffer)));
@@ -125,7 +125,7 @@ async function connect(): Promise<Client> {
   };
 }
 
-console.log('\nthe desk tunnel');
+console.log('\nthe u-lobby tunnel');
 
 const one = await connect();
 
@@ -134,23 +134,23 @@ const one = await connect();
 one.socket.send(streamFrame(FRAME_OPEN, 7));
 one.socket.send(streamFrame(FRAME_DATA, 7, Buffer.from('hello')));
 await until(() => one.onStream(7).length > 0);
-check('a stream carries bytes to the desk and back', one.onStream(7) === 'desk1:hello', one.onStream(7));
+check('a stream carries bytes to the u-lobby service and back', one.onStream(7) === 'service1:hello', one.onStream(7));
 
 // THE SECOND stream, not the first: with one of anything every id in the table is the same
 // id, and a tunnel that ignored the id entirely would pass a one-stream test.
 one.socket.send(streamFrame(FRAME_DATA, 9, Buffer.from('second')));
 await until(() => one.onStream(9).length > 0);
-check('a second stream is its own connection', one.onStream(9) === 'desk2:second', one.onStream(9));
-check('and the first one did not hear it', one.onStream(7) === 'desk1:hello', one.onStream(7));
+check('a second stream is its own connection', one.onStream(9) === 'service2:second', one.onStream(9));
+check('and the first one did not hear it', one.onStream(7) === 'service1:hello', one.onStream(7));
 
-// An implicit open is what that last write was. It has to reach a desk of its own, or two
-// streams would share one connection and their bytes would interleave. Which desk served
+// An implicit open is what that last write was. It has to reach a u-lobby service of its own, or two
+// streams would share one connection and their bytes would interleave. Which u-lobby service served
 // which stream is what says so — the count alone stays right while the ids are wrong.
-await until(() => deskConnections.length >= 2);
+await until(() => serviceConnections.length >= 2);
 const servedSeven = one.onStream(7).split(':')[0] ?? '';
 const servedNine = one.onStream(9).split(':')[0] ?? '';
 check(
-  'the two streams were served by two different desks',
+  'the two streams were served by two different u-lobby services',
   servedSeven !== '' && servedNine !== '' && servedSeven !== servedNine,
   `${servedSeven} and ${servedNine}`,
 );
@@ -161,7 +161,7 @@ const firstMirror = one.datagrams(1)[0] ?? '';
 check('a datagram crosses and comes back', firstMirror.startsWith('mirror:ask@'), firstMirror);
 
 // A SECOND channel from the same client. This is why a datagram carries a channel at all:
-// the game asks two UDP desks, may well ask them from two sockets of its own, and each
+// the game asks two UDP u-lobby services, may well ask them from two sockets of its own, and each
 // answer has to come back to the socket that asked.
 one.socket.send(datagramFrame(2, Buffer.from('other')));
 await until(() => one.datagrams(2).length > 0);
@@ -172,7 +172,7 @@ check('and the first channel did not hear it', one.datagrams(1).length === 1, `$
 const sourceOfOne = firstMirror.split('@')[1] ?? '';
 const sourceOfTwo = secondMirror.split('@')[1] ?? '';
 check(
-  'two channels are two sockets at the desk',
+  'two channels are two sockets at the u-lobby service',
   sourceOfOne !== '' && sourceOfTwo !== '' && sourceOfOne !== sourceOfTwo,
   `${sourceOfOne || '(nothing)'} and ${sourceOfTwo || '(nothing)'}`,
 );
@@ -197,7 +197,7 @@ const portOfTwo = (two.datagrams()[0] ?? '').split('@')[1] ?? '';
 // differs from any port there is — so "they differ" on its own passes the very failure
 // this is here to catch.
 check(
-  'the desks see two different sources, so two mirrors stay apart',
+  'the u-lobby services see two different sources, so two mirrors stay apart',
   portOfOne !== '' && portOfTwo !== '' && portOfOne !== portOfTwo,
   `${portOfOne || '(nothing)'} and ${portOfTwo || '(nothing)'}`,
 );
@@ -208,7 +208,7 @@ check(
 
 one.socket.send(streamFrame(FRAME_CLOSE, 7));
 await until(() => one.closed(7));
-check('a stream closed by the client is closed at the desk', one.closed(7));
+check('a stream closed by the client is closed at the u-lobby service', one.closed(7));
 
 const before = tunnel.clients();
 two.socket.close();
@@ -218,8 +218,8 @@ check('a client that leaves is let go of', tunnel.clients() === before - 1, `${S
 one.socket.close();
 await until(() => tunnel.clients() === 0);
 await tunnel.close();
-await new Promise<void>((done) => tcpDesk.close(() => done()));
-udpDesk.close();
+await new Promise<void>((done) => tcpService.close(() => done()));
+udpService.close();
 
 console.log(failures === 0 ? '\nall good\n' : `\n${String(failures)} FAILED\n`);
 process.exit(failures === 0 ? 0 : 1);

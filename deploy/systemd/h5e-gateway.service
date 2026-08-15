@@ -1,5 +1,5 @@
 [Unit]
-Description=h5e-lobby game gateway — the desks the game itself connects to
+Description=h5e-lobby game gateway — the u-lobby the game itself connects to
 Documentation=file:/opt/h5e-lobby/docs/ARCHITECTURE.md
 After=network-online.target h5e-core.service
 Wants=network-online.target

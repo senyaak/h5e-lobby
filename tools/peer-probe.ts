@@ -7,7 +7,7 @@
  * 1. A duel captured on the loopback adapter: the peers speak UDP straight to each
  *    other at the machine's LAN address and at each other's `net_game_port`
  *    (8888 <-> 8889), one socket each, 16 kB of payload in 186 seconds. The address the
- *    NAT desk mirrored back to them was never dialled.
+ *    NAT service mirrored back to them was never dialled.
  * 2. Every player announced to the others at an address of ours in the member record —
  *    and nothing changed: they found each other and played a full duel anyway. So no
  *    field the server fills in carries it.

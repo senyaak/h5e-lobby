@@ -10,7 +10,7 @@ to be recovered from memory.
 
 ```bash
 npm start                                   # all four services, one terminal, logs to logs/
-node services/gateway/main.ts               # the game's desks alone (this was tools/net-server.ts)
+node services/gateway/main.ts               # the game's u-lobby services alone (this was tools/net-server.ts)
 node services/gateway/main.ts --ghosts      # plus synthetic players in every channel
 ```
 
@@ -68,13 +68,13 @@ as well: strings, references, imports, callers, `--func`, `--dword`, `--bytes`.
 6667   IRC         chat, and a precondition for entering a channel
 ```
 
-Those are Ubisoft's desks, and the numbers above are the ones they were first given here.
+Those are Ubisoft's u-lobby services, and the numbers above are the ones they were first given here.
 **Since 14.08.2026 they are all `8080`** (SLICE §2.3): the client learns every one of them
-from the ini we serve, so which desk a connection wants is read off its first message
-(`services/gateway/desk.ts`) rather than off the port. The names stay — the log still says
-which desk — and the table above is the map of what speaks what.
+from the ini we serve, so which u-lobby service a connection wants is read off its first message
+(`services/gateway/u-lobby.ts`) rather than off the port. The names stay — the log still says
+which u-lobby service — and the table above is the map of what speaks what.
 
-The four GS desks (router, its wait module, proxy, proxy's wait module) speak one
+The four GS u-lobby services (router, its wait module, proxy, proxy's wait module) speak one
 protocol with three differences, all in `src/net/router-service.ts`; the lobby is
 a fourth role on the same code.
 
@@ -534,7 +534,7 @@ arrive on the proxy's wait module (40031), but its own login happened on the pro
 (40030), and both sockets stay open — and there is a separate pump per transport
 (0x41b4d0, kinds 2, 8 and 16). This run answers **the ladder on the proxy** and **the
 profile where it was asked**; whichever of the two appears in the game's log names the
-rule, and then both follow it. `RouterService.desks` is what makes that possible, and it
+rule, and then both follow it. `RouterService.services` is what makes that possible, and it
 is needed anyway for announcing an arrival to the players already in a channel.
 
 ## Reading the client's dispatch, instead of guessing at three replies
@@ -834,8 +834,8 @@ To prepare:
   announcements and one of them, sent our way, drew no reaction at all, so they stay
   unused rather than guessed at again.
 
-  What made it possible is not the message but the bookkeeping: `desks` holds one socket
-  per DESK NAME, so with two players the second one's Lobby socket replaced the first's
+  What made it possible is not the message but the bookkeeping: `u-lobby services` holds one socket
+  per SERVICE NAME, so with two players the second one's Lobby socket replaced the first's
   and nothing could reach him. There is a `sessions` set now, one entry per connection,
   each knowing whose it is and how to write on itself. **The same bug had a second
   head**: a module answer (a profile, a rating) goes out on the router's connection, and
@@ -1212,7 +1212,7 @@ A duel, 186 seconds, captured whole:
 
 - **UDP, straight to each other**, at the machine's LAN address and at each other's
   `net_game_port`: `192.168.178.27:8888 <-> 192.168.178.27:8889`.
-- **One socket per client** — the same one that pings the NAT desk. No second connection
+- **One socket per client** — the same one that pings the NAT service. No second connection
   of any kind was opened.
 - A **nine-byte handshake** each way carrying a four-byte token (`07 01 00 00 00` + token
   from the first copy, `07 00 00 00 00` + token from the second), then one **273-byte**
@@ -1226,7 +1226,7 @@ A duel, 186 seconds, captured whole:
 
 Three launches, one question each.
 
-1. **Not the NAT mirror.** The NAT desk answered both clients with `127.0.0.1` and neither
+1. **Not the NAT mirror.** The NAT service answered both clients with `127.0.0.1` and neither
    ever dialled it.
 2. **Not any field the server fills in.** With `--probe-peer-address` every player was
    announced to the others at an address of ours in the member record (`szIPAddress` /

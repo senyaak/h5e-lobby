@@ -29,6 +29,7 @@ const FLEET: Unit[] = [
   { name: 'gateway', script: 'services/gateway/main.ts', colour: '\u001b[36m', args: gatewayFlags },
   { name: 'web    ', script: 'services/web/main.ts', colour: '\u001b[32m' },
   { name: 'relay  ', script: 'services/relay/main.ts', colour: '\u001b[35m' },
+  { name: 'desks  ', script: 'services/desks/main.ts', colour: '\u001b[34m' },
 ];
 
 const RESET = '\u001b[0m';

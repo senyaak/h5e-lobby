@@ -15,10 +15,16 @@
 > is correct for a tunnelled client and is what the laptop's env no longer
 > overrides.
 >
-> **What that run did NOT settle** is §4.2 below: both copies were on one machine,
-> so both announced `192.168.178.27` and were told apart by their ports. Two players
-> behind different NATs can announce the same address AND the same port `8888`, and
-> nothing yet gives them different ones.
+> Since then it has also played **over a phone hotspot** — a foreign network, and
+> almost certainly CGNAT — which is what stage three was for. Nothing on the game
+> side names the lobby: the `run-net*.bat` files were deleted rather than left to
+> override the rewrite with an `http_proxy` that beats it silently.
+>
+> **NEXT: §4.2, and it is the only thing left before playing with a stranger.**
+> Both copies in every run so far were on one machine, so all of them announced
+> `192.168.178.27` and were told apart by their ports. Two players from two homes
+> will both announce `192.168.1.x` AND port `8888`, and nothing yet gives them
+> different ones. §4.2 says what to build and what is already proved.
 >
 > **Status, 15.08.2026: STAGE ONE AND STAGE TWO ARE DONE, and three players proved it.**
 > The lobby runs on the laptop as `senyaak-h5e-*` user units in the `~/Projects/tunnels`
@@ -464,27 +470,74 @@ not equivalent:
 - **WireGuard or Tailscale between the two machines** — works, and honestly labelled:
   it makes the two boxes one LAN, so it tests the game and not the internet.
 
-### 4.2. Two peers can present the same address, and today that is ambiguous
+### 4.2. Two peers can present the same address — THE NEXT PIECE OF WORK
+
+> **This is what to pick up next (decided 15.08.2026), and it is the only thing
+> between here and playing with somebody who is not us.** Everything else in
+> stage three is done and measured: a game plays with both halves through the
+> tunnel, from a phone hotspot, with no address of the lobby's anywhere on the
+> game side. Two players from two homes will collide on their very first try,
+> and the failure is a nasty one to debug in company — see "what it looks like"
+> below. Do it BEFORE that call, not after.
 
 A room's endpoints are the addresses the clients **declared** at login. Two players
-behind different NATs can both declare `192.168.1.5`, and the relay's match by address
-then finds two agents — its fallback is to send to everybody in the room, which is the
-fan-out we just got rid of.
+behind different NATs can both declare `192.168.1.5`, and — because the game port is
+`8888` by default for everybody — the port does not save it either. The relay's match
+by address then finds two agents, and its fallback is to send to everybody in the room,
+which is the fan-out we got rid of.
 
-The fix is one rewrite in the one place that builds the room description: advertise a
-**unique stand-in address per player per room** (`10.77.<room>.<slot>` and the like)
-instead of what the client declared. The same substitution for every recipient, so
-there is no per-recipient patching; the agent needs no change at all, because it carries
-whatever address the game dialled and the relay matches the address it was given.
+The runs so far dodged it by accident: every copy was on ONE machine, so all of them
+declared the same address and were told apart by ports `8888`/`8889`/`8890`.
 
-This does not contradict the conclusion from the duel that stand-in addresses are not
-needed. That was about *delivery* — the agent answers the game's own `recvfrom`, so
-nothing has to be rewritten for a datagram to arrive. This is about *telling two peers
-apart*, which only becomes a problem once two of them collide.
+**What it looks like when it bites**, so it is recognised rather than rediscovered:
+`named …, which is nobody here — sent to all` in the relay's log; agents admitted into
+a room that is not theirs, because `identifyAgent(address, port)` is asked across the
+whole lobby and two rooms can now answer it; and a game that starts and then plays with
+another pair's datagrams mixed in.
+
+#### What to build
+
+1. **Key by room and slot, not by port.** A port tells copies on one desk apart and
+   nothing else. `10.77.<room>.<slot>` — a routable-looking address nobody routes,
+   rather than the `127.0.0.9…12` the probe hands out today, because a loopback
+   stand-in goes silently nowhere if a datagram ever escapes the agent.
+2. **The core holds BOTH values per player.** This is the half that makes it more than
+   a byte substitution, and the half that will look like it works if it is missed:
+   - the **declared** endpoint is what the agent announces about itself, and it is what
+     `identifyAgent` must keep matching, because the agent has no way to learn its
+     stand-in;
+   - the **stand-in** is what goes into the room description and therefore what the
+     other games dial, so it is what the relay must match on delivery.
+   Substitute in the description without teaching the core both and every agent is
+   refused — and a refusal looks exactly like a lobby that is quiet: the games fall
+   back to talking directly, play perfectly, and prove nothing.
+3. **Substitute in the one place that builds the room description** (`infoOut` →
+   `probeEndpoints`, `services/gateway/lobby.ts`), the same substitution for every
+   recipient, on the way out and never in what is stored — the host resends his
+   settings several times a second and the join button depends on telling a real change
+   from a repeat.
+4. **Take the flag off.** It is `probePeerAddress`, `on: false`, reached only by
+   `--probe-peer-address`; it becomes how the lobby always behaves.
+
+`native/net/agent.c` is not opened at all: it carries whatever address the game dialled
+and the relay matches the address it handed out.
+
+#### What is already proved, so it need not be re-asked
+
+The client ACCEPTS a substituted address and dials it — measured with the probe on:
+"both clients then dialled us, in both directions, and **not one packet went to the real
+address**" (`docs/NETWORK_STATE.md`, "Where the peer address comes from"). The risky
+half of this is behind us; what is left is bookkeeping.
+
+Also settled, and worth not re-deriving: the address peers dial comes from the host's
+own description of the game (field `04 2c`), NOT from the NAT mirror and NOT from any
+member-record field the server fills in — both of those were tried and are clean
+negatives.
 
 One more thing that changes here: the NAT mirror answers with the source address it
 sees. On a real public host that is right; behind a tunnel it is not, and there is no
-override for it today.
+override for it today. It matters less than it looks — nobody dials that field — but it
+is the same family of question.
 
 ---
 

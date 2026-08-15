@@ -29,10 +29,13 @@ The **guest** is always there and is not part of that: one player, with a name, 
 a ladder row of his own, seated in the Ranked channel. He is what makes a
 profile read, a friend to add and a foreign rating testable with one copy of the game.
 
-Then start the game from the copy: `C:\Projects\homm5-game-net\run-net.bat`. That
-bat sets `http_proxy=http://127.0.0.1:8080`, which is the whole redirect — the
-game's libcurl asks us for its server list instead of `gsconnect.ubisoft.com`.
-Nothing in the exe is patched for this.
+Then start the game from the copy: `C:\Projects\homm5-game-net\bin\H5_Game_H5E.exe`.
+The redirect is the extension's now: with `net-u-lobby` on it rewrites the URL the
+game fetches its server list from, in memory, and answers that request itself. It
+used to be `http_proxy` in a `run-net.bat`, and those were deleted on 15.08.2026
+because a variable that names an address beats the rewrite silently — off that
+LAN it is twenty-one seconds of waiting and then a failure. Nothing on disk is
+patched for either.
 
 Two logs matter, and they answer different questions:
 

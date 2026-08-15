@@ -49,8 +49,8 @@ node tools/net-decode.ts --file dump.txt   # a hex dump from the log, back into 
 ```
 
 There is nothing to install: no dependencies outside Node itself, and Node 24 runs the
-TypeScript straight off disk. Then start the game — `run-net.bat` in the game copy sets the
-variable and nothing else — and open <http://127.0.0.1:8081> beside it: the same channels,
+TypeScript straight off disk. Then start the game — `bin\H5_Game_H5E.exe` in the copy, and
+nothing else: the extension points it here itself — and open <http://127.0.0.1:8081> beside it: the same channels,
 the same messages, and what was said while nobody was playing is still there.
 
 **The browser logs in with the game's account** — the same name and the same password.

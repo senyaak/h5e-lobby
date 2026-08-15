@@ -351,9 +351,11 @@ the reason only the host of the fleet has a firewall question at all.
 
 Per game copy, and neither of them is in a repository:
 
-- `<copy>\run-net.bat` — `http_proxy=http://<laptop>:8080`. Hand-written and unmanaged
-  today; if it survives this stage as a bat file, at least say so in the editor's
-  Network tab, next to the field that writes the other one.
+- ~~`<copy>\run-net.bat` — `http_proxy=http://<laptop>:8080`~~ — **gone, 15.08.2026.**
+  It did not survive this stage: the extension rewrites the URL itself and answers the
+  request, so there is nothing for a bat file to set, and leaving the variable in one
+  overrode the rewrite silently. The three were deleted; the game is started by
+  `bin\H5_Game_H5E.exe`, which is also where the working directory has to be.
 - `<copy>\bin\homm5-editor-net.txt` — `relay ws://<laptop>:40200/agent`, and that is the
   whole file now. The editor's **Network** tab writes it; use it rather than an editor.
 
@@ -506,8 +508,9 @@ already in both logs.
   step that publishes the core.
 - **Do not chase a self-signed certificate** for `wss://`. Either a real one or `ws://`
   on the LAN.
-- **Do not quietly move `run-net.bat` into the mod's config.** If it moves, it moves
-  visibly, with the Network tab that already owns the other file.
+- ~~**Do not quietly move `run-net.bat` into the mod's config.**~~ It moved, and
+  visibly: the Network tab owns the address and the port, the extension does the
+  redirect, and the bat files were deleted rather than left to override it (15.08.2026).
 
 ## 7. Small things to fix while passing through
 

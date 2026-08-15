@@ -78,9 +78,11 @@ interface Service {
  * the first thing it says and not in the port it said it on (`services/gateway/u-lobby.ts`).
  *
  * The number is the ini's, not the router's, and that is the whole reason to prefer it:
- * `http_proxy` is set by hand in each game copy's `run-net.bat`, while every u-lobby address
- * is read out of the ini we serve. Keep the hand-written one and the rest follow by
- * themselves; keep the router's instead and three bat files have to be edited.
+ * it was the one number written by hand on the game side, while every other address is
+ * read out of the ini we serve — so keeping it meant the rest followed by themselves.
+ * The hand-written part is gone now (the extension rewrites the URL and answers the
+ * request), which takes the reason away without taking anything else with it: one
+ * number is still one number, and moving it now would only make this comment older.
  *
  * It must not be a number a game listens on for its peers — `8888` upward here — because
  * the agent tells a u-lobby service from a player by port and nothing else.

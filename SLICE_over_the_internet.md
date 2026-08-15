@@ -46,7 +46,36 @@ is handed, and the one host inside it), and — in the editor repo, branch
 
 ## 1. The fact that decides the shape of everything below
 
-**A tunnel can carry the relay and the browser. It cannot carry the game.**
+**A tunnel can carry the relay and the browser. It cannot carry the game — but
+something inside the game can.**
+
+> **Answered on 15.08.2026, and not yet proved by a game.** Everything below this
+> box is still true of a tunnel ON ITS OWN, and that is why it stays. What changed
+> is that the desks no longer have to reach the tunnel by themselves: the mod's
+> lobby half (`native/net/lobby.c`, editor branch `net/multiplayer`) holds them on
+> the loopback and carries them out over one WebSocket, the way the peer half
+> already carries datagrams — and `services/desks` unwraps them into ordinary
+> connections to this gateway, which is not told and does not change.
+>
+> Three things follow, and the third is the point:
+>
+> - the game is no longer started by a bat file: the extension rewrites the one URL
+>   the game fetches its server list from, and then answers that request itself,
+>   so `http_proxy` is gone and the port cannot disagree with anything;
+> - `H5E_HOST` stops having to be an address anybody can dial. For a tunnelled
+>   client every desk is at its own `127.0.0.1`, which is this variable's default —
+>   so the laptop's override is what has to go, not something that has to be added;
+> - **§4.1 below is no longer the only way out.** A VPS, a port forward or a VPN
+>   were the three answers to "the desks need an address the game can dial"; a
+>   tunnelled client does not dial one. The VPS is still what a lobby for people
+>   who are not us wants, for the reasons in that section, but stage three no
+>   longer waits on it.
+>
+> Still the server's to give, and still from `H5E_HOST`: the proxy handed over at
+> `PROXY_HANDLER` and the lobby server handed over at join (`main.ts:150-153`).
+> With every client tunnelled the default answers both. With a mixed lobby they
+> have to come from the door a connection arrived on — a small change, since a
+> session already carries its own copy of them.
 
 The game speaks HTTP to us exactly once, and raw TCP and UDP for everything after
 that: ten desks, of which `40000/40001/40010/40020/40021` are TCP **and** UDP, `6667`
@@ -65,8 +94,9 @@ So there are two transports and they get two different answers:
 
 | what | how it gets out |
 |---|---|
-| relay (`40200`), browser lobby (`8081`) | tunnel, `wss://` and `https://` |
-| everything the game itself dials | a routable address: port forwarding, a VPS, or a private network |
+| relay (`40200`), browser lobby (`8081`), desk tunnel (`40300`) | tunnel, `wss://` and `https://` |
+| everything the game itself dials, WITHOUT the mod's lobby half | a routable address: port forwarding, a VPS, or a private network |
+| the same, WITH it | the mod's own `wss://` to `services/desks`, and nothing to open |
 
 How many ports that second row costs is a separate question with a good answer — one
 number since §2.3, `8080` in both protocols, and the ten desks below are ten protocols now
@@ -448,8 +478,10 @@ already in both logs.
 
 ## 6. What not to do
 
-- **Do not try to put the game's desks behind the tunnel.** Section 1; it is not a
-  configuration problem.
+- **Do not try to CONFIGURE the game's desks behind the tunnel.** Section 1; it is
+  not a configuration problem, and it was not solved by finding a better setting —
+  it was solved by holding the sockets inside the game, which is code and lives in
+  the mod.
 - **Do not set `H5E_HOST` to a routable address before §2.1 is split.** That is the
   step that publishes the core.
 - **Do not chase a self-signed certificate** for `wss://`. Either a real one or `ws://`

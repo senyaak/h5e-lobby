@@ -183,7 +183,7 @@ export class CoreService {
         // on the argument that the relay was the only reader and it asks its one question
         // when an agent connects — but the browser draws the games now, and the list it
         // draws them from is this one. Cheap to send: the gateway only says this when the
-        // list is not what it sent last (services/gateway/state-feed.ts).
+        // list is not what it sent last (services/u-lobby/state-feed.ts).
         client.rooms = message.rooms;
         this.tellEveryone({ kind: 'rooms', rooms: this.rooms() });
         this.log(

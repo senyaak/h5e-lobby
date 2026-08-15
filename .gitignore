@@ -9,3 +9,7 @@ data/
 # This host's settings, which include its token. deploy/h5e-lobby.env.example is the
 # one that is checked in, because it has nothing real in it.
 config.json
+# One host's own units, in a subdirectory named after it. They carry that machine's
+# absolute paths, its home directory and its tunnel's hostnames — facts about a laptop
+# and not about the lobby. The five in deploy/systemd/ are the ones to copy and fill in.
+deploy/systemd/*/

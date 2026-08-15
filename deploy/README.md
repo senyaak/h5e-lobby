@@ -54,51 +54,51 @@ Node 24 or newer, because the services run their TypeScript straight off disk. T
 nothing to build and nothing to `npm install` — this repository has no dependencies
 outside Node itself.
 
-## On this machine: the same five inside senyaak's fleet
+## The same five as user units, out of a checkout
 
-The `/opt` install above is for a host of its own. Here the five run as **user** units out
-of this same checkout — no root, and `~/Projects/tunnels/fleet` manages them alongside the
-MCP servers and their tunnels:
+The `/opt` install above is for a host of its own. A machine that already runs things of
+its own can instead run the five as **user** units straight out of this checkout — no root,
+nothing copied, and whatever script manages that machine's other services manages these
+alongside them. Name them for the host, `<host>-h5e-*`:
 
 | unit | what it runs |
 |---|---|
-| `senyaak-h5e-core` | `services/core/main.ts` |
-| `senyaak-h5e-gateway` | `services/gateway/main.ts` |
-| `senyaak-h5e-web` | `services/web/main.ts` |
-| `senyaak-h5e-relay` | `services/relay/main.ts` |
-| `senyaak-h5e-u-lobby` | `services/u-lobby/main.ts` |
-| `senyaak-h5e-tunnel` | cloudflared: `h5e-lobby.example.com` → `:8081`, `relay-h5e.example.com` → `:40200`, `u-lobby-h5e.example.com` → `:40300` |
+| `<host>-h5e-core` | `services/core/main.ts` |
+| `<host>-h5e-gateway` | `services/gateway/main.ts` |
+| `<host>-h5e-web` | `services/web/main.ts` |
+| `<host>-h5e-relay` | `services/relay/main.ts` |
+| `<host>-h5e-u-lobby` | `services/u-lobby/main.ts` |
+| `<host>-h5e-tunnel` | cloudflared, if the lobby is to be reached from outside: the web on `:8081`, the relay on `:40200` and the u-lobby on `:40300`, each behind a hostname of its own |
 
 ```bash
-systemctl --user start   senyaak-h5e.target    # the six, one command
-systemctl --user restart senyaak-h5e.target    # take them round together
-systemctl --user restart senyaak-h5e-gateway   # or just one of them
-journalctl --user -u senyaak-h5e-gateway -f
-~/Projects/tunnels/fleet                       # 0 = tree + health, local and public
+systemctl --user start   <host>-h5e.target    # the six, one command
+systemctl --user restart <host>-h5e.target    # take them round together
+systemctl --user restart <host>-h5e-gateway   # or just one of them
+journalctl --user -u <host>-h5e-gateway -f
 ```
 
-`Restart=always` on every one of them, and `loginctl enable-linger` is already on, so
-they come back after a crash and after a reboot without anyone logging in.
+`Restart=always` on every one of them, and `loginctl enable-linger` on, so they come back
+after a crash and after a reboot without anyone logging in.
 
-**The units are files in `deploy/systemd/senyaak/` — in THIS repository**, symlinked into
-`~/.config/systemd/user/`. They lived in `~/Projects/tunnels/systemd/` until 15.08.2026 and
-that is what moved them: the fleet repository is a generic one, it knows how to run and
-tunnel anything and nothing about this game. A unit's ports, its ordering and its
-description are facts about the lobby and change when the lobby's code changes — kept over
-there they went stale silently, which is exactly what the `desk` → `u-lobby` rename did to
-them. `./fleet` never cared where the files are: it finds units by the `senyaak-*` glob
-through systemd, and a symlink is a symlink.
+**A host's own units go in `deploy/systemd/<host>/`, which is ignored** — see `.gitignore`
+— and are symlinked from there into `~/.config/systemd/user/`. They are kept beside the
+lobby's code rather than in whatever repository manages the machine, because a unit's
+ports, its ordering and its description are facts about the lobby: they change when the
+lobby's code changes, and kept anywhere else they go stale silently — which is exactly what
+the `desk` → `u-lobby` rename did to them. What the repository carries is the generic five
+above; what stays out of it is one machine's absolute paths, its home directory and its
+tunnel's hostnames. Finding units by a `<host>-*` glob through systemd does not care where
+the files are, and a symlink is a symlink.
 
-`H5E_HOST` and `H5E_BIND` live in `~/.config/h5e-lobby.env`, which is in neither
-repository.
+`H5E_HOST` and `H5E_BIND` live in `~/.config/h5e-lobby.env`, which is in no repository.
 
 Installing them, once:
 
 ```bash
-ln -sfn "$PWD"/deploy/systemd/senyaak/senyaak-h5e-*.service ~/.config/systemd/user/
-ln -sfn "$PWD"/deploy/systemd/senyaak/senyaak-h5e.target    ~/.config/systemd/user/
+ln -sfn "$PWD"/deploy/systemd/<host>/*.service ~/.config/systemd/user/
+ln -sfn "$PWD"/deploy/systemd/<host>/*.target  ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now senyaak-h5e.target
+systemctl --user enable --now <host>-h5e.target
 ```
 
 **The tunnel carries what speaks its language, and the game does not speak it.** cloudflared

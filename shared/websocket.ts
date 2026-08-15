@@ -131,6 +131,16 @@ function attach(socket: Socket, url: string, headers: IncomingHttpHeaders): WebS
   const finish = (): void => {
     if (closed) return;
     closed = true;
+    // OUR half is still open at this point, and closing it is the whole job. A peer that
+    // simply dies sends a bare FIN and no close frame — which is what cloudflared delivers
+    // when the game exits — and a half nobody ends sits in CLOSE-WAIT holding an fd for as
+    // long as the process lives. Measured 15.08.2026: three finished agents, three
+    // CLOSE-WAIT sockets, and /health still counting them ten minutes later.
+    //
+    // The two paths that send a farewell frame have already called `end` with it, and
+    // `writableEnded` says so; the path that gave up on the frame has destroyed the socket
+    // outright. This is only for the ends nobody else closed.
+    if (!socket.destroyed && !socket.writableEnded) socket.end();
     for (const handler of closeHandlers) handler();
   };
 
@@ -173,6 +183,16 @@ function attach(socket: Socket, url: string, headers: IncomingHttpHeaders): WebS
     }
   });
 
+  // Three ways a connection can end, and every one of them has to arrive at `finish`:
+  //   close  the socket is gone
+  //   error  it is going, and unhappily
+  //   end    the PEER's FIN — no close frame, nothing else coming
+  //
+  // `end` is the one that was missing, and it is the ordinary case rather than the exotic
+  // one: a game that quits does not negotiate, it vanishes, and the tunnel forwards that as
+  // a plain FIN. Without it `finish` never ran, so nothing upstairs was ever told a player
+  // had gone and the relay kept his ghost in the room.
+  socket.on('end', finish);
   socket.on('close', finish);
   socket.on('error', finish);
 

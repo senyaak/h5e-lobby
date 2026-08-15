@@ -46,6 +46,13 @@ interface Agent {
   room: string;
   /** Where this player's game is, if the room description said so. */
   endpoint: PeerEndpoint | null;
+  /**
+   * What this agent has actually pushed through, which is the one number a test of the
+   * network wants and the one thing the log never said. Forwarding is otherwise silent, so
+   * "three joined a room" and "three joined a room and then played for eight minutes" read
+   * exactly alike — and the first of those is a tunnel that carried nothing.
+   */
+  carried: { datagrams: number; bytes: number };
 }
 
 // ---------------------------------------------------------------------------
@@ -117,12 +124,43 @@ const GRACE_MS = 60_000;
  */
 const IDENTIFY_MS = 10_000;
 
+/**
+ * How often a room that is carrying traffic says so.
+ *
+ * A line per datagram would be the game's own tick rate written to disk; a line per room
+ * per ten seconds is enough to watch a match cross the tunnel and see the moment it stops.
+ */
+const TALLY_MS = 10_000;
+
+/** Bytes, as something a person reads at a glance in a log. */
+function size(bytes: number): string {
+  return bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`;
+}
+
 export function startRelay(options: RelayOptions): Promise<RunningRelay> {
   const log = options.log ?? ((): void => {});
   const agents = new Set<Agent>();
   /** Every open connection, admitted or not — what `close()` has to let go of. */
   const peers = new Set<WebSocketPeer>();
   const recent = new Map<string, { nick: string; room: string; roster: PeerEndpoint[]; at: number }>();
+  /** What each room has carried since it last said so — see TALLY_MS. */
+  const tally = new Map<string, { since: number; datagrams: number; bytes: number }>();
+
+  const inRoom = (room: string): Agent[] => [...agents].filter((one) => one.room === room);
+
+  /**
+   * Drop the identities nobody can still be re-admitted on.
+   *
+   * `recent` exists so a wifi blip during a core restart does not end a match, which means
+   * it must outlive a disconnection — but only by GRACE_MS, after which an entry is a dead
+   * endpoint kept for the life of the process. Swept when a connection ends rather than on
+   * a timer: that is the only moment new ones stop arriving, and it needs nothing to clean
+   * up afterwards.
+   */
+  const sweep = (): void => {
+    const now = Date.now();
+    for (const [key, identity] of recent) if (now - identity.at >= GRACE_MS) recent.delete(key);
+  };
 
   const core = new CoreClient({ url: options.coreUrl, service: 'relay', log });
   core.start();
@@ -147,7 +185,7 @@ export function startRelay(options: RelayOptions): Promise<RunningRelay> {
     const early: Buffer[] = [];
 
     const admit = (mine: PeerEndpoint, identity: { nick: string; room: string; roster?: PeerEndpoint[] }): void => {
-      agent = { peer, nick: identity.nick, room: identity.room, endpoint: mine };
+      agent = { peer, nick: identity.nick, room: identity.room, endpoint: mine, carried: { datagrams: 0, bytes: 0 } };
       agents.add(agent);
       recent.set(`${mine.address}:${mine.port}`, {
         nick: identity.nick,
@@ -157,8 +195,7 @@ export function startRelay(options: RelayOptions): Promise<RunningRelay> {
       });
       log(
         `relay ${identity.nick} joined room ${identity.room} ` +
-          `(${[...agents].filter((a) => a.room === identity.room).length} there, ` +
-          `at ${mine.address}:${mine.port})`,
+          `(${inRoom(identity.room).length} there, at ${mine.address}:${mine.port})`,
       );
       for (const held of early.splice(0)) forward(agent, held);
     };
@@ -224,9 +261,23 @@ export function startRelay(options: RelayOptions): Promise<RunningRelay> {
     peer.onClose(() => {
       clearTimeout(mute);
       peers.delete(peer);
+      sweep();
       if (!agent) return;
       agents.delete(agent);
-      log(`relay ${agent.nick} left room ${agent.room}`);
+      const left = inRoom(agent.room).length;
+      log(
+        `relay ${agent.nick} left room ${agent.room} — carried ` +
+          `${agent.carried.datagrams} datagram(s), ${size(agent.carried.bytes)} (${left} still there)`,
+      );
+      // AND THE ROOM ITSELF, when the last of them goes. A room is nothing but the agents
+      // that name it, so it ends by becoming empty rather than by being closed — and its
+      // running total goes with it, or the next game to be handed the same room id (they
+      // are reused) would inherit the last one's numbers.
+      if (left === 0) {
+        const carried = tally.get(agent.room);
+        tally.delete(agent.room);
+        log(`relay room ${agent.room} is empty${carried ? `, ${carried.datagrams} datagram(s) since its last tally` : ''}`);
+      }
     });
   });
 
@@ -245,22 +296,50 @@ export function startRelay(options: RelayOptions): Promise<RunningRelay> {
    * is the best a nameless datagram allows.
    */
   function forward(from: Agent, bytes: Buffer): void {
-    const inRoom = [...agents].filter((one) => one !== from && one.room === from.room);
+    const others = inRoom(from.room).filter((one) => one !== from);
+    count(from, bytes.length, others.length);
     const frame = readFrame(bytes);
     if (!frame) {
-      for (const other of inRoom) other.peer.send(bytes);
+      for (const other of others) other.peer.send(bytes);
       return;
     }
     const stamped = frameFor(from.endpoint, frame.payload);
-    const wanted = inRoom.filter(
+    const wanted = others.filter(
       (one) => one.endpoint && one.endpoint.address === frame.address && one.endpoint.port === frame.port,
     );
-    for (const other of wanted.length ? wanted : inRoom) other.peer.send(stamped);
-    if (!wanted.length && inRoom.length > 1) {
+    for (const other of wanted.length ? wanted : others) other.peer.send(stamped);
+    if (!wanted.length && others.length > 1) {
       // Worth saying once it can actually go wrong: with three in a room and no
       // endpoint to match, everybody gets everybody's traffic.
-      log(`relay ${from.nick} named ${frame.address}:${frame.port}, which is nobody here — sent to all ${inRoom.length}`);
+      log(`relay ${from.nick} named ${frame.address}:${frame.port}, which is nobody here — sent to all ${others.length}`);
     }
+  }
+
+  /**
+   * The traffic, said out loud — the first datagram, and then a line per room per TALLY_MS.
+   *
+   * The first one gets its own line because it is the answer to the only question a test of
+   * the network is asking: whether anything at all crossed. Everything after it is a rate,
+   * and a rate is worth one line every ten seconds and not one per packet.
+   */
+  function count(from: Agent, bytes: number, to: number): void {
+    from.carried.datagrams += 1;
+    from.carried.bytes += bytes;
+    const now = Date.now();
+    if (from.carried.datagrams === 1) {
+      log(`relay first datagram from ${from.nick} in room ${from.room} — ${bytes} B to ${to} peer(s)`);
+    }
+    const room = tally.get(from.room) ?? { since: now, datagrams: 0, bytes: 0 };
+    room.datagrams += 1;
+    room.bytes += bytes;
+    tally.set(from.room, room);
+    if (now - room.since < TALLY_MS) return;
+    const seconds = (now - room.since) / 1000;
+    log(
+      `relay room ${from.room} carried ${room.datagrams} datagram(s), ${size(room.bytes)} ` +
+        `in ${seconds.toFixed(0)}s (${Math.round(room.datagrams / seconds)}/s, ${inRoom(from.room).length} there)`,
+    );
+    tally.set(from.room, { since: now, datagrams: 0, bytes: 0 });
   }
 
   return new Promise((resolve) => {

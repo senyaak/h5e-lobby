@@ -11,6 +11,8 @@
 //
 // Usage: `node tools/test-services.ts`
 
+import { createHash } from 'node:crypto';
+import { connect } from 'node:net';
 import { openDatabase } from '../services/core/rules/database.ts';
 import { Accounts } from '../services/core/rules/accounts.ts';
 import { startCore } from '../services/core/server.ts';
@@ -544,6 +546,62 @@ check(
   relay.rooms()['room-9']?.join(',') === 'PlayerC',
   JSON.stringify(relay.rooms()),
 );
+
+// A GAME THAT DIES RATHER THAN SAYS GOODBYE.
+//
+// Every agent above leaves through Node's WebSocket client, which is polite: it sends a
+// close frame and the relay reads it. A real one is not polite — the game exits, the
+// process goes, and what arrives is a bare TCP FIN with no frame in front of it. The
+// tunnel delivers exactly that, and for a while nothing on our side listened for it: the
+// socket sat in CLOSE-WAIT, `onClose` never ran, and the player stayed in his room
+// forever. Observed 15.08.2026 — three agents still seated ten minutes after the match,
+// and rooms are numbered from the lobby, so the next game to be given that id would have
+// inherited three ghosts holding its own players' endpoints.
+//
+// So this one speaks WebSocket by hand, only as far as it must, and then hangs up mid-word.
+{
+  const rude = connect(relay.port(), '127.0.0.1');
+  await new Promise<void>((resolve) => rude.on('connect', () => resolve()));
+  const key = Buffer.alloc(16, 7).toString('base64');
+  rude.write(
+    `GET /agent HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n` +
+      `Sec-WebSocket-Key: ${key}\r\nSec-WebSocket-Version: 13\r\n\r\n`,
+  );
+  const accept = createHash('sha1')
+    .update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')
+    .digest('base64');
+  const upgraded = await new Promise<boolean>((resolve) => {
+    let seen = '';
+    rude.on('data', (chunk: Buffer) => {
+      seen += chunk.toString('latin1');
+      if (seen.includes('\r\n\r\n')) resolve(seen.includes(accept));
+    });
+    setTimeout(() => resolve(false), 2000);
+  });
+  check('a hand-written client is upgraded', upgraded);
+
+  // The identify frame, masked — a client frame always is, and the relay refuses one that
+  // is not. PlayerC's endpoint, so the core admits him into a room that exists.
+  const body = identifyFrame('192.168.178.27', 8890);
+  const mask = Buffer.from([0x11, 0x22, 0x33, 0x44]);
+  const masked = Buffer.alloc(body.length);
+  for (let i = 0; i < body.length; i++) masked[i] = body[i]! ^ mask[i & 3]!;
+  rude.write(Buffer.concat([Buffer.from([0x82, 0x80 | body.length]), mask, masked]));
+  check(
+    'and joins his room',
+    await until(() => (relay.rooms()['room-9'] ?? []).filter((nick) => nick === 'PlayerC').length === 2),
+    JSON.stringify(relay.rooms()),
+  );
+
+  // And now the game dies. No close frame, no warning — just the FIN.
+  rude.end();
+  check(
+    'a bare FIN empties his seat too',
+    await until(() => (relay.rooms()['room-9'] ?? []).filter((nick) => nick === 'PlayerC').length === 1),
+    JSON.stringify(relay.rooms()),
+  );
+  rude.destroy();
+}
 
 // ---------------------------------------------------------------------------------
 console.log('\nthree in a room, each datagram to the one it names');

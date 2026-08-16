@@ -21,6 +21,7 @@
     "test-services": "node tools/test-services.ts",
     "net-decode": "node tools/net-decode.ts",
     "diff-struct": "node tools/diff-struct.ts",
+    "purge-room-chat": "node tools/purge-room-chat.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

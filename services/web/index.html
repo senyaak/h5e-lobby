@@ -79,6 +79,7 @@
       #games .players { color: var(--dim); }
       #games .waiting { color: var(--dim); font-style: italic; }
       #games .seats { font-variant-numeric: tabular-nums; white-space: nowrap; }
+      #games .ai { color: var(--dim); font-size: 11px; }
       /* A game nobody else can get into should not look like an invitation. */
       #games .seats.full { color: var(--dim); }
       #games .build { color: var(--dim); font-family: ui-monospace, monospace; font-size: 12px; white-space: nowrap; }
@@ -191,7 +192,7 @@
              it reads as a list that failed to load. -->
         <table id="games" hidden>
           <thead>
-            <tr><th>Game</th><th>Map</th><th>Host</th><th class="seats">Humans</th><th>Playing</th><th>Build</th><th></th></tr>
+            <tr><th>Game</th><th>Map</th><th>Host</th><th class="seats">Players</th><th>Playing</th><th>Build</th><th></th></tr>
           </thead>
           <tbody id="games-rows"></tbody>
         </table>
@@ -360,7 +361,11 @@
           // Everybody but the host, because he has his own column and a name in two of
           // them reads as two people.
           const guests = game.players.filter((player) => player !== game.master);
-          const full = game.players.length >= game.seats;
+          // The game's own list counts filled slots, people and computers alike, so this
+          // counts them the same way — a browser saying "1 of 3" beside a game saying
+          // "2 of 3" reads as a broken browser, and it was one until the switch was found.
+          const taken = game.players.length + game.computers;
+          const full = taken >= game.seats;
           // A generated map has no name to show — what stands there is its template, so it
           // is labelled as one rather than passed off as a map somebody could go and find.
           const map = document.createElement('td');
@@ -376,7 +381,7 @@
             cell(game.name, 'name'),
             map,
             cell(game.master),
-            cell(`${game.players.length}/${game.seats}`, full ? 'seats full' : 'seats'),
+            seatsCell(taken, game.seats, game.computers, full),
             guests.length ? cell(guests.join(', '), 'players') : cell('waiting for someone', 'waiting'),
             build(game.build),
             more(game),
@@ -404,6 +409,21 @@
         }
         td.textContent = text.replace(/^HEROES_/, '').slice(0, 8);
         td.title = text;
+        return td;
+      }
+
+      /** "2/3", with the computers said out loud when there are any. */
+      function seatsCell(taken, seats, computers, full) {
+        const td = document.createElement('td');
+        td.className = full ? 'seats full' : 'seats';
+        td.textContent = `${taken}/${seats}`;
+        if (computers) {
+          const note = document.createElement('span');
+          note.className = 'ai';
+          note.textContent = ` +${computers} AI`;
+          td.append(note);
+          td.title = `${taken - computers} playing, ${computers} computer${computers > 1 ? 's' : ''}`;
+        }
         return td;
       }
 
@@ -449,7 +469,9 @@
         say('host', game.master);
         // "Humans" and not "players": the game's own list counts occupied slots and a
         // computer fills one, so its number is bigger and neither is wrong.
-        say('humans', `${game.players.length} of ${game.seats} slots — ${game.players.join(', ')}`);
+        say('humans', `${game.players.length} — ${game.players.join(', ')}`);
+        if (game.computers) say('computers', String(game.computers));
+        say('slots', `${game.players.length + game.computers} of ${game.seats} taken`);
         // Both, because which one two copies must match on is not settled.
         if (game.build) say('build', game.build);
         if (game.gsBuild) say('gs build', game.gsBuild);

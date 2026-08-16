@@ -363,6 +363,7 @@ uLobby.replaceRooms([
     gsVersion: 'HEROES_a3e9d5c9b79a1a57',
     mapName: 'Rules Test',
     mapGenerated: false,
+    computers: 1,
     facts: [{ name: 'goal', value: 'goal_default' }],
     endpoints: [
       { nick: 'Senyaak', address: '10.44.253.104', port: 8888 },
@@ -454,7 +455,7 @@ console.log('\nthe relay');
  * Seats and version are for a person looking at a list; what the relay wants is who is at
  * which endpoint. Spelling them out in every fixture down here would say they mattered.
  */
-const anyGame = { maxPlayers: 2, build: '', gameVersion: '', gsVersion: '', mapName: '', mapGenerated: false, facts: [] };
+const anyGame = { maxPlayers: 2, build: '', gameVersion: '', gsVersion: '', mapName: '', mapGenerated: false, computers: 0, facts: [] };
 
 uLobby.replaceRooms([
   {

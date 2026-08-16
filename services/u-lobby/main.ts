@@ -31,7 +31,7 @@ import { NatService, setMirrorPort } from './nat-service.ts';
 import { GUEST, GUEST_LOBBY, RouterService } from './router-service.ts';
 import { CdKeyService } from './cdkey-service.ts';
 import { IrcConnection, IrcService, chatLine, frame, fromGameText, toGameText } from './irc.ts';
-import { probePeerAddress, probeRoomFields, roomEndpoints, roomFacts, roomMap } from './lobby.ts';
+import { probePeerAddress, probeRoomFields, roomComputers, roomEndpoints, roomFacts, roomMap } from './lobby.ts';
 import { classifyDatagram, classifyUService, type UService } from './classify.ts';
 import { carryULobby } from './tunnel.ts';
 import { StateFeed } from './state-feed.ts';
@@ -305,6 +305,7 @@ function roomsNow(): RoomInfo[] {
       gsVersion: room.gsVersion,
       mapName: map?.name ?? '',
       mapGenerated: map?.generated ?? false,
+      computers: roomComputers(room.info),
       facts: roomFacts(room.info),
       // Where each of them is playing, out of the host's own description. Empty
       // when it does not parse, and that is a working state: with two players the

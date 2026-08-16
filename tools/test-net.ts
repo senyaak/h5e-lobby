@@ -2265,6 +2265,7 @@ console.log('\nthe state feed, which decides when the core hears about a room');
     gsVersion: '',
     mapName: '',
     mapGenerated: false,
+    computers: 0,
     facts: [],
     endpoints: [],
   });

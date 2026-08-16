@@ -1501,10 +1501,12 @@ before looking at mods.
    and `[19][1]` and the length of the list in `[19][2]` were 3 as well. The 12.08 capture,
    a two-player map, has 2 in all of them.
 
-   **And the number the GAME shows is not on the wire at all.** Its own list said "2 of 3"
-   for that room while the browser said "1 of 3", and both are right about different
-   things: the browser counts the people, the game counts occupied slots and the second was
-   a computer. No field of the description holds 2 — the AI slot is a property of the map,
-   which the other client reads off its own disk, the same way it reads the map's name. So
-   a browser cannot say "2 of 3" without the map file, and it should not pretend to: what
-   it shows is labelled as people.
+   **`[41][4]` is the computer players, and that settles the count the game shows.** Its
+   own list said "2 of 3" for a room the browser called "1 of 3", and the difference was a
+   computer the host had put in the second slot himself. Watched: `[41][4]` went 0, then 1
+   as he added one, then 2 for a second, back to 1, and to 2 again when he was asked to set
+   two and say so. Beside `14 = 1` and `20 = 3` that is exactly the game's own arithmetic —
+   `humans + computers of slots`, 1 + 1 of 3, and the browser now counts it the same way.
+
+   It is not the map's doing: an RMG map does not come with an AI in slot two, the host
+   chose it on the room screen, and it travels as a switch like the other four.

@@ -74,6 +74,14 @@ export interface RoomInfo {
   /** True when the map was generated rather than chosen. */
   mapGenerated: boolean;
   /**
+   * How many slots the host has filled with computer players.
+   *
+   * `members.length + computers` is the "2 of 3" the game's own list shows, and until this
+   * was found the browser could only say "1 of 3" and look wrong. It is a switch on the
+   * room screen, not a property of the map — see the u-lobby's `roomSwitches`.
+   */
+  computers: number;
+  /**
    * Everything else identified in that description — the map's full path, the victory goal,
    * the rules the host set. Short, and it is meant to be: the document holds some forty
    * more fields nobody has worked out, and a list of `[24] = 00` teaches nobody anything.

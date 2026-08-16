@@ -549,6 +549,35 @@ export function roomMap(info: Uint8Array): RoomMap | null {
   return { name: template || 'random', generated, path };
 }
 
+/**
+ * The room screen's switches — five of them, and THE VALUE IS THE TAG.
+ *
+ * Tag 41 holds five sub-objects, `[41][2]` to `[41][6]`, each four bytes and each of those
+ * two EMPTY fields: the first one's tag is the setting's value and the second is always
+ * `[0]`. Nothing is stored in a payload, which is why reading payloads never found them.
+ *
+ * One of the five is named so far. `[41][4]` — the third — is **how many computer players
+ * the host has put in**, read off a live room screen on 16.08.2026: it went 0, 1, 2, back
+ * to 1, and while it stood at 1 beside one human the host's own game showed "2 of 3". The
+ * other four move and are not known to mean anything yet; NETWORK_STATE §8 has the table
+ * and the procedure for naming the rest.
+ */
+export function roomSwitches(info: Uint8Array): number[] {
+  try {
+    const document = findField(readFields(Buffer.from(info)), 1);
+    const block = document ? findField(readFields(document), 41) : null;
+    if (!block) return [];
+    return readFields(block).map((one) => readFields(one.value)[0]?.tag ?? 0);
+  } catch {
+    return [];
+  }
+}
+
+/** How many slots the host has filled with computer players. See `roomSwitches`. */
+export function roomComputers(info: Uint8Array): number {
+  return roomSwitches(info)[2] ?? 0;
+}
+
 /** A field's payload as text, if it reads as text at all. */
 function asText(value: Buffer): string {
   const text = value.toString('utf8').replace(/\0+$/, '');

@@ -42,6 +42,22 @@ export function lobbyChannel(group: number, server = 1): string {
   return `#LobbyGrp${server}.${group}`;
 }
 
+/**
+ * Whether a channel is one of the LOBBIES, and not a game's own.
+ *
+ * A room is a channel too — a game with id 100 is `#LobbyGrp1.100` — and telling the two
+ * apart matters because they have opposite lifetimes. A lobby is a place: it is there
+ * before anybody arrives and after everybody leaves, and what was said in it is worth
+ * keeping. A room is one game: when it ends there is nobody left to owe anything to.
+ *
+ * **And a room's name is not even its own.** Room ids start again at 100 every time the
+ * u-lobby restarts, so `#LobbyGrp1.100` is the name of "the first room made this run" —
+ * a slot, not a game. Anything kept under it belongs to whoever had that slot last.
+ */
+export function isLobbyChannel(channel: string): boolean {
+  return DEFAULT_LOBBIES.some((lobby) => lobbyChannel(lobby.id) === channel);
+}
+
 /** The list the core publishes: the chat name, the number, and what a person calls it. */
 export function gameChannels(): ChannelInfo[] {
   return DEFAULT_LOBBIES.map((lobby) => ({ key: lobbyChannel(lobby.id), id: lobby.id, name: lobby.name }));

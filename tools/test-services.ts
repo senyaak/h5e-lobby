@@ -22,7 +22,7 @@ import type { ChannelInfo, ChatMessage, PresenceEntry } from '../shared/core-pro
 import { startWeb } from '../services/web/web-service.ts';
 import { startRelay } from '../services/relay/relay-service.ts';
 import { IrcConnection, chatLine, frame, fromGameText, parseChatLine, toGameText } from '../services/u-lobby/irc.ts';
-import { gameChannels, lobbyChannel } from '../shared/channels.ts';
+import { gameChannels, isLobbyChannel, lobbyChannel } from '../shared/channels.ts';
 
 /**
  * A suite that hangs says nothing, and nothing is worse than a red line.
@@ -343,6 +343,21 @@ check(
 // 15.08.2026: the token's default was written in this repository, so the test proved only
 // that a lock whose key everybody has can be locked. What guards the core is that it will
 // not listen anywhere but loopback, and THAT is checked above, with its sabotage half.
+
+// ---------------------------------------------------------------------------------
+console.log('\na lobby is a place and a room is one game, which decides what is kept');
+// ---------------------------------------------------------------------------------
+
+// The bug this is here for: a player opening a fresh game found it full of conversation
+// from games that had ended days before. Room ids start again at 100 on every restart, so
+// `#LobbyGrp1.100` is the name of a SLOT — "the first room made this run" — and everything
+// ever kept under it belongs to whoever had that slot last. Thirty-four lines spanning
+// three days and four different games were measured in one such channel on 16.08.2026.
+check('the three lobbies are lobbies', gameChannels().every((one) => isLobbyChannel(one.key)));
+check('a room is not', !isLobbyChannel(lobbyChannel(100)), lobbyChannel(100));
+check('nor is one whose number looks like a lobby s neighbour', !isLobbyChannel(lobbyChannel(4)));
+check('nor a name from another server', !isLobbyChannel('#LobbyGrp2.2'));
+check('and nonsense is not either', !isLobbyChannel('') && !isLobbyChannel('#LobbyGrp1.'));
 
 // ---------------------------------------------------------------------------------
 console.log('\nthe games list the browser draws, and the half of it it must not get');

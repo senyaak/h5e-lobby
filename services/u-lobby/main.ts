@@ -35,7 +35,7 @@ import { probePeerAddress, probeRoomFields, roomClosed, roomComputers, roomEndpo
 import { classifyDatagram, classifyUService, type UService } from './classify.ts';
 import { carryULobby } from './tunnel.ts';
 import { StateFeed } from './state-feed.ts';
-import { DEFAULT_LOBBIES, lobbyChannel } from '../../shared/channels.ts';
+import { DEFAULT_LOBBIES, isLobbyChannel, lobbyChannel } from '../../shared/channels.ts';
 
 const settings = config();
 
@@ -384,9 +384,21 @@ if (!process.argv.includes('--quiet-bot')) {
   );
 }
 
-/** What a client is owed the moment it joins a channel: what was said while it was away. */
+/**
+ * What a client is owed the moment it joins a channel: what was said while it was away.
+ *
+ * **A LOBBY only.** A room is a channel as well and it used to get this too, which is how
+ * a player opening a fresh game found it full of conversation from games that ended days
+ * ago: room ids start again at 100 on every restart, so `#LobbyGrp1.100` collects what
+ * everybody's first room of every run ever said. Measured 16.08.2026 — thirty-four lines
+ * in that one channel spanning three days and four different games, nearly all of them the
+ * game's own "X вошел в игру".
+ *
+ * Nothing is owed to somebody joining a game: what matters in a room was said by the people
+ * who are in it now, and they get it live.
+ */
 async function replayHistory(channel: string, socket: Socket): Promise<void> {
-  if (!core.connected) return;
+  if (!core.connected || !isLobbyChannel(channel)) return;
   try {
     const messages = await core.history(channel, 20);
     for (const message of messages) {
@@ -531,8 +543,11 @@ function attach(label: UService, socket: Socket, id: number, port: number): (dat
           for (const out of event.broadcast) {
             for (const other of irc.others(out.channel, chat)) chatSockets.get(other)?.write(out.line);
           }
-          // And it reaches the core, which keeps it and passes it to the browser.
-          if (event.said) {
+          // And it reaches the core, which keeps it and passes it to the browser — for a
+          // LOBBY. A room's chat is delivered above and kept nowhere: it is one game's
+          // conversation, its channel name is a slot that the next run hands to somebody
+          // else, and the browser draws the lobbies and not the games.
+          if (event.said && isLobbyChannel(event.said.channel)) {
             core.post({
               channel: event.said.channel,
               nick: fromGameText(event.said.nick),

@@ -191,7 +191,7 @@
              it reads as a list that failed to load. -->
         <table id="games" hidden>
           <thead>
-            <tr><th>Game</th><th>Map</th><th>Host</th><th class="seats">Players</th><th>Playing</th><th>Build</th><th></th></tr>
+            <tr><th>Game</th><th>Map</th><th>Host</th><th class="seats">Humans</th><th>Playing</th><th>Build</th><th></th></tr>
           </thead>
           <tbody id="games-rows"></tbody>
         </table>
@@ -447,7 +447,9 @@
           list.append(dt, dd);
         };
         say('host', game.master);
-        say('players', `${game.players.length} of ${game.seats} — ${game.players.join(', ')}`);
+        // "Humans" and not "players": the game's own list counts occupied slots and a
+        // computer fills one, so its number is bigger and neither is wrong.
+        say('humans', `${game.players.length} of ${game.seats} slots — ${game.players.join(', ')}`);
         // Both, because which one two copies must match on is not settled.
         if (game.build) say('build', game.build);
         if (game.gsBuild) say('gs build', game.gsBuild);

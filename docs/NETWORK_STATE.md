@@ -1468,3 +1468,43 @@ before looking at mods.
    their own and are not the setting: the player records, and tag 29 — the strongest
    candidate for the checksum the host computes into `SGameInfo+0xC4` while composing the
    description, which is zero in the RMG capture and the only non-trivial u32 in the other.
+
+   **FOUND, 16.08.2026: the switches are tag 41, and the VALUE IS THE TAG.** Tag 41 is 30
+   bytes holding five sub-objects, `[41][2]` to `[41][6]`, each of them four bytes and each
+   of those two EMPTY fields — the first one's tag is the setting's value and the second is
+   always `[0]`. Nothing is stored in a payload, which is why nobody found these by reading
+   payloads: there is nothing in them to read.
+
+   Watched live while a host worked the room screen, five dumps apart:
+
+   ```
+        [41][2] [3] [4] [5] [6]
+   #2      0    1   0   0   0      as the room was made
+   #3      3    1   0   0   0
+   #4      3    1   1   0   0
+   #5      3    1   2   0   0
+   #6      3    1   1   1   0
+   #7      3    1   1   0   0
+   ```
+
+   So `[41][4]` takes at least 0, 1 and 2 and `[41][5]` is a two-state switch. In the
+   12.08 capture all five are 0, which is what an untouched room screen looks like.
+
+   **Which of them is which is not known** — that needs the host to say what he changed
+   while these were watched. Five slots against a room screen holding difficulty, ghost
+   mode, quick combat, dynamic battles, turn time and simultaneous turns means at least one
+   of those is not here and lives somewhere else.
+
+   **Also 16.08.2026: tag 14 is the humans and tag 20 the slots** — read off a live room
+   and confirmed by the host looking at his own screen. The room had one person in it on a
+   three-slot map with the second slot filled by a computer: tag 14 was 1, tag 20 was 3,
+   and `[19][1]` and the length of the list in `[19][2]` were 3 as well. The 12.08 capture,
+   a two-player map, has 2 in all of them.
+
+   **And the number the GAME shows is not on the wire at all.** Its own list said "2 of 3"
+   for that room while the browser said "1 of 3", and both are right about different
+   things: the browser counts the people, the game counts occupied slots and the second was
+   a computer. No field of the description holds 2 — the AI slot is a property of the map,
+   which the other client reads off its own disk, the same way it reads the map's name. So
+   a browser cannot say "2 of 3" without the map file, and it should not pretend to: what
+   it shows is labelled as people.

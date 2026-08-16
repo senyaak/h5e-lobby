@@ -211,6 +211,42 @@ check(
 );
 
 // ---------------------------------------------------------------------------------
+// The door knows whose connection is whose. `?port=` on the upgrade names the
+// client's OWN listener, and the carry remembers it against the source port of
+// every loopback connection it opens — which is what lets a session hand a
+// tunnelled game back to itself (`session()` in router-service.ts).
+// ---------------------------------------------------------------------------------
+
+const namedBefore = serviceConnections.length;
+const named = new WebSocket(`ws://127.0.0.1:${String(doorPort)}/u-lobby?port=4242`);
+named.binaryType = 'arraybuffer';
+await new Promise<void>((done) => named.addEventListener('open', () => done(), { once: true }));
+named.send(streamFrame(FRAME_OPEN, 1));
+await until(() => serviceConnections.length > namedBefore);
+const carried = serviceConnections[serviceConnections.length - 1]!;
+await until(() => carry.carriedPortOf(carried.remotePort ?? 0) !== null);
+check(
+  'a door that names a port is remembered, per connection',
+  carry.carriedPortOf(carried.remotePort ?? 0) === 4242,
+  String(carry.carriedPortOf(carried.remotePort ?? 0)),
+);
+check(
+  'and a client that named nothing stays nobody\'s',
+  carry.carriedPortOf(serviceConnections[0]!.remotePort ?? 0) === null,
+  String(carry.carriedPortOf(serviceConnections[0]!.remotePort ?? 0)),
+);
+
+const carriedPort = carried.remotePort ?? 0;
+named.close();
+await until(() => carry.carriedPortOf(carriedPort) === null);
+check('a door that closed is forgotten', carry.carriedPortOf(carriedPort) === null);
+
+// An upgrade to any other path is refused out loud — reaching the close is the check.
+const lost = new WebSocket(`ws://127.0.0.1:${String(doorPort)}/nowhere`);
+await new Promise<void>((done) => lost.addEventListener('close', () => done(), { once: true }));
+check('an upgrade to anywhere else is turned away', true);
+
+// ---------------------------------------------------------------------------------
 // Closing, both ways round.
 // ---------------------------------------------------------------------------------
 

@@ -465,14 +465,23 @@ function openULobbyListener(port: number): void {
  */
 function attach(label: UService, socket: Socket, id: number, port: number): (data: Buffer) => void {
   {
+    // Which door this connection came through. A carried stream lands here as a
+    // loopback connection the carry itself opened, and the carry remembers whose
+    // it is — so the session hands a tunnelled game back to ITS OWN listener
+    // (see `session()` in router-service.ts). Null for everything the carry did
+    // not open, including a local game dialling this port directly.
+    const fromLoopback = socket.remoteAddress === '127.0.0.1' || socket.remoteAddress === '::ffff:127.0.0.1';
+    const doorPort = fromLoopback ? carry.carriedPortOf(socket.remotePort ?? 0) : null;
+    if (doorPort) log(`TCP  #${id} came through the door — hand-offs will name 127.0.0.1:${doorPort}`);
+
     // Four u-lobby services speak the GS protocol; the chat one speaks IRC in a wrapper.
     const session =
       label === 'Router'
-        ? router.session('router')
+        ? router.session('router', doorPort)
         : label === 'Proxy'
-          ? router.session('proxy')
+          ? router.session('proxy', doorPort)
           : label === 'Lobby'
-            ? router.session('lobby')
+            ? router.session('lobby', doorPort)
             : null;
     // Which u-lobby service this socket is, so a reply can go out on a connection other than
     // the one that asked. Only the newest socket per u-lobby service is kept: with one player

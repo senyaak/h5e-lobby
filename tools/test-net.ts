@@ -580,6 +580,28 @@ console.log('\nThe lobby, as far as the wait module goes');
   const joined = lobbyService.receive(lobbyMessage(LobbyMsg.JOIN_SERVER, ['1']));
   const where = (parse(joined[0]!.replies[0]!)?.body?.[1] as GSValue[])?.[1] as GSValue[];
   check('joining a server hands over the lobby address', where?.[1] === '2130706433' && where?.[2] === '40040', JSON.stringify(where));
+
+  // The same join, for a session that came through the u-lobby's door. A tunnelled
+  // game's services all live at its OWN loopback listener, and the join hand-off is
+  // one of the addresses that does NOT come from the ini the mod rewrites — so the
+  // session must name the door's port, or the client walks off to a port of ours
+  // that on its machine is nobody (measured 16.08.2026: login fine, wait-module
+  // connect dead).
+  const throughDoor = new RouterService(
+    { address: '127.0.0.1', port: 40001 },
+    { address: '127.0.0.1', port: 40030 },
+    { address: '127.0.0.1', port: 40031 },
+    { address: '127.0.0.1', port: 40040 },
+    join(dirname(fileURLToPath(import.meta.url)), '..', '_tmp', 'test-net.db'),
+  ).session('lobby', 57380);
+  throughDoor.receive(lobbyMessage(LobbyMsg.LOGIN, ['HEROES_29988429c481f219']));
+  const joinedHome = throughDoor.receive(lobbyMessage(LobbyMsg.JOIN_SERVER, ['1']));
+  const home = (parse(joinedHome[0]!.replies[0]!)?.body?.[1] as GSValue[])?.[1] as GSValue[];
+  check(
+    'and through the door it hands over the CLIENT\'S listener, not ours',
+    home?.[1] === '2130706433' && home?.[2] === '57380',
+    JSON.stringify(home),
+  );
 }
 
 console.log('\nThe lobby server, from the words the client really said');

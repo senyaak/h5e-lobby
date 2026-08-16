@@ -1964,14 +1964,26 @@ export class RouterService {
     seatGuest(this.ladder, this.presence);
   }
 
-  /** A connection on one of the four services. */
-  session(role: Role = 'router'): RouterSession {
-    const waitModule = role === 'proxy' ? this.proxyWaitModule : this.waitModule;
+  /**
+   * A connection on one of the four services.
+   *
+   * `doorPort` is set when the connection came through the u-lobby's door: a
+   * tunnelled game's u-lobby services all live at ITS OWN loopback listener, so
+   * every address this session hands out — the wait module at login, the proxy,
+   * the lobby server at join — must name that port and the loopback, not this
+   * host's own numbers. The ini already does (the mod answers it itself); these
+   * three are the addresses that DON'T come from the ini, which is how a login
+   * through the door succeeded and the wait-module connect then failed
+   * (16.08.2026, `services/u-lobby/tunnel.ts`).
+   */
+  session(role: Role = 'router', doorPort: number | null = null): RouterSession {
+    const at = (own: Endpoint): Endpoint => (doorPort ? { address: '127.0.0.1', port: doorPort } : own);
+    const waitModule = at(role === 'proxy' ? this.proxyWaitModule : this.waitModule);
     const session = new RouterSession(
       role,
       waitModule,
-      this.proxy,
-      this.lobbyServer,
+      at(this.proxy),
+      at(this.lobbyServer),
       this.rooms,
       this.ladder,
       this.matches,

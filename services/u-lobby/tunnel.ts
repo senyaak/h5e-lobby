@@ -57,6 +57,20 @@ export interface ULobbyCarryOptions {
 export interface ULobbyCarry {
   /** How many clients are carrying their u-lobby through here — for `/health` and the tests. */
   clients(): number;
+  /**
+   * Whose door a loopback connection came through — the client's OWN listener
+   * port, learnt from `?port=` on the upgrade, keyed by the source port of the
+   * connection the carry opened. Null for a connection the carry did not open,
+   * and for a client whose mod predates the query.
+   *
+   * This is what lets a session hand a tunnelled game back to ITSELF: the
+   * addresses the router answers with (the wait module at login, the proxy, the
+   * lobby server at join) are not in the ini the mod already rewrites — they
+   * come from here, and without this they name this host's own port, which on
+   * the game's machine is nobody. Measured 16.08.2026: login through the door
+   * succeeded and the wait-module connect then died on exactly that.
+   */
+  carriedPortOf(sourcePort: number): number | null;
   /** Let go of every carried client. The server itself is the caller's to close. */
   close(): void;
 }
@@ -80,20 +94,29 @@ function frame(type: number, id: number, payload?: Buffer): Buffer {
 export function carryULobby(options: ULobbyCarryOptions): ULobbyCarry {
   const log = options.log ?? ((): void => {});
   const peers = new Set<WebSocketPeer>();
+  /** Source port of a connection this carry opened -> that client's own listener port. */
+  const doors = new Map<number, number>();
   let clients = 0;
 
   serveWebSocket(options.server, (peer) => {
     // An upgrade is classified the way every connection here is — by what it asks for.
     // `/u-lobby` is the one thing that can be carried; anything else is a caller lost.
-    if (peer.url !== '/u-lobby') {
+    // The PATH, not the whole URL: the mod says which port its own listener took in the
+    // query, and a door that compared the string whole would refuse exactly the callers
+    // that tell it the most.
+    const asked = new URL(peer.url, 'http://door');
+    if (asked.pathname !== '/u-lobby') {
       log(`u-lobby carry refused an upgrade to ${peer.url} — only /u-lobby is a door`);
       peer.close();
       return;
     }
+    const named = Number(asked.searchParams.get('port'));
+    /** The client's own loopback listener, for `carriedPortOf` — see the interface. */
+    const clientPort = Number.isInteger(named) && named > 0 && named <= 0xffff ? named : null;
     peers.add(peer);
     clients++;
     const who = `${peer.remoteAddress}#${clients}`;
-    log(`u-lobby ${who} connected (${clients} carrying)`);
+    log(`u-lobby ${who} connected (${clients} carrying${clientPort ? `, listening at 127.0.0.1:${clientPort}` : ''})`);
 
     /** The loopback connection standing in for each of this client's u-lobby connections. */
     const streams = new Map<number, Socket>();
@@ -126,9 +149,22 @@ export function carryULobby(options: ULobbyCarryOptions): ULobbyCarry {
       // client open a stream and send its first message without a round trip.
       const socket = createConnection({ host: options.target.host, port: options.target.port });
       socket.setNoDelay(true);
+      // Which door this stream is: the connection's own source port, known once it is
+      // up, points back at the client's listener. Kept while the socket lives — the
+      // session asking is the one this very connection carries.
+      let source: number | null = null;
+      if (clientPort !== null) {
+        socket.on('connect', () => {
+          if (typeof socket.localPort === 'number') {
+            source = socket.localPort;
+            doors.set(source, clientPort);
+          }
+        });
+      }
       socket.on('data', (data: Buffer) => peer.send(frame(FRAME_DATA, id, data)));
       socket.on('error', (error: Error) => log(`u-lobby ${who} stream ${id} error: ${error.message}`));
       socket.on('close', () => {
+        if (source !== null) doors.delete(source);
         if (!streams.delete(id)) return;
         peer.send(frame(FRAME_CLOSE, id));
         log(`u-lobby ${who} stream ${id} closed by the u-lobby service`);
@@ -182,6 +218,7 @@ export function carryULobby(options: ULobbyCarryOptions): ULobbyCarry {
 
   return {
     clients: () => clients,
+    carriedPortOf: (sourcePort) => doors.get(sourcePort) ?? null,
     close: () => {
       // Every connection, not only the ones with streams open: a client that has said
       // nothing still holds a socket, and a server close that waits for it never returns.

@@ -1510,3 +1510,22 @@ before looking at mods.
 
    It is not the map's doing: an RMG map does not come with an AI in slot two, the host
    chose it on the room screen, and it travels as a switch like the other four.
+
+   **`[41][5]` is the CLOSED slots**, found the same way an hour later on a four-slot map.
+   The host said "one player, two AI and one closed" and the document read `14 = 1`,
+   `[41][4] = 2`, `[41][5] = 1`, `20 = 4`. What makes the pair more than two correlations
+   is that they ADD UP: every dump taken while that screen was worked satisfies
+
+       humans + computers + closed  <=  slots
+
+   with equality exactly when the room screen had no empty seat left. So the browser can
+   answer the only question a list is really asked — whether anybody can still get in —
+   and a room whose free seats are all closed reads as full, which is what it is.
+
+       [41][2] [3] [4] [5] [6]
+          4    1   2   1   0     one human, two computers, one closed, four slots
+                   ^AI ^closed
+
+   `[41][2]` has followed the slot count in both rooms seen — 3 then 4 — and starts at 0
+   before the room screen has settled, so it is not simply a copy of tag 20. `[41][3]` and
+   `[41][6]` have moved once and never, and have no name at all.

@@ -77,6 +77,7 @@ interface OpenGame {
   map: string;
   generated: boolean;
   computers: number;
+  closed: number;
   /** What the host's description said, for the panel behind the (i). Never an address. */
   facts: RoomFact[];
 }
@@ -93,6 +94,7 @@ function asOpenGame(room: RoomInfo): OpenGame {
     map: room.mapName,
     generated: room.mapGenerated,
     computers: room.computers,
+    closed: room.closed,
     facts: room.facts,
   };
 }

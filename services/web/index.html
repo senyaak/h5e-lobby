@@ -364,7 +364,7 @@
           // The game's own list counts filled slots, people and computers alike, so this
           // counts them the same way — a browser saying "1 of 3" beside a game saying
           // "2 of 3" reads as a broken browser, and it was one until the switch was found.
-          const taken = game.players.length + game.computers;
+          const taken = game.players.length + game.computers + game.closed;
           const full = taken >= game.seats;
           // A generated map has no name to show — what stands there is its template, so it
           // is labelled as one rather than passed off as a map somebody could go and find.
@@ -381,7 +381,7 @@
             cell(game.name, 'name'),
             map,
             cell(game.master),
-            seatsCell(taken, game.seats, game.computers, full),
+            seatsCell(game, taken, full),
             guests.length ? cell(guests.join(', '), 'players') : cell('waiting for someone', 'waiting'),
             build(game.build),
             more(game),
@@ -412,17 +412,26 @@
         return td;
       }
 
-      /** "2/3", with the computers said out loud when there are any. */
-      function seatsCell(taken, seats, computers, full) {
+      /**
+       * "4/4", with what is filling those slots said beside it.
+       *
+       * Taken counts computers and CLOSED slots as well as people, because the question
+       * this column answers is "can I get in", and a slot the host shut is one nobody
+       * gets. A room where the only free seats are closed ones should read as full.
+       */
+      function seatsCell(game, taken, full) {
         const td = document.createElement('td');
         td.className = full ? 'seats full' : 'seats';
-        td.textContent = `${taken}/${seats}`;
-        if (computers) {
+        td.textContent = `${taken}/${game.seats}`;
+        const parts = [];
+        if (game.computers) parts.push(`${game.computers} AI`);
+        if (game.closed) parts.push(`${game.closed} closed`);
+        if (parts.length) {
           const note = document.createElement('span');
           note.className = 'ai';
-          note.textContent = ` +${computers} AI`;
+          note.textContent = ` +${parts.join(', ')}`;
           td.append(note);
-          td.title = `${taken - computers} playing, ${computers} computer${computers > 1 ? 's' : ''}`;
+          td.title = `${game.players.length} playing, ${parts.join(', ')}, ${game.seats - taken} free`;
         }
         return td;
       }
@@ -471,7 +480,9 @@
         // computer fills one, so its number is bigger and neither is wrong.
         say('humans', `${game.players.length} — ${game.players.join(', ')}`);
         if (game.computers) say('computers', String(game.computers));
-        say('slots', `${game.players.length + game.computers} of ${game.seats} taken`);
+        if (game.closed) say('closed slots', String(game.closed));
+        const held = game.players.length + game.computers + game.closed;
+        say('slots', `${held} of ${game.seats} taken, ${game.seats - held} free`);
         // Both, because which one two copies must match on is not settled.
         if (game.build) say('build', game.build);
         if (game.gsBuild) say('gs build', game.gsBuild);

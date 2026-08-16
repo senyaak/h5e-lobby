@@ -82,6 +82,14 @@ export interface RoomInfo {
    */
   computers: number;
   /**
+   * How many slots the host has closed. Nobody can take one.
+   *
+   * With the computers this is what says whether a game can be JOINED at all:
+   * `members.length + computers + closed` against `maxPlayers` leaves the seats a person
+   * could still walk into, and a room with none left should not look like an invitation.
+   */
+  closed: number;
+  /**
    * Everything else identified in that description — the map's full path, the victory goal,
    * the rules the host set. Short, and it is meant to be: the document holds some forty
    * more fields nobody has worked out, and a list of `[24] = 00` teaches nobody anything.
